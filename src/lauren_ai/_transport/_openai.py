@@ -580,7 +580,7 @@ class OpenAITransport:
             # Partial tool call accumulation state.
             _tool_call_state: dict[int, dict[str, Any]] = {}  # index -> {id, name, args}
 
-            async with client.chat.completions.create(**call_kwargs) as stream:
+            async with (await client.chat.completions.create(**call_kwargs)) as stream:
                 async for chunk in stream:
                     choices = getattr(chunk, "choices", [])
                     usage_obj = getattr(chunk, "usage", None)
