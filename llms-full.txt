@@ -1055,3 +1055,221 @@ raises `DecoratorUsageError`. Input guardrails run before the model call; output
 guardrails run after. A `"block"` decision causes the runner to return a
 `GuardrailBlockedError` rather than calling the model or surfacing the response.
 Import: `from lauren_ai import guardrail, TopicFilter, PIIRedactor, LengthFilter`
+
+---
+
+### Section 42 — Delegation Pattern (Multi-Agent Routing)
+
+Tool-based delegation is the recommended way to give one agent ("orchestrator")
+transparent access to specialist sub-agents via the normal LLM tool-call mechanism.
+Unlike `ctx.delegate()` (which raises a control-flow exception), tool delegation
+lets the orchestrator call specialists as regular tools, with full observability
+in the conversation history.
+
+#### Step 1 — Create delegation tools (NO `from __future__ import annotations`)
+
+```python
+# delegation_tools.py
+# NOTE: Do NOT add `from __future__ import annotations` to this file.
+from lauren_ai import tool
+import logging
+
+logger = logging.getLogger(__name__)
+
+_runner = None
+_research_agent = None
+_code_agent = None
+
+def init_delegation(runner, research, code) -> None:
+    """Wire singletons at startup (called from ai_module.py)."""
+    global _runner, _research_agent, _code_agent
+    _runner, _research_agent, _code_agent = runner, research, code
+
+@tool()
+async def delegate_to_researcher(task: str) -> dict:
+    """Delegate a research or web-fetching task to the ResearchAgent.
+    Args:
+        task: Description of the research task, including any URLs.
+    """
+    if _runner is None:
+        return {"error": "Not initialised", "content": ""}
+    response = await _runner.run(_research_agent, task)
+    return {"content": response.content, "turns": response.turns}
+
+@tool()
+async def delegate_to_code_assistant(task: str) -> dict:
+    """Delegate a code execution or maths task to the CodeAssistantAgent.
+    Args:
+        task: Description of the coding or calculation task.
+    """
+    if _runner is None:
+        return {"error": "Not initialised", "content": ""}
+    response = await _runner.run(_code_agent, task)
+    return {"content": response.content, "turns": response.turns}
+```
+
+#### Step 2 — Orchestrator agent uses delegation tools
+
+```python
+# orchestrator_agent.py — NO from __future__ import annotations
+from lauren_ai import agent, guardrail, use_tools, PromptInjectionFilter, PIIRedactor, LengthFilter
+from .delegation_tools import delegate_to_researcher, delegate_to_code_assistant
+from .tools import get_current_time
+
+@agent(model="openai/gpt-4o-mini", system="Route requests to specialists or answer directly.")
+@guardrail(
+    input=[PromptInjectionFilter(), PIIRedactor()],
+    output=[LengthFilter(max_chars=8000)],
+)
+@use_tools(delegate_to_researcher, delegate_to_code_assistant, get_current_time)
+class OrchestratorAgent: ...
+```
+
+#### Step 3 — Wire at startup
+
+```python
+# ai_module.py
+from .research_agent import ResearchAgent
+from .code_agent import CodeAssistantAgent
+from .delegation_tools import init_delegation, delegate_to_researcher, delegate_to_code_assistant
+
+# Register delegation tools in the registry
+registry.register(delegate_to_researcher)
+registry.register(delegate_to_code_assistant)
+
+# Instantiate agents
+_research_agent = ResearchAgent()
+_code_agent = CodeAssistantAgent()
+
+# Wire delegation tools
+init_delegation(_agent_runner, _research_agent, _code_agent)
+```
+
+#### `AgentRunner.run()` — correct API
+
+```python
+# CORRECT: pass agent instance as first positional arg
+response = await runner.run(agent_instance, "User message here")
+
+# CORRECT: with optional keyword arguments
+response = await runner.run(
+    agent_instance,
+    "User message",
+    conversation_id="sess-123",
+    metadata={"user_id": "u1"},
+    run_id="run-abc",          # optional — random hex if omitted
+)
+```
+
+**Key invariants for delegation:**
+- Delegation tools must be in files WITHOUT `from __future__ import annotations`.
+- Call `init_delegation()` after all agents are instantiated but before any requests arrive.
+- Register delegation tools in `ToolRegistry` before creating `AgentRunner`.
+- The orchestrator's `@use_tools` must list the delegation tool functions.
+
+---
+
+### Section 43 — @team() — Accurate API
+
+The `@team()` class constructor declares workers via **typed `__init__` parameters**.
+`TeamRunner` reads `__init__.__annotations__` to discover worker names.
+
+```python
+from lauren_ai import team, TeamRunner
+
+@team(
+    name="research-team",
+    mode="coordinator",          # "coordinator" | "collaborate"
+    model="openai/gpt-4o-mini",  # Model for coordinator decisions
+    max_rounds=4,                # Max rounds before forced synthesis
+    coordinator_prompt=None,     # Optional: override default routing prompt
+)
+class ResearchTeam:
+    """Multi-agent team for research tasks."""
+
+    def __init__(
+        self,
+        researcher: ResearchAgent,
+        code_assistant: CodeAssistantAgent,
+    ) -> None:
+        self.researcher = researcher
+        self.code_assistant = code_assistant
+
+# TeamRunner constructor
+runner = TeamRunner(
+    team_cls=ResearchTeam,
+    llm=llm_service,            # LLMService (raw service from LLMProvider.llm_service_instance)
+    agent_runner=agent_runner,  # shared AgentRunner
+)
+
+# Blocking run
+result = await runner.run("Research quantum computing breakthroughs.")
+print(result.final_answer)
+print(result.worker_outputs)  # {"researcher": "...", "code_assistant": "..."}
+print(result.rounds)
+
+# Streaming run
+from lauren_ai import TeamWorkerStarted, TeamWorkerFinished, TeamCoordinatorDecision, TeamFinalAnswer
+
+async for event in runner.run_stream("Research topic"):
+    if isinstance(event, TeamWorkerStarted):
+        print(f"[R{event.round}] Starting: {event.worker_name}")
+    elif isinstance(event, TeamWorkerFinished):
+        print(f"[R{event.round}] Done: {event.worker_name} — {event.result_content[:100]}")
+    elif isinstance(event, TeamCoordinatorDecision):
+        print(f"[Coordinator] {event.decision}")
+    elif isinstance(event, TeamFinalAnswer):
+        print(f"[Final] {event.content}")
+```
+
+**Default coordinator prompt format** (ROUTE/DONE):
+```
+ROUTE: <worker_name>   — route to a worker
+DONE: <final answer>   — declare task complete
+```
+
+**Key invariants:**
+- `@team()` must use parentheses.
+- Worker parameters in `__init__` must have agent-class type annotations.
+- `TeamRunner(team_cls, llm, agent_runner)` — `llm` is the raw `LLMService`.
+- `run_stream()` is an async generator; iterate with `async for`.
+
+---
+
+### Decorator ordering — mandatory summary
+
+```
+@agent()        ← outermost decorator (sets AGENT_META, reads USE_TOOLS_META)
+@remember()     ← optional (sets REMEMBER_META)
+@guardrail()    ← optional (sets GUARDRAIL_META)
+@use_tools()    ← innermost (sets USE_TOOLS_META)
+class MyAgent: ...
+```
+
+Python applies decorators bottom-up, so `@use_tools` runs first and sets
+`USE_TOOLS_META`; `@agent` runs last and reads it.  Swapping any two decorators
+produces silently broken behaviour (missing tools, missing guardrails, etc.).
+
+---
+
+### Critical invariant — no future annotations in tool files
+
+```python
+# WRONG — breaks @tool() schema generation:
+from __future__ import annotations
+
+@tool()
+async def my_tool(param: str) -> dict: ...   # param annotation becomes string "str"
+
+# CORRECT — no future annotations:
+@tool()
+async def my_tool(param: str) -> dict: ...   # param annotation is live type str
+```
+
+Add this comment at the top of every file that defines `@tool()` functions:
+
+```python
+# NOTE: Do NOT add `from __future__ import annotations` to this file.
+# The @tool() decorator uses inspect.signature() at decoration time to build
+# the JSON schema, and PEP 563 lazy evaluation breaks that introspection.
+```

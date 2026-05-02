@@ -43,6 +43,7 @@ async def get_weather(city: str) -> dict:
 - Must be invoked with parentheses: `@tool()` not `@tool`
 - Schema is generated from type annotations + Google-style docstring
 - `ctx: ToolContext | None = None` is injected by the runner, excluded from schema
+- **Never add `from __future__ import annotations`** to files with `@tool()`
 
 ### @agent() + @use_tools() — declare an agent
 
@@ -55,8 +56,42 @@ class WeatherAgent: ...
 ```
 
 - `@agent()` is the outermost decorator; `@use_tools()` is below it
+- Decorator order: `@agent` → `@remember` → `@guardrail` → `@use_tools`
 - Agents are singletons in the DI container by default
-- Tools are registered in a `ToolRegistry` and injected via DI
+
+### @guardrail() — content safety
+
+```python
+from lauren_ai import guardrail, PromptInjectionFilter, PIIRedactor, LengthFilter, TopicFilter
+
+@agent(model="claude-opus-4-6")
+@guardrail(
+    input=[PromptInjectionFilter(), PIIRedactor()],
+    output=[LengthFilter(max_chars=8000)],
+)
+@use_tools(my_tool)
+class SafeAgent: ...
+```
+
+Built-ins: `PromptInjectionFilter`, `PIIRedactor`, `LengthFilter`, `TopicFilter`, `LLMGuardrail`.
+
+### @remember() — persistent user memory
+
+```python
+from lauren_ai import remember, InMemoryUserMemoryStore
+
+_memory = InMemoryUserMemoryStore()
+
+@agent(model="claude-opus-4-6")
+@remember(store=None, extract=True, inject=True, top_k=5)
+@guardrail(input=[PromptInjectionFilter()])
+@use_tools(my_tool)
+class PersonalAgent: ...
+```
+
+- Stack between `@agent()` and `@guardrail()`
+- `extract=True`: facts extracted from each turn and stored
+- `inject=True`: top-k relevant facts prepended to system prompt
 
 ### LLMService — low-level completions
 
@@ -78,68 +113,120 @@ class MyController:
 ### Memory
 
 ```python
-from lauren_ai import ShortTermMemory, InMemoryVectorStore
+from lauren_ai import ShortTermMemory, InMemoryVectorStore, InMemoryConversationStore
 
-mem = ShortTermMemory(max_tokens=8192)
+mem = ShortTermMemory(max_tokens=40_000)
 mem.add_user("Hello!")
-# Automatic trimming when max_tokens is exceeded
 
 store = InMemoryVectorStore()
-doc_id = await store.upsert("Paris is a beautiful city.", metadata={"lang": "en"})
-results = await store.search("Paris", k=5)
-```
-
-### KnowledgeBase — RAG for agents
-
-```python
-from lauren_ai import KnowledgeBase, TextLoader, FixedSizeChunker
-from lauren_ai._memory._vector import InMemoryVectorStore
-
-kb = KnowledgeBase(store=InMemoryVectorStore(), chunker=FixedSizeChunker(512))
-await kb.load(TextLoader("docs/faq.txt"))
-
-@agent(model="claude-opus-4-6")
-@use_tools(kb.as_tool(name="search_docs"))
-class SupportAgent: ...
+conv = InMemoryConversationStore()
 ```
 
 ### Signals — observability hooks
 
 ```python
-from lauren_ai import SignalBus, ModelCallComplete
+from lauren_ai import SignalBus, ModelCallComplete, AgentRunComplete
 
 bus = SignalBus()
 
 @bus.on(ModelCallComplete)
-async def on_complete(event):
+async def on_complete(event: ModelCallComplete):
     print(f"Cost: ${event.cost_usd:.6f}, tokens: {event.usage.total}")
+
+@bus.on(AgentRunComplete)
+async def on_run_done(event: AgentRunComplete):
+    print(f"Agent {event.agent_class.__name__} — turns={event.turns}, "
+          f"total_cost=${event.total_cost_usd:.6f}")
 ```
 
-### AgentTestClient — testing
+### @team() — multi-agent teams
 
 ```python
-from lauren_ai.testing import AgentTestClient
-from lauren_ai._transport._mock import MockTransport
+from lauren_ai import team, TeamRunner, TeamResult
 
-mock = MockTransport()
-mock.queue_response(completion)  # pre-stage responses
-client = AgentTestClient(WeatherAgent, mock)
-response = client.run("What's the weather in Paris?")
-assert "sunny" in response.content
-assert len(client.calls) == 1
+@team(name="research", mode="coordinator", max_rounds=4, model="openai/gpt-4o-mini")
+class ResearchTeam:
+    def __init__(self, researcher: ResearchAgent, writer: WriterAgent) -> None:
+        self.researcher = researcher
+        self.writer = writer
+
+runner = TeamRunner(team_cls=ResearchTeam, llm=llm_service, agent_runner=agent_runner)
+result: TeamResult = await runner.run("Summarise AI safety research.")
 ```
 
-### Workflows
+Stream events: `TeamWorkerStarted`, `TeamWorkerFinished`,
+`TeamCoordinatorDecision`, `TeamFinalAnswer`.
+
+### Delegation pattern
 
 ```python
-from lauren_ai._workflows import Workflow, Step, Parallel
+# delegation_tools.py — NO from __future__ import annotations
+from lauren_ai import tool
 
-pipeline = (
-    Workflow()
-    .then(Step("summarise", summarise_fn))
-    .then(Parallel(Step("translate_es", ...), Step("translate_fr", ...)))
+_runner = None
+_specialist = None
+
+def init(runner, specialist) -> None:
+    global _runner, _specialist
+    _runner, _specialist = runner, specialist
+
+@tool()
+async def delegate_to_specialist(task: str) -> dict:
+    """Delegate to the specialist agent.
+    Args:
+        task: Task description.
+    """
+    response = await _runner.run(_specialist, task)
+    return {"content": response.content, "turns": response.turns}
+```
+
+Call `init()` at startup, then attach `delegate_to_specialist` to an orchestrator
+agent via `@use_tools`.
+
+### @traced() — tracing & observability
+
+```python
+from lauren_ai import traced, SpanKind, TraceStore, InMemoryTraceExporter, set_trace_store
+
+exporter = InMemoryTraceExporter()
+store = TraceStore()
+store._exporters = [exporter]
+set_trace_store(store)
+
+@traced(name="my_handler", kind=SpanKind.AGENT)
+async def my_handler(request): ...
+```
+
+### Cost & Rate Tracking
+
+```python
+from lauren_ai import CostTracker, TokenBudget, RateLimiter, default_pricing_table
+
+tracker = CostTracker(pricing=default_pricing_table())
+
+budget = TokenBudget(
+    max_tokens_per_conversation=100_000,
+    max_usd_per_conversation=0.50,
 )
-result = await pipeline.run({"text": long_doc})
+budget.check(conversation_id="sess-1", current_usd=0.45, estimated_usd=0.10)
+# Raises BudgetExceededError when over limit
+
+limiter = RateLimiter(requests_per_minute=60)
+await limiter.acquire()
+```
+
+### StructuredLLM — typed LLM outputs
+
+```python
+from lauren_ai import StructuredLLM
+from pydantic import BaseModel
+
+class Sentiment(BaseModel):
+    label: str
+    score: float
+
+structured = StructuredLLM(transport=transport, schema=Sentiment)
+result: Sentiment = await structured.complete(messages, model="openai/gpt-4o-mini")
 ```
 
 ### Prompt Templates & Chains
@@ -148,8 +235,6 @@ result = await pipeline.run({"text": long_doc})
 from lauren_ai import PromptTemplate, ChatPromptTemplate, Chain
 
 tmpl = PromptTemplate("Summarise: {text}")
-chat = ChatPromptTemplate([("system", "You are helpful."), ("user", "{question}")])
-
 chain = tmpl | llm | StrOutputParser()
 result = await chain.invoke({"text": "Some long document..."})
 ```
@@ -160,133 +245,61 @@ result = await chain.invoke({"text": "Some long document..."})
 from lauren_ai import StrOutputParser, JSONOutputParser, PydanticOutputParser
 
 parser = PydanticOutputParser(MyModel)
-chain = prompt | llm | parser   # yields MyModel instances
+chain = prompt | llm | parser
 ```
 
 Available: `StrOutputParser`, `JSONOutputParser`, `RegexParser`,
 `CommaSeparatedListParser`, `MarkdownCodeBlockParser`, `PydanticOutputParser`,
 `RetryOutputParser`.
 
-### @team() — multi-agent teams
-
-```python
-from lauren_ai import team, TeamRunner, TeamResult
-
-@team(name="research", mode="coordinator", max_rounds=5, model="claude-opus-4-6")
-class ResearchTeam:
-    researcher: ResearchAgent
-    writer: WriterAgent
-```
-
-Stream events: `TeamWorkerStarted`, `TeamWorkerFinished`,
-`TeamCoordinatorDecision`, `TeamFinalAnswer`.
-
-### @traced() — tracing & observability
-
-```python
-from lauren_ai import traced, Span, Trace, TraceStore, InMemoryTraceExporter
-
-exporter = InMemoryTraceExporter()
-store = TraceStore(exporters=[exporter])
-
-@traced(name="my_handler", kind=SpanKind.AGENT)
-async def my_handler(request): ...
-```
-
-Exporters: `InMemoryTraceExporter`, `ConsoleTraceExporter`, `FileTraceExporter`.
-Custom backends implement `TraceExporter` protocol.
-
-### @remember() — persistent user memory
-
-```python
-from lauren_ai import remember, MemoryFact, InMemoryUserMemoryStore
-
-store = InMemoryUserMemoryStore()
-
-@agent(model="claude-opus-4-6")
-@remember(store=store, extract=True, inject=True, top_k=5)
-class PersonalAgent: ...
-```
-
-### StructuredLLM — typed LLM outputs
-
-```python
-from lauren_ai import StructuredLLM
-
-structured: StructuredLLM[MyModel] = llm.with_structured_output(MyModel)
-result: MyModel = await structured.complete(messages)
-```
-
-### Multimodal inputs
-
-```python
-from lauren_ai import ImageContent, AudioContent, DocumentContent
-
-msg = Message.from_multimodal("user", [
-    "Describe this image:",
-    ImageContent(url="https://example.com/img.png"),
-    AudioContent(data=audio_bytes, mime_type="audio/mp3"),
-])
-```
-
 ### SemanticRouter
 
 ```python
 from lauren_ai import SemanticRouter, Route, RouteMatch
 
-router = SemanticRouter(
-    routes=[Route(name="weather", examples=["What's the weather?", "Is it raining?"])],
-    embed_fn=embed_fn,
-    min_confidence=0.7,
-)
+router = SemanticRouter(embed=embed_service)
+router.add(Route(name="weather", examples=["What's the weather?", "Is it raining?"]))
 await router.compile()
 match: RouteMatch = await router.route("Will it snow today?")
 ```
 
-### Cost & Rate Tracking
+### Multimodal inputs
 
 ```python
-from lauren_ai import CostTracker, TokenBudget, RateLimiter, default_pricing_table
+from lauren_ai import ImageContent, AudioContent, DocumentContent, Message
 
-tracker = CostTracker(pricing=default_pricing_table())
-async with tracker.session() as session:
-    result = await agent.run(...)
-report = await tracker.report()
-
-budget = TokenBudget(max_tokens_per_conversation=100_000)
-limiter = RateLimiter(requests_per_minute=60)
+msg = Message(role="user", content=[
+    "Describe this image:",
+    ImageContent(url="https://example.com/img.png"),
+])
 ```
 
-Errors: `BudgetExceededError`, `RateLimitExhaustedError`.
+## Decorator quick-reference
 
-### @guardrail() — content safety
+| Decorator | Purpose | Parentheses required |
+|-----------|---------|---------------------|
+| `@tool()` | Expose a function as an agent tool | Yes |
+| `@agent()` | Declare an agent class | Yes |
+| `@use_tools(t1, t2)` | Attach tools to an agent | Yes |
+| `@guardrail()` | Attach input/output guardrails | Yes |
+| `@remember()` | Enable persistent user memory | Yes |
+| `@team()` | Declare a multi-agent team | Yes |
+| `@traced()` | Wrap with tracing spans | Yes |
 
-```python
-from lauren_ai import guardrail, TopicFilter, PIIRedactor, LengthFilter
+## Decorator ordering (mandatory)
 
-@agent(model="claude-opus-4-6")
-@guardrail(
-    input=[TopicFilter(allowed_topics=["weather"]), PIIRedactor(entities=["EMAIL"])],
-    output=[LengthFilter(max_chars=500)],
-)
-class SafeAgent: ...
+```
+@agent()        ← outermost
+@remember()     ← optional
+@guardrail()    ← optional
+@use_tools()    ← innermost
+class Agent: ...
 ```
 
-Built-ins: `TopicFilter`, `PIIRedactor`, `LengthFilter`, `PromptInjectionFilter`.
-Custom: `LLMGuardrail(llm=..., prompt=..., block_if="YES")`.
-Decision: `GuardrailDecision(action="pass"|"block"|"modify", ...)`.
+## Critical rule — no future annotations in tool files
 
-## Decorators quick-reference
-
-| Decorator | Purpose |
-|---|---|
-| `@tool()` | Expose a function as an agent tool |
-| `@agent()` | Declare an agent class |
-| `@use_tools(t1, t2)` | Attach tools to an agent |
-| `@team()` | Declare a multi-agent team |
-| `@guardrail()` | Attach input/output guardrails to an agent |
-| `@remember()` | Enable persistent user memory for an agent |
-| `@traced()` | Wrap an async function with tracing spans |
+Never add `from __future__ import annotations` to any file containing `@tool()`.
+This causes schema generation to fail silently at decoration time.
 
 ## Links
 
