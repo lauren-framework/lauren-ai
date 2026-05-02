@@ -3,8 +3,9 @@ from __future__ import annotations
 """Semantic routing — route queries to agents/chains by embedding similarity."""
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from lauren_ai._exceptions import LaurenAIError
 

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """@team() decorator for multi-agent coordination."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal, TypeVar
 
-from lauren_ai._exceptions import LaurenAIError, DecoratorUsageError
+from lauren_ai._exceptions import DecoratorUsageError, LaurenAIError
 
 TEAM_META = "__lauren_ai_team__"
 C = TypeVar("C", bound=type)

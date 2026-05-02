@@ -1,12 +1,10 @@
 """Extended unit tests for ToolExecutor — covers cache, hooks, HITL, and dispatch."""
 from __future__ import annotations
 
-import asyncio
 import pytest
 
-from lauren_ai._tools import TOOL_META, ToolContext, ToolMeta, ToolResult, tool
+from lauren_ai._tools import ToolContext, ToolMeta, tool
 from lauren_ai._tools._executor import (
-    CacheBackend,
     InMemoryCacheBackend,
     ToolCall,
     ToolExecutionError,
@@ -14,7 +12,6 @@ from lauren_ai._tools._executor import (
     ToolPendingApprovalSignal,
 )
 from lauren_ai._tools._registry import ToolRegistry
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -165,8 +162,6 @@ class TestToolExecutor:
 
     @pytest.mark.asyncio
     async def test_hitl_raises_pending_approval(self):
-        from lauren_ai._tools import ToolMeta
-        from lauren_ai._tools._schema import generate_tool_schema
 
         @tool(requires_confirmation=True)
         async def dangerous_tool(action: str) -> str:

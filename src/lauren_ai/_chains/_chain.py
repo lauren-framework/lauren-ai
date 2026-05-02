@@ -3,7 +3,8 @@ from __future__ import annotations
 """Chain — composable pipeline for template | llm | parser sequences."""
 
 import inspect
-from typing import Any, Callable, Protocol, runtime_checkable
+from collections.abc import Callable
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -146,12 +147,12 @@ class Chain:
         if input is None and kwargs:
             input = kwargs
 
+        from lauren_ai._module import LLMService  # noqa: PLC0415
         from lauren_ai._prompts._templates import (  # noqa: PLC0415
             ChatPromptTemplate,
             FewShotPromptTemplate,
             PromptTemplate,
         )
-        from lauren_ai._module import LLMService  # noqa: PLC0415
         from lauren_ai._transport import Completion, Message  # noqa: PLC0415
 
         current: Any = None
@@ -258,12 +259,12 @@ class Chain:
         :raises ValueError: When no :class:`~lauren_ai._module.LLMService`
             step is found in the chain.
         """
+        from lauren_ai._module import LLMService  # noqa: PLC0415
         from lauren_ai._prompts._templates import (  # noqa: PLC0415
             ChatPromptTemplate,
             FewShotPromptTemplate,
             PromptTemplate,
         )
-        from lauren_ai._module import LLMService  # noqa: PLC0415
         from lauren_ai._transport import Message  # noqa: PLC0415
 
         messages: list[Message] = []

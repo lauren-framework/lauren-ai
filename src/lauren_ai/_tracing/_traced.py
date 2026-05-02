@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import functools
 import time
-import uuid
+from collections.abc import Callable
 from contextvars import ContextVar
-from typing import Any, Callable
+from typing import Any
 
 from lauren_ai._exceptions import DecoratorUsageError
 from lauren_ai._tracing._core import Span, SpanKind, Trace, TraceStore

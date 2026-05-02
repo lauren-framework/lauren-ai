@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from lauren_ai._tools import tool
-from lauren_ai._tools._schema import generate_tool_schema, type_to_json_schema
+from lauren_ai._tools._schema import type_to_json_schema
 
 
 @pytest.mark.benchmark

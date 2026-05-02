@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from lauren_ai._tools import TOOL_META, ToolContext, ToolMeta, ToolResult, tool
-from lauren_ai._tools._schema import generate_tool_schema, type_to_json_schema
+from lauren_ai._tools import TOOL_META, ToolContext, ToolResult, tool
+from lauren_ai._tools._schema import type_to_json_schema
 
 
 class TestToolDecorator:

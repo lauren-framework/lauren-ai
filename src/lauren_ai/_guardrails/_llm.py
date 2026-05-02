@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from lauren_ai._guardrails._base import GuardrailDecision, GuardrailContext
-from lauren_ai._transport import Message, Completion
+from lauren_ai._guardrails._base import GuardrailContext, GuardrailDecision
+from lauren_ai._transport import Completion, Message
 
 
 class LLMGuardrail:

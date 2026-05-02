@@ -8,18 +8,18 @@ from __future__ import annotations
 
 from lauren_ai._tracing._core import (
     Span,
-    Trace,
     SpanKind,
+    Trace,
     TraceStore,
     TracingConfig,
 )
 from lauren_ai._tracing._exporters import (
-    TraceExporter,
-    InMemoryTraceExporter,
     ConsoleTraceExporter,
     FileTraceExporter,
+    InMemoryTraceExporter,
+    TraceExporter,
 )
-from lauren_ai._tracing._traced import traced, set_trace_store, get_trace_store
+from lauren_ai._tracing._traced import get_trace_store, set_trace_store, traced
 
 __all__ = [
     "Span",

@@ -1,13 +1,11 @@
 """Unit tests for user-level persistent memory."""
 from __future__ import annotations
 
-import uuid
 import pytest
-from datetime import datetime
 
-from lauren_ai._memory._user import MemoryFact, UserMemoryStore
 from lauren_ai._memory._in_memory_user import InMemoryUserMemoryStore
-from lauren_ai._memory._remember import remember, RememberMeta, MemoryConfigError, REMEMBER_META
+from lauren_ai._memory._remember import REMEMBER_META, MemoryConfigError, RememberMeta, remember
+from lauren_ai._memory._user import MemoryFact
 
 
 class TestMemoryFact:

@@ -2,19 +2,17 @@
 ai_rate_limit, conversation_middleware fallback path."""
 from __future__ import annotations
 
-import asyncio
 import time
+
 import pytest
 
 from lauren_ai._middleware import (
     BudgetUsage,
     InMemoryRateLimitStore,
-    RateLimitStore,
+    _default_key_fn,
     ai_rate_limit,
     conversation_middleware,
-    _default_key_fn,
 )
-
 
 # ---------------------------------------------------------------------------
 # BudgetUsage tests

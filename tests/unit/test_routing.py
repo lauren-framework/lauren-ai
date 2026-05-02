@@ -1,14 +1,9 @@
 """Unit tests for SemanticRouter."""
 from __future__ import annotations
 
-import math
 import pytest
 
-from lauren_ai._routing import SemanticRouter, Route, RouteMatch, RouterConfigError
-from lauren_ai._transport import Message
-from lauren_ai._transport._mock import MockTransport
-from lauren_ai._module import LLMService
-from lauren_ai._config import LLMConfig
+from lauren_ai._routing import Route, RouteMatch, RouterConfigError, SemanticRouter
 
 
 def make_embed_fn(mapping: dict[str, list[float]]):

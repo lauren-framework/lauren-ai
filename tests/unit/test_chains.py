@@ -5,10 +5,9 @@ import pytest
 
 from lauren_ai._chains import Chain, Runnable, RunnableLambda, chain
 from lauren_ai._chains._chain import _try_get_structured_llm
-from lauren_ai._prompts import PromptTemplate, ChatPromptTemplate, FewShotPromptTemplate
-from lauren_ai._output_parsers import StrOutputParser, JSONOutputParser, CommaSeparatedListParser
-from lauren_ai._transport import Completion, Message, TokenUsage
-
+from lauren_ai._output_parsers import CommaSeparatedListParser, JSONOutputParser, StrOutputParser
+from lauren_ai._prompts import ChatPromptTemplate, PromptTemplate
+from lauren_ai._transport import Completion, TokenUsage
 
 # ---------------------------------------------------------------------------
 # Helpers

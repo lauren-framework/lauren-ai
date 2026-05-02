@@ -6,7 +6,7 @@ import pytest
 from lauren_ai._memory import ShortTermMemory
 from lauren_ai._memory._stores import InMemoryConversationStore
 from lauren_ai._memory._vector import InMemoryVectorStore
-from lauren_ai._transport import Completion, Message, TokenUsage
+from lauren_ai._transport import Completion, TokenUsage
 
 
 class TestShortTermMemory:

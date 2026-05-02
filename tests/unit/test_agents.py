@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from lauren_ai._agents import AGENT_META, USE_TOOLS_META, AgentMeta, agent, use_tools
+from lauren_ai._agents import AGENT_META, AgentMeta, agent, use_tools
 from lauren_ai._exceptions import DecoratorUsageError
 from lauren_ai._tools import tool
 

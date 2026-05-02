@@ -102,7 +102,7 @@ class LLMConfig:
         *,
         api_key: str | None = None,
         **kwargs: Any,
-    ) -> "LLMConfig":
+    ) -> LLMConfig:
         """Create a config pre-wired for Anthropic.
 
         The API key is read from the ``ANTHROPIC_API_KEY`` environment
@@ -134,7 +134,7 @@ class LLMConfig:
         *,
         api_key: str | None = None,
         **kwargs: Any,
-    ) -> "LLMConfig":
+    ) -> LLMConfig:
         """Create a config pre-wired for OpenAI.
 
         The API key is read from the ``OPENAI_API_KEY`` environment
@@ -165,7 +165,7 @@ class LLMConfig:
         *,
         base_url: str = "http://localhost:11434",
         **kwargs: Any,
-    ) -> "LLMConfig":
+    ) -> LLMConfig:
         """Create a config pre-wired for a local Ollama server.
 
         No API key is required.  The default ``base_url`` points to a
@@ -190,7 +190,7 @@ class LLMConfig:
         )
 
     @classmethod
-    def for_testing(cls) -> "tuple[LLMConfig, MockTransport]":
+    def for_testing(cls) -> tuple[LLMConfig, MockTransport]:
         """Create a test config paired with a :class:`~lauren_ai._transport._mock.MockTransport`.
 
         No network calls will ever be made.  Queue deterministic responses on

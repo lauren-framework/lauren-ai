@@ -1,14 +1,13 @@
 """Unit tests for StructuredLLM and with_structured_output."""
 from __future__ import annotations
 
-import pytest
 from pydantic import BaseModel
 
-from lauren_ai._transport._structured import StructuredLLM
-from lauren_ai._transport._mock import MockTransport
-from lauren_ai._transport import Message, Completion, TokenUsage
-from lauren_ai._module import LLMService
 from lauren_ai._config import LLMConfig
+from lauren_ai._module import LLMService
+from lauren_ai._transport import Message
+from lauren_ai._transport._mock import MockTransport
+from lauren_ai._transport._structured import StructuredLLM
 
 
 class SentimentResult(BaseModel):

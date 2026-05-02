@@ -26,7 +26,6 @@ from lauren_ai._agents import AGENT_META, AgentMeta
 from lauren_ai._exceptions import AgentConfigError, ToolConfigError
 from lauren_ai._tools import TOOL_META, ToolMeta
 
-
 # ---------------------------------------------------------------------------
 # Agent validation
 # ---------------------------------------------------------------------------

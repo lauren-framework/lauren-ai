@@ -3,23 +3,22 @@ from __future__ import annotations
 
 import pytest
 
-from lauren_ai._guardrails import (
-    GuardrailDecision,
-    GuardrailContext,
-    guardrail,
-    GuardrailMeta,
-    GUARDRAIL_META,
-    TopicFilter,
-    PIIRedactor,
-    LengthFilter,
-    PromptInjectionFilter,
-    LLMGuardrail,
-)
-from lauren_ai._exceptions import DecoratorUsageError
-from lauren_ai._transport._mock import MockTransport
-from lauren_ai._transport import Completion, TokenUsage
-from lauren_ai._module import LLMService
 from lauren_ai._config import LLMConfig
+from lauren_ai._exceptions import DecoratorUsageError
+from lauren_ai._guardrails import (
+    GUARDRAIL_META,
+    GuardrailContext,
+    GuardrailMeta,
+    LengthFilter,
+    LLMGuardrail,
+    PIIRedactor,
+    PromptInjectionFilter,
+    TopicFilter,
+    guardrail,
+)
+from lauren_ai._module import LLMService
+from lauren_ai._transport import Completion, TokenUsage
+from lauren_ai._transport._mock import MockTransport
 
 
 def make_ctx() -> GuardrailContext:

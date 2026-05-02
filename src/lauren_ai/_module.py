@@ -46,13 +46,14 @@ __all__ = [
 ]
 
 import logging
-from typing import Any, AsyncIterator, TypeVar
+from collections.abc import AsyncIterator
+from typing import Any, TypeVar
 
 T = TypeVar("T")
 
 from lauren_ai._config import AgentConfig, LLMConfig
 from lauren_ai._exceptions import AgentConfigError
-from lauren_ai._transport import Completion, CompletionChunk, Embedding, Message, TokenUsage
+from lauren_ai._transport import Completion, CompletionChunk, Embedding, Message
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 try:
-    from lauren import Scope, injectable, module, use_value, use_factory  # type: ignore[import]
+    from lauren import Scope, injectable, module, use_factory, use_value  # type: ignore[import]
 
     _LAUREN_AVAILABLE = True
 except ImportError:
@@ -302,7 +303,7 @@ class LLMService:
                     total_chars += len(str(block))
         return total_chars // 4
 
-    def with_structured_output(self, model_cls: type[T]) -> "StructuredLLM[T]":
+    def with_structured_output(self, model_cls: type[T]) -> StructuredLLM[T]:
         """Return a StructuredLLM that forces schema-valid output.
 
         Uses native tool-calling to guarantee the model returns
@@ -520,9 +521,9 @@ class AgentModule:
         :return: A ``@module``-decorated class.
         :rtype: type
         """
-        from lauren_ai._tools._registry import ToolRegistry  # noqa: PLC0415
-        from lauren_ai._agents._runner import AgentRunner  # noqa: PLC0415
         from lauren_ai._agents import USE_TOOLS_META  # noqa: PLC0415
+        from lauren_ai._agents._runner import AgentRunner  # noqa: PLC0415
+        from lauren_ai._tools._registry import ToolRegistry  # noqa: PLC0415
 
         # Build and populate the shared ToolRegistry
         registry = ToolRegistry()

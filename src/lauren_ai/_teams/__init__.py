@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from lauren_ai._teams._decorator import team, TeamMeta, TEAM_META, TeamConfigError
-from lauren_ai._teams._memory import TeamMemory
-from lauren_ai._teams._runner import TeamRunner, TeamResult, TeamEvent
+from lauren_ai._teams._decorator import TEAM_META, TeamConfigError, TeamMeta, team
 from lauren_ai._teams._events import (
-    TeamWorkerStarted,
-    TeamWorkerFinished,
     TeamCoordinatorDecision,
     TeamFinalAnswer,
+    TeamWorkerFinished,
+    TeamWorkerStarted,
 )
+from lauren_ai._teams._memory import TeamMemory
+from lauren_ai._teams._runner import TeamEvent, TeamResult, TeamRunner
 
 __all__ = [
     "team",

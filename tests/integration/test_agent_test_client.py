@@ -12,11 +12,10 @@ Tests cover:
 import pytest
 
 from lauren_ai._agents import agent, use_tools
+from lauren_ai._tools import tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
-from lauren_ai._tools import tool
 from lauren_ai.testing import AgentTestClient
-
 
 # ---------------------------------------------------------------------------
 # Tool definitions (no from __future__ import annotations)

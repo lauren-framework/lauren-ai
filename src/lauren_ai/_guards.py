@@ -6,7 +6,8 @@ and content safety filtering.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Literal
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Literal
 
 __all__ = [
     "token_budget_guard",
@@ -176,7 +177,7 @@ def token_budget_guard(
     _window = window_seconds
 
     try:
-        from lauren import injectable, Scope
+        from lauren import Scope, injectable
         HAS_LAUREN = True
     except ImportError:
         HAS_LAUREN = False
@@ -212,7 +213,7 @@ def token_budget_guard(
 
     if HAS_LAUREN:
         try:
-            from lauren import injectable, Scope
+            from lauren import Scope, injectable
 
             _TokenBudgetGuard = injectable(scope=Scope.SINGLETON)(_TokenBudgetGuard)
         except Exception:

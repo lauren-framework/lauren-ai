@@ -3,20 +3,14 @@ from __future__ import annotations
 
 import pytest
 
-from lauren_ai._teams._decorator import team, TeamMeta, TEAM_META, TeamConfigError
-from lauren_ai._teams._memory import TeamMemory
-from lauren_ai._teams._events import (
-    TeamWorkerStarted,
-    TeamWorkerFinished,
-    TeamCoordinatorDecision,
-    TeamFinalAnswer,
-)
-from lauren_ai._teams._runner import TeamRunner, TeamResult
-from lauren_ai._exceptions import DecoratorUsageError
-from lauren_ai._transport._mock import MockTransport
-from lauren_ai._transport import Completion, TokenUsage
-from lauren_ai._module import LLMService
 from lauren_ai._config import LLMConfig
+from lauren_ai._exceptions import DecoratorUsageError
+from lauren_ai._module import LLMService
+from lauren_ai._teams._decorator import TEAM_META, TeamConfigError, TeamMeta, team
+from lauren_ai._teams._memory import TeamMemory
+from lauren_ai._teams._runner import TeamResult, TeamRunner
+from lauren_ai._transport import Completion, TokenUsage
+from lauren_ai._transport._mock import MockTransport
 
 
 def _make_completion(content: str) -> Completion:

@@ -12,12 +12,11 @@ import pytest
 from lauren_ai._agents import agent, use_tools
 from lauren_ai._agents._runner import AgentRunner
 from lauren_ai._config import LLMConfig
-from lauren_ai._knowledge import Document, FixedSizeChunker, KnowledgeBase, TextLoader
+from lauren_ai._knowledge import FixedSizeChunker, KnowledgeBase, TextLoader
 from lauren_ai._memory._vector import InMemoryVectorStore
 from lauren_ai._tools._registry import ToolRegistry
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
-
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from lauren_ai._exceptions import EmptyQueueError
 from lauren_ai._transport import (
     Completion,
     CompletionChunk,
     Embedding,
     Message,
     TokenUsage,
-    ToolCall,
     ToolSchema,
 )
 from lauren_ai._transport._mock import (
@@ -22,7 +20,6 @@ from lauren_ai._transport._mock import (
     _iter_chunks,
     _messages_token_count,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helper functions tests

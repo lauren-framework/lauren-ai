@@ -7,11 +7,11 @@ embeddings against pre-compiled route centroids.
 from __future__ import annotations
 
 from lauren_ai._routing._router import (
-    SemanticRouter,
     Route,
     RouteMatch,
     RouterConfigError,
     RouterNotCompiledError,
+    SemanticRouter,
 )
 
 __all__ = [

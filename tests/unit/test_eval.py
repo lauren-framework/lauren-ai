@@ -3,16 +3,15 @@ from __future__ import annotations
 
 import pytest
 
+from lauren_ai._agents import AgentResponse
 from lauren_ai._eval import (
     AccuracyEval,
     EvalDataset,
     EvalExample,
     EvalReport,
     EvalResult,
-    PerformanceEval,
     TrajectoryEval,
 )
-from lauren_ai._agents import AgentResponse
 from lauren_ai._transport import TokenUsage
 
 
@@ -24,8 +23,6 @@ class FakeAgentClient:
         self._tool_names = tool_names or []
 
     async def run(self, message: str):
-        from dataclasses import dataclass, field
-        from typing import Any
 
         class FakeToolCall:
             def __init__(self, name):

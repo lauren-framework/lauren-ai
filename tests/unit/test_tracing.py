@@ -1,13 +1,11 @@
 """Unit tests for the tracing system."""
 from __future__ import annotations
 
-import asyncio
 import pytest
 
-from lauren_ai._tracing._core import Span, Trace, SpanKind, TraceStore, TracingConfig
+from lauren_ai._tracing._core import Span, SpanKind, Trace, TraceStore, TracingConfig
 from lauren_ai._tracing._exporters import (
     InMemoryTraceExporter,
-    ConsoleTraceExporter,
 )
 from lauren_ai._tracing._traced import traced
 
@@ -349,14 +347,14 @@ class TestSetGetTraceStore:
         assert get_trace_store() is None
 
     def test_set_and_get_trace_store(self):
-        from lauren_ai._tracing import get_trace_store, set_trace_store, TraceStore
+        from lauren_ai._tracing import TraceStore, get_trace_store, set_trace_store
 
         store = TraceStore()
         set_trace_store(store)
         assert get_trace_store() is store
 
     def test_set_trace_store_replaces_previous(self):
-        from lauren_ai._tracing import get_trace_store, set_trace_store, TraceStore
+        from lauren_ai._tracing import TraceStore, get_trace_store, set_trace_store
 
         s1 = TraceStore()
         s2 = TraceStore()
@@ -365,14 +363,13 @@ class TestSetGetTraceStore:
         assert get_trace_store() is s2
 
     def test_set_trace_store_importable_from_top_level(self):
-        from lauren_ai import set_trace_store, get_trace_store  # noqa: F401
+        from lauren_ai import get_trace_store, set_trace_store  # noqa: F401
 
     async def test_traced_records_to_global_store(self):
         from lauren_ai._tracing import (
-            get_trace_store,
+            TraceStore,
             set_trace_store,
             traced,
-            TraceStore,
         )
 
         store = TraceStore()
@@ -387,9 +384,9 @@ class TestSetGetTraceStore:
 
     async def test_traced_adds_span_to_trace(self):
         from lauren_ai._tracing import (
+            TraceStore,
             set_trace_store,
             traced,
-            TraceStore,
         )
 
         store = TraceStore()
@@ -406,9 +403,9 @@ class TestSetGetTraceStore:
 
     async def test_traced_records_error_in_span(self):
         from lauren_ai._tracing import (
+            TraceStore,
             set_trace_store,
             traced,
-            TraceStore,
         )
 
         store = TraceStore()

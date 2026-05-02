@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import pytest
 
-from lauren_ai._agents import AGENT_META, AgentResponse, agent, use_tools
+from lauren_ai._agents import AgentResponse, agent, use_tools
 from lauren_ai._agents._runner import AgentRunner
-from lauren_ai._config import AgentConfig, LLMConfig
-from lauren_ai._exceptions import AgentMaxTurnsError
+from lauren_ai._config import LLMConfig
 from lauren_ai._tools import tool
 from lauren_ai._tools._registry import ToolRegistry
-from lauren_ai._transport import Completion, Message, ToolCall, TokenUsage
+from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
 
 

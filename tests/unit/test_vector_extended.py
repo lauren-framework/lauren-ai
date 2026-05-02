@@ -7,8 +7,8 @@ import pytest
 
 from lauren_ai._memory._vector import (
     InMemoryVectorStore,
-    _tokenize,
     _term_frequency,
+    _tokenize,
 )
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from lauren_ai._guardrails._base import GuardrailDecision, GuardrailContext
+from lauren_ai._guardrails._base import GuardrailContext, GuardrailDecision
 
 
 class TopicFilter:

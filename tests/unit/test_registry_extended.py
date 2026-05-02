@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from lauren_ai._tools import TOOL_META, ToolMeta, tool
+from lauren_ai._tools import TOOL_META, tool
 from lauren_ai._tools._registry import ToolRegistry
 
 

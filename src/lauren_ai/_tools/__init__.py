@@ -32,8 +32,9 @@ __all__ = [
 
 import inspect
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, TypedDict
+from typing import Any, TypedDict
 
 # ---------------------------------------------------------------------------
 # Schema type

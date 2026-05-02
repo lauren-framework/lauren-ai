@@ -9,7 +9,6 @@ from lauren_ai._interceptors import (
     token_usage_response_interceptor,
 )
 
-
 # ---------------------------------------------------------------------------
 # ai_metrics_interceptor tests (fallback path — no lauren installed)
 # ---------------------------------------------------------------------------

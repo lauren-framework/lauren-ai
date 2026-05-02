@@ -32,14 +32,15 @@ __all__ = [
 ]
 
 import uuid
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 if TYPE_CHECKING:
     from lauren_ai._config import AgentConfig
     from lauren_ai._memory import ShortTermMemory
-    from lauren_ai._transport import TokenUsage, ToolCall
     from lauren_ai._signals import SignalBus as _SignalBus
+    from lauren_ai._transport import TokenUsage, ToolCall
 
 C = TypeVar("C", bound=type)
 

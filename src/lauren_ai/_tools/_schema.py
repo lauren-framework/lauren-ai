@@ -290,8 +290,7 @@ def type_to_json_schema(ann: Any, *, depth: int = 0) -> dict[str, Any]:
 
     # Pydantic BaseModel
     try:
-        from pydantic import BaseModel
-        from pydantic import TypeAdapter
+        from pydantic import BaseModel, TypeAdapter
 
         if isinstance(ann, type) and issubclass(ann, BaseModel):
             adapter = TypeAdapter(ann)

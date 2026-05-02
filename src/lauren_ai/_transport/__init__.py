@@ -19,8 +19,9 @@ Key types
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Literal
+from typing import Any, Literal
 
 from typing_extensions import Protocol, runtime_checkable
 
@@ -149,7 +150,7 @@ class TokenUsage:
         # We keep it simple and only count input + output here.
         return cost
 
-    def __add__(self, other: "TokenUsage") -> "TokenUsage":
+    def __add__(self, other: TokenUsage) -> TokenUsage:
         """Add two :class:`TokenUsage` instances together.
 
         :param other: The other usage to add.
@@ -209,7 +210,7 @@ class ContentBlock:
     source: dict[str, Any] | None = None
 
     @classmethod
-    def text_block(cls, text: str) -> "ContentBlock":
+    def text_block(cls, text: str) -> ContentBlock:
         """Convenience factory for a plain text block.
 
         :param text: The text content.
@@ -225,7 +226,7 @@ class ContentBlock:
         name: str,
         tool_input: dict[str, Any],
         tool_use_id: str | None = None,
-    ) -> "ContentBlock":
+    ) -> ContentBlock:
         """Convenience factory for a tool-use block.
 
         :param name: The tool name.
@@ -250,7 +251,7 @@ class ContentBlock:
         cls,
         tool_use_id: str,
         content: str | list[Any],
-    ) -> "ContentBlock":
+    ) -> ContentBlock:
         """Convenience factory for a tool-result block.
 
         :param tool_use_id: The ID of the tool call this result corresponds to.
@@ -283,7 +284,7 @@ class Message:
     content: str | list[ContentBlock]
 
     @classmethod
-    def user(cls, content: str | list[ContentBlock]) -> "Message":
+    def user(cls, content: str | list[ContentBlock]) -> Message:
         """Convenience factory for a user message.
 
         :param content: Message content.
@@ -294,7 +295,7 @@ class Message:
         return cls(role="user", content=content)
 
     @classmethod
-    def assistant(cls, content: str | list[ContentBlock]) -> "Message":
+    def assistant(cls, content: str | list[ContentBlock]) -> Message:
         """Convenience factory for an assistant message.
 
         :param content: Message content.
@@ -309,7 +310,7 @@ class Message:
         cls,
         role: str,
         parts: list[Any],
-    ) -> "Message":
+    ) -> Message:
         """Create a Message from a list of text strings and content objects.
 
         Accepts any mix of plain strings, :class:`~lauren_ai._transport._multimodal.ImageContent`,
@@ -564,8 +565,8 @@ class CompletionCall:
     messages: list[Message]
     model: str
     system: str | None = None
-    tools: list["ToolSchema"] | None = None
-    tool_choice: "ToolChoice | None" = None
+    tools: list[ToolSchema] | None = None
+    tool_choice: ToolChoice | None = None
     max_tokens: int = 4096
     temperature: float = 1.0
     stop_sequences: list[str] | None = None
@@ -641,7 +642,7 @@ class ToolChoice:
     name: str | None = None
 
     @classmethod
-    def auto(cls) -> "ToolChoice":
+    def auto(cls) -> ToolChoice:
         """Create an *auto* tool choice (model decides).
 
         :return: A :class:`ToolChoice` with ``type="auto"``.
@@ -650,7 +651,7 @@ class ToolChoice:
         return cls(type="auto")
 
     @classmethod
-    def required(cls) -> "ToolChoice":
+    def required(cls) -> ToolChoice:
         """Create a *required* tool choice (model must call a tool).
 
         Maps to ``type="any"`` in the Anthropic API.
@@ -661,7 +662,7 @@ class ToolChoice:
         return cls(type="any")
 
     @classmethod
-    def specific(cls, name: str) -> "ToolChoice":
+    def specific(cls, name: str) -> ToolChoice:
         """Create a *specific* tool choice (model must call exactly this tool).
 
         :param name: The name of the tool that must be called.
@@ -707,7 +708,7 @@ class Transport(Protocol):
         stream: bool = False,
         thinking: bool = False,
         thinking_budget_tokens: int = 8000,
-    ) -> "Completion | AsyncIterator[CompletionChunk]":
+    ) -> Completion | AsyncIterator[CompletionChunk]:
         """Send *messages* to the model and return the result.
 
         When *stream* is ``False`` (the default), returns a :class:`Completion`.

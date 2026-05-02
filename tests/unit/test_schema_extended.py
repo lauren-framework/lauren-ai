@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import pytest
 
+from lauren_ai._tools import ToolContext
 from lauren_ai._tools._schema import (
     _parse_docstring,
     generate_tool_schema,
     type_to_json_schema,
 )
-from lauren_ai._tools import ToolContext
 
 
 class TestTypeToJsonSchemaExtended:
@@ -64,8 +64,7 @@ class TestTypeToJsonSchemaExtended:
         assert result["additionalProperties"] == {"type": "string"}
 
     def test_dict_no_args(self):
-        from typing import Dict
-        result = type_to_json_schema(Dict)
+        result = type_to_json_schema(dict)
         assert result["type"] == "object"
 
     def test_literal_strings(self):
@@ -352,9 +351,8 @@ class TestGenerateToolSchema:
         assert "ctx" not in schema["input_schema"]["properties"]
 
     def test_optional_params_not_required(self):
-        from typing import Optional
 
-        async def opt_func(required: str, optional: Optional[int] = None) -> str:
+        async def opt_func(required: str, optional: int | None = None) -> str:
             """A function. Args: required: Required. optional: Optional."""
             return required
 

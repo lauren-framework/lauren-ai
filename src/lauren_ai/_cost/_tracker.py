@@ -3,10 +3,11 @@ from __future__ import annotations
 """CostTracker -- accumulates token usage and estimates per conversation/user."""
 
 import asyncio
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, AsyncGenerator
+from typing import Any
 
 from lauren_ai._cost._pricing import CostEstimate, PricingTable, default_pricing_table
 

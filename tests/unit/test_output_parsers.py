@@ -4,6 +4,8 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
+from lauren_ai._config import LLMConfig
+from lauren_ai._module import LLMService
 from lauren_ai._output_parsers import (
     CommaSeparatedListParser,
     JSONOutputParser,
@@ -16,8 +18,6 @@ from lauren_ai._output_parsers import (
     StrOutputParser,
 )
 from lauren_ai._transport import Completion, Message, TokenUsage
-from lauren_ai._config import LLMConfig
-from lauren_ai._module import LLMService
 
 
 class UserInfo(BaseModel):

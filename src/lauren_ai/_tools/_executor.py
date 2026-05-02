@@ -25,10 +25,10 @@ import inspect
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-from . import TOOL_META, ToolContext, ToolMeta, ToolResult
+from . import ToolContext, ToolMeta, ToolResult
 from ._registry import ToolRegistry
 
 logger = logging.getLogger(__name__)

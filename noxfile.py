@@ -18,7 +18,7 @@ nox.options.envdir = os.path.join(
     os.path.expanduser("~"), ".cache", "nox", "lauren-ai"
 )
 
-PYTHON_VERSIONS = ["3.11", "3.12"]
+PYTHON_VERSIONS = ["3.11", "3.12", "3.13", "3.14"]
 DEFAULT_PYTHON = "3.12"
 
 SRC = "src"
@@ -88,7 +88,7 @@ def tests(session: nox.Session) -> None:
         "--cov=lauren_ai",
         "--cov-report=term-missing",
         "--cov-report=xml",
-        "-v",
+        "-q",
         *session.posargs,
     )
 

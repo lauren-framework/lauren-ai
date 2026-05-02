@@ -3,6 +3,7 @@ is_window_expired, safety_guard dispatch and log paths."""
 from __future__ import annotations
 
 import time
+
 import pytest
 
 from lauren_ai._guards import (
@@ -11,12 +12,9 @@ from lauren_ai._guards import (
     SafetyPolicy,
     _default_ctx_key_fn,
     _get_model_capabilities,
-    requires_capability,
     safety_guard,
     token_budget_guard,
 )
-from lauren_ai._exceptions import AgentBudgetExceededError, AgentConfigError
-
 
 # ---------------------------------------------------------------------------
 # BudgetUsage tests

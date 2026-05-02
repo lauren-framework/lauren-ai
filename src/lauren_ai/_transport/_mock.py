@@ -38,7 +38,8 @@ from __future__ import annotations
 import json
 import uuid
 from collections import deque
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from lauren_ai._exceptions import EmptyQueueError
 from lauren_ai._transport import (
@@ -47,10 +48,10 @@ from lauren_ai._transport import (
     CompletionChunk,
     Embedding,
     Message,
+    TokenUsage,
     ToolCall,
     ToolChoice,
     ToolSchema,
-    TokenUsage,
 )
 
 __all__ = ["MockTransport"]
@@ -337,7 +338,7 @@ class MockTransport:
         stream: bool = False,
         thinking: bool = False,
         thinking_budget_tokens: int = 8000,
-    ) -> "Completion | AsyncIterator[CompletionChunk]":
+    ) -> Completion | AsyncIterator[CompletionChunk]:
         """Dequeue and return the next canned response.
 
         Records a :class:`~lauren_ai._transport.CompletionCall` for later

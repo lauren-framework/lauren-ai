@@ -212,41 +212,9 @@ __all__ = [
 # Config
 # ---------------------------------------------------------------------------
 
-from lauren_ai._config import AgentConfig, LLMConfig
-
-# ---------------------------------------------------------------------------
-# Transport types
-# ---------------------------------------------------------------------------
-
-from lauren_ai._transport import (
-    Completion,
-    CompletionChunk,
-    Embedding,
-    Message,
-    TokenUsage,
-    ToolCall,
-    ToolSchema,
-)
-
-# ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
-
-from lauren_ai._exceptions import (
-    AgentBudgetExceededError,
-    AgentConfigError,
-    AgentMaxTurnsError,
-    DecoratorUsageError,
-    LaurenAIError,
-    OutputParserError,
-    ToolExecutionError,
-    TransportError,
-)
-
 # ---------------------------------------------------------------------------
 # Decorators
 # ---------------------------------------------------------------------------
-
 from lauren_ai._agents import (
     AgentContext,
     AgentMeta,
@@ -255,53 +223,76 @@ from lauren_ai._agents import (
     use_tools,
 )
 
-from lauren_ai._tools import (
-    ToolContext,
-    ToolResult,
-    tool,
+# ---------------------------------------------------------------------------
+# Runner
+# ---------------------------------------------------------------------------
+from lauren_ai._agents._runner import AgentRunner
+
+# ---------------------------------------------------------------------------
+# Chains
+# ---------------------------------------------------------------------------
+from lauren_ai._chains import Chain, Runnable, RunnableLambda, chain
+from lauren_ai._config import AgentConfig, LLMConfig
+
+# ---------------------------------------------------------------------------
+# Cost & rate tracking (Section 40)
+# ---------------------------------------------------------------------------
+from lauren_ai._cost import (
+    BudgetExceededError,
+    CostEstimate,
+    CostReport,
+    CostSession,
+    CostTracker,
+    ModelPricing,
+    PricingTable,
+    RateLimiter,
+    RateLimitExhaustedError,
+    TokenBudget,
+    default_pricing_table,
 )
 
 # ---------------------------------------------------------------------------
-# Memory
+# Exceptions
 # ---------------------------------------------------------------------------
-
-from lauren_ai._memory import (
-    ConversationStore,
-    MemoryStore,
-    ShortTermMemory,
+from lauren_ai._exceptions import (
+    AgentBudgetExceededError,
+    AgentConfigError,
+    AgentMaxTurnsError,
+    DecoratorUsageError,
+    LaurenAIError,
+    OutputParserError,
+    ToolExecutionError,
+    TracingError,
+    TransportError,
 )
-from lauren_ai._memory._stores import InMemoryConversationStore
-from lauren_ai._memory._vector import InMemoryVectorStore
-
-# ---------------------------------------------------------------------------
-# Signals
-# ---------------------------------------------------------------------------
-
-from lauren_ai._signals import (
-    AgentRunComplete,
-    ModelCallComplete,
-    ModelCallStarted,
-    SignalBus,
-    ToolCallComplete,
-    ToolCallStarted,
-)
-
-# ---------------------------------------------------------------------------
-# Modules and services
-# ---------------------------------------------------------------------------
-
-from lauren_ai._module import AgentModule, LLMModule, LLMService
 
 # ---------------------------------------------------------------------------
 # Extractors
 # ---------------------------------------------------------------------------
-
 from lauren_ai._extractors import Agent, Embed, StreamCompletion
+
+# ---------------------------------------------------------------------------
+# Guardrails (Section 41)
+# ---------------------------------------------------------------------------
+from lauren_ai._guardrails import (
+    GUARDRAIL_META,
+    GuardrailContext,
+    GuardrailDecision,
+    GuardrailMeta,
+    GuardrailViolated,
+    InputGuardrail,
+    LengthFilter,
+    LLMGuardrail,
+    OutputGuardrail,
+    PIIRedactor,
+    PromptInjectionFilter,
+    TopicFilter,
+    guardrail,
+)
 
 # ---------------------------------------------------------------------------
 # Guards
 # ---------------------------------------------------------------------------
-
 from lauren_ai._guards import (
     SafetyPolicy,
     requires_capability,
@@ -310,48 +301,47 @@ from lauren_ai._guards import (
 )
 
 # ---------------------------------------------------------------------------
-# Middleware factories
-# ---------------------------------------------------------------------------
-
-from lauren_ai._middleware import ai_rate_limit, conversation_middleware
-
-# ---------------------------------------------------------------------------
 # Interceptors
 # ---------------------------------------------------------------------------
-
 from lauren_ai._interceptors import (
     ai_metrics_interceptor,
     token_usage_response_interceptor,
 )
 
 # ---------------------------------------------------------------------------
-# Runner
+# Memory
 # ---------------------------------------------------------------------------
-
-from lauren_ai._agents._runner import AgentRunner
-
 # ---------------------------------------------------------------------------
-# Prompt templates
+# User memory (Section 36)
 # ---------------------------------------------------------------------------
-
-from lauren_ai._prompts import (
-    ChatPromptTemplate,
-    FewShotExample,
-    FewShotPromptTemplate,
-    PromptRenderError,
-    PromptTemplate,
+from lauren_ai._memory import (
+    REMEMBER_META,
+    ConversationStore,
+    InMemoryUserMemoryStore,
+    MemoryConfigError,
+    MemoryFact,
+    MemoryStore,
+    RememberMeta,
+    ShortTermMemory,
+    UserMemoryStore,
+    remember,
 )
+from lauren_ai._memory._stores import InMemoryConversationStore
+from lauren_ai._memory._vector import InMemoryVectorStore
 
 # ---------------------------------------------------------------------------
-# Chains
+# Middleware factories
 # ---------------------------------------------------------------------------
+from lauren_ai._middleware import ai_rate_limit, conversation_middleware
 
-from lauren_ai._chains import Chain, Runnable, RunnableLambda, chain
+# ---------------------------------------------------------------------------
+# Modules and services
+# ---------------------------------------------------------------------------
+from lauren_ai._module import AgentModule, LLMModule, LLMService
 
 # ---------------------------------------------------------------------------
 # Output parsers
 # ---------------------------------------------------------------------------
-
 from lauren_ai._output_parsers import (
     CommaSeparatedListParser,
     JSONOutputParser,
@@ -365,85 +355,42 @@ from lauren_ai._output_parsers import (
 )
 
 # ---------------------------------------------------------------------------
-# Multimodal content types (Section 38)
+# Prompt templates
 # ---------------------------------------------------------------------------
-
-from lauren_ai._transport._multimodal import (
-    AudioContent,
-    ContentPart,
-    DocumentContent,
-    ImageContent,
-    UnsupportedContentError,
+from lauren_ai._prompts import (
+    ChatPromptTemplate,
+    FewShotExample,
+    FewShotPromptTemplate,
+    PromptRenderError,
+    PromptTemplate,
 )
-
-# ---------------------------------------------------------------------------
-# Structured output (Section 37)
-# ---------------------------------------------------------------------------
-
-from lauren_ai._transport._structured import StructuredLLM
 
 # ---------------------------------------------------------------------------
 # Semantic router (Section 39)
 # ---------------------------------------------------------------------------
-
-from lauren_ai._routing import Route, RouteMatch, RouterConfigError, RouterNotCompiledError, SemanticRouter
-
-# ---------------------------------------------------------------------------
-# User memory (Section 36)
-# ---------------------------------------------------------------------------
-
-from lauren_ai._memory import (
-    InMemoryUserMemoryStore,
-    MemoryConfigError,
-    MemoryFact,
-    REMEMBER_META,
-    RememberMeta,
-    UserMemoryStore,
-    remember,
+from lauren_ai._routing import (
+    Route,
+    RouteMatch,
+    RouterConfigError,
+    RouterNotCompiledError,
+    SemanticRouter,
 )
 
 # ---------------------------------------------------------------------------
-# Cost & rate tracking (Section 40)
+# Signals
 # ---------------------------------------------------------------------------
-
-from lauren_ai._cost import (
-    BudgetExceededError,
-    CostEstimate,
-    CostReport,
-    CostSession,
-    CostTracker,
-    ModelPricing,
-    PricingTable,
-    RateLimitExhaustedError,
-    RateLimiter,
-    TokenBudget,
-    default_pricing_table,
-)
-
-# ---------------------------------------------------------------------------
-# Guardrails (Section 41)
-# ---------------------------------------------------------------------------
-
-from lauren_ai._guardrails import (
-    GUARDRAIL_META,
-    GuardrailContext,
-    GuardrailDecision,
-    GuardrailMeta,
-    GuardrailViolated,
-    InputGuardrail,
-    LLMGuardrail,
-    LengthFilter,
-    OutputGuardrail,
-    PIIRedactor,
-    PromptInjectionFilter,
-    TopicFilter,
-    guardrail,
+from lauren_ai._signals import (
+    AgentRunComplete,
+    ModelCallComplete,
+    ModelCallStarted,
+    SignalBus,
+    ToolCallComplete,
+    ToolCallStarted,
 )
 
 # ---------------------------------------------------------------------------
 # Agent teams (Section 34)
 # ---------------------------------------------------------------------------
-
 from lauren_ai._teams import (
     TEAM_META,
     TeamConfigError,
@@ -458,11 +405,15 @@ from lauren_ai._teams import (
     TeamWorkerStarted,
     team,
 )
+from lauren_ai._tools import (
+    ToolContext,
+    ToolResult,
+    tool,
+)
 
 # ---------------------------------------------------------------------------
 # Tracing (Section 35)
 # ---------------------------------------------------------------------------
-
 from lauren_ai._tracing import (
     ConsoleTraceExporter,
     FileTraceExporter,
@@ -473,9 +424,36 @@ from lauren_ai._tracing import (
     TraceExporter,
     TraceStore,
     TracingConfig,
-    traced,
-    set_trace_store,
     get_trace_store,
+    set_trace_store,
+    traced,
 )
 
-from lauren_ai._exceptions import TracingError
+# ---------------------------------------------------------------------------
+# Transport types
+# ---------------------------------------------------------------------------
+from lauren_ai._transport import (
+    Completion,
+    CompletionChunk,
+    Embedding,
+    Message,
+    TokenUsage,
+    ToolCall,
+    ToolSchema,
+)
+
+# ---------------------------------------------------------------------------
+# Multimodal content types (Section 38)
+# ---------------------------------------------------------------------------
+from lauren_ai._transport._multimodal import (
+    AudioContent,
+    ContentPart,
+    DocumentContent,
+    ImageContent,
+    UnsupportedContentError,
+)
+
+# ---------------------------------------------------------------------------
+# Structured output (Section 37)
+# ---------------------------------------------------------------------------
+from lauren_ai._transport._structured import StructuredLLM

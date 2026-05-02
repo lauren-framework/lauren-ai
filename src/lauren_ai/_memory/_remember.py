@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """@remember() decorator for agents — automatic memory extraction and injection."""
 
-import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from lauren_ai._exceptions import LaurenAIError
 
@@ -84,8 +84,9 @@ async def extract_facts(
 
     Returns list of {"content": str, "topics": list[str]} dicts.
     """
-    from lauren_ai._transport import Message, Completion
     import json
+
+    from lauren_ai._transport import Completion, Message
 
     prompt = (
         "Extract any facts about the user from this conversation turn. "

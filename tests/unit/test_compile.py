@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import pytest
 
-from lauren_ai._agents import AGENT_META, USE_TOOLS_META, agent, use_tools
+from lauren_ai._agents import USE_TOOLS_META, agent, use_tools
 from lauren_ai._agents._compile import validate_agent_class, validate_tool
 from lauren_ai._exceptions import AgentConfigError, ToolConfigError
 from lauren_ai._tools import TOOL_META, tool
-
 
 # ---------------------------------------------------------------------------
 # validate_tool tests
@@ -44,8 +43,7 @@ class TestValidateTool:
     def test_raises_for_unannotated_parameter(self):
         # Create a tool with unannotated param — bypass @tool() decorator check
         # by manually injecting TOOL_META
-        from lauren_ai._tools import ToolMeta, ToolResult
-        from lauren_ai._tools._schema import generate_tool_schema
+        from lauren_ai._tools import ToolMeta
 
         # We'll define a function without annotation, then give it a fake TOOL_META
         def bad_func(x):
@@ -53,7 +51,6 @@ class TestValidateTool:
             return str(x)
 
         # Manually attach fake TOOL_META
-        from lauren_ai._tools import ToolMeta
         fake_meta = ToolMeta(
             name="bad_func",
             description="",

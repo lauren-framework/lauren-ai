@@ -26,7 +26,6 @@ from lauren_ai._tools._registry import ToolRegistry
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

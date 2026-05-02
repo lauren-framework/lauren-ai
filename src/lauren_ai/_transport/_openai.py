@@ -28,7 +28,8 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import Any, AsyncIterator, Literal
+from collections.abc import AsyncIterator
+from typing import Any, Literal
 
 from lauren_ai._config import LLMConfig
 from lauren_ai._exceptions import AuthTransportError, TransientTransportError, TransportError
@@ -38,11 +39,11 @@ from lauren_ai._transport import (
     ContentBlock,
     Embedding,
     Message,
+    TokenUsage,
     ToolCall,
     ToolCallDelta,
     ToolChoice,
     ToolSchema,
-    TokenUsage,
 )
 
 __all__ = ["OpenAITransport"]
@@ -405,7 +406,7 @@ class OpenAITransport:
         stream: bool = False,
         thinking: bool = False,
         thinking_budget_tokens: int = 8000,
-    ) -> "Completion | AsyncIterator[CompletionChunk]":
+    ) -> Completion | AsyncIterator[CompletionChunk]:
         """Send messages to OpenAI and return the completion.
 
         :param messages: Conversation messages.

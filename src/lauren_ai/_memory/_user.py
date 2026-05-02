@@ -2,10 +2,9 @@ from __future__ import annotations
 
 """User-level persistent memory that spans conversations."""
 
-import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Protocol, runtime_checkable
+from datetime import UTC, datetime
+from typing import Protocol, runtime_checkable
 
 
 @dataclass
@@ -21,13 +20,13 @@ class MemoryFact:
     content: str
     topics: list[str] = field(default_factory=list)
     confidence: float = 1.0
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    last_seen_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    last_seen_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     source_conversation_id: str | None = None
 
     def reinforce(self) -> None:
         """Update last_seen_at and boost confidence towards 1.0."""
-        self.last_seen_at = datetime.now(timezone.utc)
+        self.last_seen_at = datetime.now(UTC)
         self.confidence = min(1.0, self.confidence + 0.1)
 
     def decay(self, factor: float = 0.8) -> None:

@@ -1,7 +1,6 @@
 """Extended tests for _eval/__init__.py — covers missing branches."""
 from __future__ import annotations
 
-import asyncio
 import pytest
 
 from lauren_ai._eval import (
@@ -13,7 +12,6 @@ from lauren_ai._eval import (
     PerformanceEval,
     TrajectoryEval,
 )
-
 
 # ---------------------------------------------------------------------------
 # EvalReport extended tests

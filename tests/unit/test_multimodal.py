@@ -2,16 +2,13 @@
 from __future__ import annotations
 
 import base64
-import pytest
 
+from lauren_ai._transport import Message
 from lauren_ai._transport._multimodal import (
-    ImageContent,
     AudioContent,
     DocumentContent,
-    ContentPart,
-    UnsupportedContentError,
+    ImageContent,
 )
-from lauren_ai._transport import Message
 
 
 class TestImageContent:

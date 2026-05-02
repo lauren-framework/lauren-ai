@@ -1,11 +1,8 @@
 """Unit tests for the exception hierarchy."""
 from __future__ import annotations
 
-import pytest
-
 from lauren_ai._exceptions import (
     AgentBudgetExceededError,
-    AgentConfigError,
     AgentMaxTurnsError,
     AuthTransportError,
     DecoratorUsageError,
@@ -13,9 +10,7 @@ from lauren_ai._exceptions import (
     EmptyQueueError,
     KnowledgeLoadError,
     LaurenAIError,
-    ToolConfigError,
     ToolExecutionError,
-    ToolSchemaError,
     TransientTransportError,
     TransportError,
     WorkflowError,

@@ -36,7 +36,6 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-
 # ---------------------------------------------------------------------------
 # Shared result type
 # ---------------------------------------------------------------------------
@@ -476,11 +475,11 @@ class ShortTermMemory:
 # User-level persistent memory (Section 36)
 # ---------------------------------------------------------------------------
 
-from lauren_ai._memory._user import MemoryFact, UserMemoryStore  # noqa: E402
 from lauren_ai._memory._in_memory_user import InMemoryUserMemoryStore  # noqa: E402
 from lauren_ai._memory._remember import (  # noqa: E402
-    remember,
-    RememberMeta,
-    MemoryConfigError,
     REMEMBER_META,
+    MemoryConfigError,
+    RememberMeta,
+    remember,
 )
+from lauren_ai._memory._user import MemoryFact, UserMemoryStore  # noqa: E402

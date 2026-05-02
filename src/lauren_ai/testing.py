@@ -38,7 +38,6 @@ __all__ = [
 
 if TYPE_CHECKING:
     from lauren_ai._agents import AgentResponse
-    from lauren_ai._transport._mock import MockTransport
 
 
 class AgentTestClient:
@@ -162,7 +161,7 @@ class AgentTestClient:
         """
         from lauren_ai._agents import AGENT_META  # noqa: PLC0415
         from lauren_ai._agents._runner import AgentRunner  # noqa: PLC0415
-        from lauren_ai._config import AgentConfig, LLMConfig  # noqa: PLC0415
+        from lauren_ai._config import LLMConfig  # noqa: PLC0415
         from lauren_ai._tools._registry import ToolRegistry  # noqa: PLC0415
 
         agent_cls = type(self._agent)

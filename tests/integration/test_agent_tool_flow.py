@@ -17,7 +17,6 @@ from lauren_ai._tools._registry import ToolRegistry
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -273,7 +272,6 @@ class TestToolErrorHandling:
         """With tool_error_policy='raise', tool exceptions propagate (wrapped in ToolExecutionError)."""
         # The executor wraps tool exceptions in its own ToolExecutionError.
         # Import it from the executor module directly.
-        from lauren_ai._tools._executor import ToolExecutionError as ExecutorToolError
 
         mock = MockTransport()
         registry = ToolRegistry()

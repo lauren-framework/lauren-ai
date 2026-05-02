@@ -2,18 +2,19 @@ from __future__ import annotations
 
 """TeamRunner — orchestrates multi-agent teams."""
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import Any
 
+from lauren_ai._teams._decorator import TEAM_META, TeamConfigError
 from lauren_ai._teams._events import (
-    TeamEvent,
-    TeamWorkerStarted,
-    TeamWorkerFinished,
     TeamCoordinatorDecision,
+    TeamEvent,
     TeamFinalAnswer,
+    TeamWorkerFinished,
+    TeamWorkerStarted,
 )
 from lauren_ai._teams._memory import TeamMemory
-from lauren_ai._teams._decorator import TEAM_META, TeamConfigError
 
 
 @dataclass
@@ -141,7 +142,7 @@ class TeamRunner:
         :param task: The task to assign.
         :return: The worker's text output.
         """
-        from lauren_ai._transport import Message, Completion  # noqa: PLC0415
+        from lauren_ai._transport import Completion, Message  # noqa: PLC0415
 
         prompt = f"Worker: {worker_name}\nTask: {task}\n\nProvide your analysis:"
         result = await self._llm.complete([Message(role="user", content=prompt)])
@@ -163,7 +164,7 @@ class TeamRunner:
         :param round_num: Current round index.
         :return: A tuple of (action, content) where action is "ROUTE" or "DONE".
         """
-        from lauren_ai._transport import Message, Completion  # noqa: PLC0415
+        from lauren_ai._transport import Completion, Message  # noqa: PLC0415
 
         worker_desc = "\n".join(
             f"- {name}: A specialist agent" for name in self._worker_names
@@ -259,7 +260,7 @@ class TeamRunner:
             f"Synthesise these expert outputs into a final answer for: {task}\n\n"
             + "\n\n".join(f"{k}:\n{v}" for k, v in worker_outputs.items())
         )
-        from lauren_ai._transport import Message, Completion  # noqa: PLC0415
+        from lauren_ai._transport import Completion, Message  # noqa: PLC0415
 
         result = await self._llm.complete(
             [Message(role="user", content=synthesis_prompt)],
@@ -337,7 +338,7 @@ class TeamRunner:
             f"Synthesise: {task}\n\n"
             + "\n\n".join(f"{k}:\n{v}" for k, v in worker_outputs.items())
         )
-        from lauren_ai._transport import Message, Completion  # noqa: PLC0415
+        from lauren_ai._transport import Completion, Message  # noqa: PLC0415
 
         result = await self._llm.complete(
             [Message(role="user", content=synthesis_prompt)]

@@ -42,9 +42,9 @@ __all__ = [
     "StreamCompletion",
 ]
 
-import json
 import logging
-from typing import Any, AsyncIterator, Generic, TypeVar
+from collections.abc import AsyncIterator
+from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +55,9 @@ T = TypeVar("T")
 # ---------------------------------------------------------------------------
 
 try:
+    from lauren import Scope, injectable  # type: ignore[import]
     from lauren.extractors import Extraction, ExtractionMarker  # type: ignore[import]
     from lauren.types import ExecutionContext  # type: ignore[import]
-    from lauren import Scope, injectable  # type: ignore[import]
 
     LAUREN_EXTRACTORS_AVAILABLE = True
 except ImportError:

@@ -21,16 +21,15 @@ import asyncio
 import logging
 import time
 import uuid
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from lauren_ai._agents import AGENT_META, AgentContext, AgentMeta, AgentResponse
 from lauren_ai._config import AgentConfig, LLMConfig
 from lauren_ai._exceptions import (
     AgentBudgetExceededError,
     AgentConfigError,
-    AgentMaxTurnsError,
     DelegateToAgent,
-    ToolExecutionError,
 )
 from lauren_ai._memory import ShortTermMemory
 from lauren_ai._tools import ToolContext, ToolResult

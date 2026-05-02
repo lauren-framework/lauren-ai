@@ -67,8 +67,8 @@ class StructuredLLM(Generic[T]):
         :return: A validated instance of *model_cls*.
         :rtype: T
         """
-        from lauren_ai._transport import Completion, ToolChoice, ToolSchema
         from lauren_ai._output_parsers._base import OutputParserError
+        from lauren_ai._transport import Completion, ToolChoice, ToolSchema
 
         model_name = self._model_cls.__name__
         tool = ToolSchema(

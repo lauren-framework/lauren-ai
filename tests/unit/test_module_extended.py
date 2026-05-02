@@ -4,11 +4,10 @@ from __future__ import annotations
 import pytest
 
 from lauren_ai._config import AgentConfig, LLMConfig
+from lauren_ai._exceptions import AgentConfigError
 from lauren_ai._module import AgentModule, EmbedService, LLMModule, LLMService, _build_transport
 from lauren_ai._transport import Completion, Message, TokenUsage
 from lauren_ai._transport._mock import MockTransport
-from lauren_ai._exceptions import AgentConfigError
-
 
 # ---------------------------------------------------------------------------
 # _build_transport tests
@@ -487,9 +486,10 @@ class TestAgentModule:
 
     def test_for_root_tool_register_exception_logs(self, caplog):
         """If registry.register raises, it should log a warning and continue."""
+        import logging
+
         from lauren_ai._agents import agent
         from lauren_ai._tools import TOOL_META, ToolMeta
-        import logging
 
         # Create a fake tool that will fail to register
         class BrokenTool:

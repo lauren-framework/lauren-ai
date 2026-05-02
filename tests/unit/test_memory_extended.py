@@ -1,17 +1,13 @@
 """Extended unit tests for _memory/__init__.py — covers uncovered branches."""
 from __future__ import annotations
 
-import pytest
-
 from lauren_ai._memory import (
     ShortTermMemory,
-    MemoryResult,
     _estimate_content_length,
     _get_role,
     _message_char_length,
 )
 from lauren_ai._transport import Completion, TokenUsage
-
 
 # ---------------------------------------------------------------------------
 # _estimate_content_length tests

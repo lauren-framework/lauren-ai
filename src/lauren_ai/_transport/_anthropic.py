@@ -18,9 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 import uuid
-from typing import TYPE_CHECKING, Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any
 
 from lauren_ai._config import LLMConfig
 from lauren_ai._exceptions import AuthTransportError, TransientTransportError, TransportError
@@ -30,14 +30,13 @@ from lauren_ai._transport import (
     ContentBlock,
     Embedding,
     Message,
-    PendingApproval,
     RedactedThinkingBlock,
     ThinkingBlock,
+    TokenUsage,
     ToolCall,
     ToolCallDelta,
     ToolChoice,
     ToolSchema,
-    TokenUsage,
 )
 
 if TYPE_CHECKING:
@@ -92,9 +91,7 @@ def _content_block_to_anthropic(block: ContentBlock) -> dict[str, Any]:
             "type": "tool_result",
             "tool_use_id": block.tool_use_id,
         }
-        if isinstance(block.content, str):
-            result["content"] = block.content
-        elif isinstance(block.content, list):
+        if isinstance(block.content, str) or isinstance(block.content, list):
             result["content"] = block.content
         return result
     if block.type == "image":
@@ -469,7 +466,7 @@ class AnthropicTransport:
         stream: bool = False,
         thinking: bool = False,
         thinking_budget_tokens: int = 8000,
-    ) -> "Completion | AsyncIterator[CompletionChunk]":
+    ) -> Completion | AsyncIterator[CompletionChunk]:
         """Send messages to Anthropic and return the completion.
 
         :param messages: Conversation messages.

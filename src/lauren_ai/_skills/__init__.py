@@ -73,7 +73,7 @@ async def WebSearchTool(  # noqa: N802
 async def HttpFetchTool(  # noqa: N802
     url: str,
     method: str = "GET",
-    headers: Optional[dict] = None,
+    headers: dict | None = None,
     timeout: float = 30.0,
     ctx: ToolContext | None = None,
 ) -> dict[str, Any]:
@@ -147,7 +147,7 @@ async def CodeExecutionTool(  # noqa: N802
             stdout_b, stderr_b = await asyncio.wait_for(
                 proc.communicate(), timeout=effective_timeout
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             return {
                 "stdout": "",

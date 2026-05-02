@@ -8,8 +8,9 @@ from __future__ import annotations
 import time
 import uuid
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 __all__ = [
     "conversation_middleware",
@@ -20,7 +21,7 @@ __all__ = [
 ]
 
 if TYPE_CHECKING:
-    from ._memory import ConversationStore
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -55,9 +56,9 @@ def conversation_middleware(
     :rtype: type
     """
     try:
-        from lauren import injectable, Scope
-        from lauren.types import Request, Response
+        from lauren import Scope, injectable
         from lauren.middleware import middleware  # type: ignore[import-not-found]
+        from lauren.types import Request, Response
     except ImportError:
         # Fallback: return a class with the expected interface even if lauren not available
         class _FallbackMiddleware:  # type: ignore[no-redef]
@@ -262,8 +263,8 @@ def ai_rate_limit(
     _key_fn = key_fn or _default_key_fn
 
     try:
+        from lauren import Scope, injectable
         from lauren.middleware import middleware  # type: ignore[import-not-found]
-        from lauren import injectable, Scope
     except ImportError:
         class _FallbackMiddleware:  # type: ignore[no-redef]
             async def dispatch(self, request: Any, call_next: Any) -> Any:
