@@ -1,0 +1,87 @@
+site_name: Lauren AI
+site_description: First-party AI/LLM companion to the Lauren web framework
+site_url: https://lauren-framework.github.io/lauren-ai/
+repo_url: https://github.com/lauren-framework/lauren-ai
+repo_name: lauren-framework/lauren-ai
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - content.code.annotate
+    - content.code.copy
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quick-start.md
+    - First Agent: getting-started/first-agent.md
+  - Guides:
+    - LLM Calls: guides/llm-calls.md
+    - Tools: guides/tools.md
+    - Agents: guides/agents.md
+    - Memory: guides/memory.md
+    - User Memory: guides/user-memory.md
+    - Streaming: guides/streaming.md
+    - Multi-Agent: guides/multi-agent.md
+    - Agent Teams: guides/agent-teams.md
+    - Knowledge Base: guides/knowledge-base.md
+    - Workflows: guides/workflows.md
+    - Prompt Templates: guides/prompt-templates.md
+    - Output Parsers: guides/output-parsers.md
+    - Structured Output: guides/structured-output.md
+    - Multimodal Inputs: guides/multimodal.md
+    - Semantic Router: guides/semantic-router.md
+    - Cost Tracking: guides/cost-tracking.md
+    - Guardrails: guides/guardrails.md
+    - Tracing: guides/tracing.md
+    - Testing: guides/testing.md
+    - Evaluation: guides/evaluation.md
+    - Extended Thinking: guides/extended-thinking.md
+  - Reference:
+    - Transport: reference/transport.md
+    - Config: reference/config.md
+    - Tools: reference/tools.md
+    - Agents: reference/agents.md
+    - Memory: reference/memory.md
+    - Signals: reference/signals.md
+    - Exceptions: reference/exceptions.md
+    - Guards: reference/guards.md
+    - Middleware: reference/middleware.md
+    - Interceptors: reference/interceptors.md
+    - Evaluation: reference/evaluation.md

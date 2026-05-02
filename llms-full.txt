@@ -1,0 +1,1057 @@
+# lauren-ai — Full API Reference
+
+> First-party AI/LLM companion for the Lauren web framework.
+
+Version: see `lauren_ai.__version__`
+Requires: Python ≥ 3.11, lauren ≥ 0.1.0
+
+---
+
+## Installation
+
+```bash
+pip install "lauren-ai[anthropic]"   # Anthropic Claude (default)
+pip install "lauren-ai[openai]"      # OpenAI / Ollama
+pip install "lauren-ai[all]"         # All providers + all extras
+```
+
+Extras available: `anthropic`, `openai`, `ollama`, `knowledge`, `eval`, `dev`.
+
+---
+
+## Package layout
+
+```
+lauren_ai/
+├── __init__.py          # Public API surface
+├── _agents/             # @agent(), @use_tools(), AgentRunner
+├── _config.py           # LLMConfig, AgentConfig
+├── _eval/               # AccuracyEval, TrajectoryEval, PerformanceEval
+├── _exceptions.py       # Exception hierarchy
+├── _extractors.py       # Lauren extractor integration (Agent[T] param)
+├── _guards.py           # Guard factories (bearer_required, roles_required)
+├── _interceptors.py     # ai_metrics_interceptor, token_usage_response_interceptor
+├── _chains/             # Chain, Runnable
+├── _cost/               # CostTracker, PricingTable, TokenBudget, RateLimiter
+├── _guardrails/         # @guardrail(), TopicFilter, PIIRedactor, LengthFilter
+├── _knowledge/          # KnowledgeBase, TextLoader, FixedSizeChunker, SentenceChunker
+├── _memory/             # ShortTermMemory + UserMemoryStore + @remember()
+├── _middleware.py       # Lauren middleware integration
+├── _module.py           # LLMModule, AgentModule, LLMService, EmbedService
+├── _output_parsers/     # StrOutputParser, JSONOutputParser, PydanticOutputParser
+├── _prompts/            # PromptTemplate, ChatPromptTemplate, FewShotPromptTemplate
+├── _routing/            # SemanticRouter, Route, RouteMatch
+├── _signals.py          # SignalBus + signal dataclasses
+├── _skills/             # WebSearchTool, HttpFetchTool, CodeExecutionTool
+├── _teams/              # @team(), TeamRunner, TeamResult
+├── _tools/              # @tool(), ToolMeta, ToolRegistry, ToolExecutor, schema gen
+├── _tracing/            # @traced(), Span, Trace, TraceStore, TraceExporter
+├── _transport/          # Transport protocol + AnthropicTransport + StructuredLLM + multimodal
+├── _workflows/          # Workflow, Step, Parallel, Condition, Loop
+└── testing.py           # AgentTestClient
+```
+
+---
+
+## Configuration
+
+### `LLMConfig`
+
+```python
+from lauren_ai import LLMConfig
+
+config = LLMConfig(
+    model="claude-opus-4-6",     # Model ID (required)
+    api_key="sk-...",            # API key (or set env var)
+    max_tokens=4096,             # Max output tokens (default: 4096)
+    temperature=0.7,             # Sampling temperature 0..1 (default: 0.7)
+    top_p=1.0,                   # Nucleus sampling (default: 1.0)
+    system="You are helpful.",   # Default system prompt
+    timeout=60.0,                # Request timeout in seconds (default: 60.0)
+    max_retries=3,               # Retry count on transient errors (default: 3)
+)
+```
+
+### `AgentConfig`
+
+```python
+from lauren_ai import AgentConfig
+
+config = AgentConfig(
+    max_turns=10,                # Max agentic loop turns (default: 10)
+    budget_tokens=100_000,       # Token budget (None = unlimited)
+    budget_usd=1.0,              # USD budget (None = unlimited)
+    on_max_turns="stop",         # "stop" | "raise" (default: "stop")
+    on_budget_exceeded="stop",   # "stop" | "raise" (default: "stop")
+    tool_error_policy="return_error",  # "return_error" | "raise" | "skip"
+    parallel_tool_calls=True,    # Allow parallel tool execution (default: True)
+)
+```
+
+---
+
+## Transport
+
+### `Transport` protocol
+
+```python
+from lauren_ai._transport import Transport
+
+class MyTransport(Transport):
+    async def complete(self, messages, *, model, **kwargs) -> Completion: ...
+    async def complete_stream(self, messages, *, model, **kwargs) -> AsyncIterator[CompletionChunk]: ...
+    async def embed(self, texts, *, model, **kwargs) -> list[Embedding]: ...
+    async def count_tokens(self, messages, *, model) -> int: ...
+```
+
+### `AnthropicTransport`
+
+```python
+from lauren_ai._transport._anthropic import AnthropicTransport
+
+transport = AnthropicTransport(api_key="sk-ant-...", timeout=30.0, max_retries=3)
+```
+
+Supports: `complete()`, `complete_stream()`, `embed()` (via dedicated embed model), `count_tokens()`.
+
+### `MockTransport`
+
+```python
+from lauren_ai._transport._mock import MockTransport
+
+mock = MockTransport()
+mock.queue_response(completion)             # Queue a Completion
+mock.queue_tool_use("tool_name", {"k": v}) # Queue a tool_use response
+mock.queue_error(RuntimeError("oops"))     # Queue an error
+mock.reset()                               # Clear queue and call history
+
+# After run:
+print(mock.calls)        # list[dict] — each call recorded
+print(mock.call_count)   # int
+```
+
+### Core transport types
+
+```python
+from lauren_ai import Message, Completion, TokenUsage, ToolCall
+
+# Messages
+msg = Message(role="user", content="Hello!")
+msg = Message(role="assistant", content=[ContentBlock.text("Hi!")])
+
+# Tool use block
+block = ContentBlock.tool_use_block(tool_input={"city": "Paris"}, name="get_weather")
+
+# Tool result block
+block = ContentBlock.tool_result_block(tool_use_id="toolu_abc", content="22°C sunny")
+
+# Completion
+result = Completion(
+    id="comp_1",
+    model="claude-opus-4-6",
+    content="Hello!",
+    tool_calls=[],
+    stop_reason="end_turn",
+    usage=TokenUsage(input_tokens=10, output_tokens=5),
+)
+
+# ToolCall
+call = ToolCall(id="toolu_abc", name="get_weather", input={"city": "Paris"})
+```
+
+---
+
+## Tools
+
+### `@tool()` decorator
+
+```python
+from lauren_ai import tool, ToolContext, ToolResult
+
+@tool()
+async def get_weather(city: str, ctx: ToolContext | None = None) -> dict:
+    """Return current weather for a city.
+
+    Args:
+        city: The city name to look up.
+
+    Returns current temperature and conditions.
+    """
+    return {"city": city, "temperature": 22, "condition": "sunny"}
+```
+
+Rules:
+- **Must use parentheses**: `@tool()` not `@tool` (raises `DecoratorUsageError`)
+- Schema generated from PEP-3107 annotations + Google-style `Args:` docstring section
+- `ctx: ToolContext | None = None` is injected at runtime, excluded from the JSON schema
+- DO NOT use `from __future__ import annotations` in files that define `@tool()` functions (makes annotations lazy strings, breaks schema generation)
+- Optional params (with defaults) are excluded from the `required` array
+
+### `@tool()` with options
+
+```python
+@tool(
+    name="weather",                    # Override tool name (default: function name)
+    description="Get current weather", # Override description (default: from docstring)
+    requires_confirmation=True,        # Pause for human approval before execution
+    cache_ttl=300,                     # Cache results for 300 seconds
+    pre_hook=my_pre_hook,              # Called before execution
+    post_hook=my_post_hook,            # Called after successful execution
+    error_hook=my_error_hook,          # Called on exception
+)
+async def get_weather(city: str) -> dict: ...
+```
+
+### `ToolResult`
+
+```python
+from lauren_ai import ToolResult
+
+# Success
+result = ToolResult.ok("The weather is sunny.", tool_use_id="toolu_abc")
+result = ToolResult.ok({"temp": 22}, tool_use_id="toolu_abc")  # dict → JSON string
+
+# Error
+result = ToolResult.error("City not found.", tool_use_id="toolu_abc")
+
+print(result.content)   # str
+print(result.is_error)  # bool
+```
+
+### `ToolContext`
+
+```python
+from lauren_ai import ToolContext
+
+# Injected by runner — do not construct manually
+# ctx.agent_class     — The agent class running this tool
+# ctx.conversation_id — Current conversation ID
+# ctx.metadata        — Metadata dict passed to agent.run()
+# ctx.signals         — SignalBus instance
+# ctx.memory          — ShortTermMemory for this conversation
+```
+
+---
+
+## Agents
+
+### `@agent()` decorator
+
+```python
+from lauren_ai import agent
+
+@agent(
+    model="claude-opus-4-6",
+    system="You are a helpful assistant.",
+    config=AgentConfig(max_turns=20),
+    description="Answers questions",
+)
+class AssistantAgent: ...
+```
+
+### `@use_tools()` decorator
+
+```python
+from lauren_ai import use_tools
+
+@agent(model="claude-opus-4-6")
+@use_tools(get_weather, search_web, calculate)
+class PlanningAgent: ...
+```
+
+**Critical ordering**: `@agent()` is the outermost (top) decorator, `@use_tools()` is below it.
+`@use_tools()` is applied first and sets `USE_TOOLS_META`; `@agent()` reads it.
+
+### `AgentRunner`
+
+```python
+from lauren_ai._agents._runner import AgentRunner
+from lauren_ai._tools._registry import ToolRegistry
+
+registry = ToolRegistry()
+registry.register(get_weather)
+
+runner = AgentRunner(
+    transport=transport,
+    registry=registry,
+    config=llm_config,       # LLMConfig
+    signals=signal_bus,      # Optional[SignalBus]
+    cache_backend=None,      # Optional cache
+)
+
+response = await runner.run(
+    messages=[{"role": "user", "content": "What's the weather?"}],
+    agent_class=WeatherAgent,
+    agent_config=AgentConfig(max_turns=10),
+)
+
+print(response.content)     # Final text content
+print(response.stop_reason) # "end_turn" | "max_turns" | "budget_exceeded"
+print(response.usage)       # TokenUsage
+print(response.cost_usd)    # float
+print(response.turns)       # int — number of agentic turns taken
+```
+
+---
+
+## Memory
+
+### `ShortTermMemory`
+
+```python
+from lauren_ai import ShortTermMemory
+
+mem = ShortTermMemory(max_tokens=8192)
+mem.add_user("Hello!")
+mem.add_assistant(completion)        # Completion object
+mem.add_tool_result(tool_result)     # ToolResult object
+
+msgs = mem.messages()  # list[dict] — ready to pass to transport
+
+snapshot = mem.snapshot()  # Save state
+mem.restore(snapshot)      # Restore state
+mem.clear()                # Clear all messages
+```
+
+### `InMemoryConversationStore`
+
+```python
+from lauren_ai._memory._stores import InMemoryConversationStore
+
+store = InMemoryConversationStore()
+await store.save("conv-1", messages)
+loaded = await store.load("conv-1")  # [] if missing
+await store.delete("conv-1")
+```
+
+### `InMemoryVectorStore`
+
+```python
+from lauren_ai._memory._vector import InMemoryVectorStore
+
+store = InMemoryVectorStore()
+doc_id = await store.upsert("Some text content.", metadata={"tag": "docs"})
+results = await store.search("query text", k=5)
+result = await store.get(doc_id)   # MemoryResult | None
+await store.delete([doc_id])       # Takes a list
+await store.clear()
+
+# MemoryResult fields:
+# result.id       — str
+# result.content  — str
+# result.score    — float (0..1, cosine similarity)
+# result.metadata — dict
+```
+
+---
+
+## Knowledge Base
+
+```python
+from lauren_ai import KnowledgeBase, TextLoader, FixedSizeChunker, SentenceChunker
+from lauren_ai._memory._vector import InMemoryVectorStore
+
+# Build a knowledge base
+kb = KnowledgeBase(
+    store=InMemoryVectorStore(),
+    chunker=FixedSizeChunker(chunk_size=512, overlap=64),
+)
+
+# Load documents
+n = await kb.load(TextLoader("docs/faq.txt"))              # from file
+n = await kb.load(TextLoader("raw text here", is_file=False))  # from string
+
+# Search
+results = await kb.search("How do I reset my password?", top_k=5)
+
+# Use as agent tool
+tool_fn = kb.as_tool(name="search_knowledge_base", top_k=5)
+
+@agent(model="claude-opus-4-6")
+@use_tools(kb.as_tool())
+class SupportAgent: ...
+```
+
+### Chunkers
+
+| Class | Description |
+|---|---|
+| `FixedSizeChunker(chunk_size=512, overlap=64)` | Split at fixed character count |
+| `SentenceChunker(max_chunk_size=512)` | Split at sentence boundaries |
+
+---
+
+## Signals
+
+```python
+from lauren_ai import SignalBus
+from lauren_ai._signals import (
+    ModelCallStarted, ModelCallComplete,
+    ToolCallStarted, ToolCallComplete,
+    AgentTurnComplete, AgentRunComplete,
+)
+
+bus = SignalBus()
+
+@bus.on(ModelCallComplete)
+async def on_model_call(event: ModelCallComplete):
+    print(f"model={event.model} cost=${event.cost_usd:.6f}")
+    print(f"tokens={event.usage.total} stop={event.stop_reason}")
+
+@bus.on(ToolCallStarted)
+async def on_tool_start(event: ToolCallStarted):
+    print(f"calling tool: {event.tool_name}({event.input})")
+
+@bus.on(ToolCallComplete)
+async def on_tool_end(event: ToolCallComplete):
+    print(f"tool done: success={event.success}")
+
+# Remove handler
+bus.off(ModelCallComplete, on_model_call)
+
+# Emit manually (rarely needed)
+await bus.emit(ModelCallStarted(model="mock", messages_count=1))
+```
+
+### Signal fields
+
+| Signal | Fields |
+|---|---|
+| `ModelCallStarted` | `timestamp, model, agent_id, agent_class, messages_count, input_tokens_estimate` |
+| `ModelCallComplete` | `timestamp, model, agent_id, agent_class, usage, duration_ms, stop_reason, cost_usd` |
+| `ToolCallStarted` | `timestamp, tool_name, tool_use_id, input, agent_class` |
+| `ToolCallComplete` | `timestamp, tool_name, tool_use_id, success, error_message, duration_ms` |
+| `AgentTurnComplete` | `timestamp, turn, agent_class, stop_reason` |
+| `AgentRunComplete` | `timestamp, turns, agent_class, total_usage, total_cost_usd, stop_reason` |
+
+---
+
+## Modules
+
+### `LLMModule`
+
+```python
+from lauren_ai import LLMModule, LLMConfig
+
+LLMProvider = LLMModule.for_root(
+    LLMConfig(model="claude-opus-4-6"),
+    transport_override=None,   # Optional custom Transport
+)
+
+# In your Lauren app:
+@module(imports=[LLMProvider])
+class AppModule: ...
+```
+
+### `AgentModule`
+
+```python
+from lauren_ai import AgentModule
+
+AgentProvider = AgentModule.for_root(
+    agents=[WeatherAgent, SupportAgent],
+    tools=[get_weather, search_docs],
+    signals=signal_bus,
+)
+
+@module(imports=[LLMProvider, AgentProvider])
+class AppModule: ...
+```
+
+### `LLMService`
+
+Injected automatically when `LLMModule` is imported.
+
+```python
+class MyController:
+    def __init__(self, llm: LLMService) -> None:
+        self._llm = llm
+
+    async def chat(self, text: str) -> str:
+        result = await self._llm.complete(
+            [Message(role="user", content=text)]
+        )
+        return result.content
+
+    async def stream(self, text: str):
+        async for chunk in self._llm.complete_stream(
+            [Message(role="user", content=text)]
+        ):
+            yield chunk.delta
+
+    async def embed_text(self, text: str) -> list[float]:
+        embeddings = await self._llm.embed([text])
+        return embeddings[0].vector
+```
+
+---
+
+## Testing
+
+### `AgentTestClient`
+
+```python
+from lauren_ai.testing import AgentTestClient
+from lauren_ai._transport._mock import MockTransport
+
+mock = MockTransport()
+mock.queue_tool_use("get_weather", {"city": "Paris"})
+mock.queue_response(Completion(
+    id="c2", model="mock",
+    content="It's sunny in Paris!",
+    tool_calls=[], stop_reason="end_turn",
+    usage=TokenUsage(input_tokens=50, output_tokens=10),
+))
+
+client = AgentTestClient(WeatherAgent, mock)
+
+# Sync run
+response = client.run("What's the weather in Paris?")
+assert "sunny" in response.content
+assert len(client.calls) == 2  # Two model calls: tool + final
+
+# Async run
+response = await client.run_async("Weather?")
+
+# Reset state between tests
+client.reset()
+assert client.calls == []
+```
+
+---
+
+## Interceptors
+
+```python
+from lauren_ai._interceptors import ai_metrics_interceptor, token_usage_response_interceptor
+
+@module(imports=[LLMProvider])
+@use_interceptors(ai_metrics_interceptor(), token_usage_response_interceptor())
+class AppModule: ...
+```
+
+- `ai_metrics_interceptor()` — reads `request.state.ai_token_usage` and emits metrics
+- `token_usage_response_interceptor()` — adds `x-token-usage` and `x-ai-cost-usd` response headers
+
+---
+
+## Guards
+
+```python
+from lauren_ai._guards import ai_rate_limit_guard, ai_budget_guard
+
+@use_guards(ai_rate_limit_guard(rpm=60), ai_budget_guard(budget_usd=10.0))
+@controller("/api")
+class ChatController: ...
+```
+
+---
+
+## Workflows
+
+```python
+from lauren_ai._workflows import Workflow, Step, Parallel, Condition, Loop
+
+async def summarise(ctx):
+    text = ctx["text"]
+    result = await llm.complete([Message(role="user", content=f"Summarise: {text}")])
+    return {"summary": result.content}
+
+async def translate(ctx):
+    ...
+
+pipeline = (
+    Workflow()
+    .then(Step("summarise", summarise))
+    .then(Parallel(
+        Step("translate_es", translate),
+        Step("translate_fr", translate),
+    ))
+)
+
+result = await pipeline.run({"text": long_document})
+print(result.outputs["translate_es"])
+```
+
+---
+
+## Evaluation
+
+```python
+from lauren_ai._eval import AccuracyEval, EvalDataset, EvalExample
+
+dataset = EvalDataset(examples=[
+    EvalExample(input="What is 2+2?", expected_output="4"),
+    EvalExample(input="Capital of France?", expected_output="Paris"),
+])
+
+eval_suite = AccuracyEval(agent=MyAgent, dataset=dataset)
+report = await eval_suite.run()
+
+print(f"Pass rate: {report.pass_rate:.1%}")  # e.g. "100.0%"
+report.assert_pass_rate(0.9)  # Raises AssertionError if below 90%
+```
+
+---
+
+## Built-in Skills
+
+```python
+from lauren_ai._skills import WebSearchTool, HttpFetchTool, CodeExecutionTool
+
+@agent(model="claude-opus-4-6")
+@use_tools(WebSearchTool, HttpFetchTool)
+class ResearchAgent: ...
+```
+
+| Tool | Description |
+|---|---|
+| `WebSearchTool` | Search the web via DuckDuckGo or Google (configurable) |
+| `HttpFetchTool` | Make HTTP requests and return response body |
+| `CodeExecutionTool` | Execute Python code in a sandbox |
+| `DelegateToAgentTool` | Delegate a task to another agent |
+
+---
+
+## Exception hierarchy
+
+```
+LaurenAIError
+├── TransportError
+│   ├── TransientTransportError  (retriable: 429, 503, etc.)
+│   └── AuthTransportError       (401, 403)
+├── AgentMaxTurnsError
+├── AgentBudgetExceededError
+├── AgentConfigError
+├── DecoratorUsageError
+├── ToolExecutionError
+├── ToolConfigError
+├── ToolSchemaError
+├── KnowledgeLoadError
+├── WorkflowError
+├── EmptyQueueError
+└── DelegateToAgent              (control-flow, not error)
+```
+
+---
+
+## Links
+
+- Documentation: https://docs.lauren-framework.dev/lauren-ai/
+- GitHub: https://github.com/lauren-framework/lauren-ai
+- PyPI: https://pypi.org/project/lauren-ai/
+- Changelog: https://github.com/lauren-framework/lauren-ai/blob/main/CHANGELOG.md
+
+---
+
+## New Features (Sections 32–41)
+
+### Section 32 — Prompt Templates & Chains
+
+`PromptTemplate`, `ChatPromptTemplate`, and `FewShotPromptTemplate` provide
+reusable, parameterised prompt construction. `Chain` (and the `|` pipe operator
+on any `Runnable`) wires templates, LLMs, and parsers into a single awaitable
+pipeline.
+
+```python
+from lauren_ai import PromptTemplate, ChatPromptTemplate, FewShotPromptTemplate
+from lauren_ai import FewShotExample, Chain, StrOutputParser
+
+# String template
+tmpl = PromptTemplate("Translate the following to French: {text}")
+
+# Chat template
+chat = ChatPromptTemplate([
+    ("system", "You are a professional translator."),
+    ("user", "{text}"),
+])
+
+# Few-shot template
+few_shot = FewShotPromptTemplate(
+    examples=[
+        FewShotExample(input="Good morning", output="Bonjour"),
+        FewShotExample(input="Thank you", output="Merci"),
+    ],
+    template="Translate: {text}",
+)
+
+# Pipe composition — each element must implement Runnable
+chain: Chain = tmpl | llm | StrOutputParser()
+result: str = await chain.invoke({"text": "Hello world"})
+```
+
+**Key invariant**: `|` returns a new `Chain`; the operands are never mutated.
+Import: `from lauren_ai import PromptTemplate, ChatPromptTemplate, Chain`
+
+---
+
+### Section 33 — Output Parsers
+
+Output parsers transform a raw `Completion` (or string) from the LLM into a
+well-typed Python value. All parsers implement the `Runnable` interface and
+compose naturally with `Chain`.
+
+```python
+from lauren_ai import (
+    StrOutputParser,
+    JSONOutputParser,
+    RegexParser,
+    CommaSeparatedListParser,
+    MarkdownCodeBlockParser,
+    PydanticOutputParser,
+    RetryOutputParser,
+)
+from pydantic import BaseModel
+
+class City(BaseModel):
+    name: str
+    country: str
+
+# Parse LLM output as a Pydantic model
+parser = PydanticOutputParser(City)
+chain = ChatPromptTemplate([("user", "Name a capital city as JSON.")]) | llm | parser
+city: City = await chain.invoke({})
+
+# Retry up to 3 times if parsing fails
+safe_parser = RetryOutputParser(parser, max_retries=3, llm=llm)
+
+# Comma-separated list
+list_parser = CommaSeparatedListParser()
+items: list[str] = await list_parser.parse("apples, bananas, cherries")
+
+# Extract first fenced code block
+code_parser = MarkdownCodeBlockParser(language="python")
+code: str = await code_parser.parse(llm_output)
+```
+
+**Key invariant**: Parsers raise `OutputParserError` (a `LaurenAIError` subclass)
+on failure; `RetryOutputParser` wraps this with automatic re-prompting.
+Import: `from lauren_ai import StrOutputParser, JSONOutputParser, PydanticOutputParser`
+
+---
+
+### Section 34 — Agent Teams
+
+The `@team()` decorator declares a multi-agent team. In `"coordinator"` mode one
+agent routes subtasks to workers; in `"collaborate"` mode all agents contribute
+to a shared workspace in round-robin turns up to `max_rounds`.
+
+```python
+from lauren_ai import team, TeamRunner, TeamResult, TeamMemory
+from lauren_ai._teams import (
+    TeamWorkerStarted, TeamWorkerFinished,
+    TeamCoordinatorDecision, TeamFinalAnswer,
+)
+
+@agent(model="claude-opus-4-6", system="You research topics.")
+class ResearchAgent: ...
+
+@agent(model="claude-opus-4-6", system="You write clear summaries.")
+class WriterAgent: ...
+
+@team(name="content-pipeline", mode="coordinator", max_rounds=5, model="claude-opus-4-6")
+class ContentTeam:
+    researcher: ResearchAgent
+    writer: WriterAgent
+
+# Run the team
+runner = TeamRunner(ContentTeam, llm=transport, agent_runner=agent_runner)
+result: TeamResult = await runner.run("Write a post about async Python.")
+
+print(result.final_answer)     # str — the team's final output
+print(result.rounds_used)      # int
+print(result.worker_outputs)   # dict[str, str] — per-agent contributions
+
+# Stream team events
+async for event in runner.stream("Write a post about async Python."):
+    if isinstance(event, TeamCoordinatorDecision):
+        print(f"Coordinator chose: {event.worker_name}")
+    elif isinstance(event, TeamFinalAnswer):
+        print(f"Final: {event.content}")
+```
+
+**Key invariant**: `@team()` must be called with parentheses; bare `@team` raises
+`DecoratorUsageError`. Workers are resolved from the DI container.
+Import: `from lauren_ai import team, TeamRunner, TeamResult`
+
+---
+
+### Section 35 — Tracing & Observability
+
+The tracing subsystem captures structured spans for LLM calls, tool executions,
+and arbitrary async functions. Exporters receive completed `Trace` objects.
+
+```python
+from lauren_ai import traced, Span, Trace, TraceStore, TracingConfig
+from lauren_ai import InMemoryTraceExporter, ConsoleTraceExporter, FileTraceExporter
+from lauren_ai._tracing import SpanKind, TraceExporter
+
+# Configure tracing
+config = TracingConfig(service_name="my-app", sample_rate=1.0)
+exporter = InMemoryTraceExporter()
+store = TraceStore(config=config, exporters=[exporter])
+
+# Decorate an async function
+@traced(name="summarise", kind=SpanKind.AGENT)
+async def summarise(text: str) -> str:
+    result = await llm.complete([Message(role="user", content=f"Summarise: {text}")])
+    return result.content
+
+# After execution:
+traces: list[Trace] = exporter.traces
+span: Span = traces[0].root_span
+print(span.name, span.duration_ms, span.status)
+
+# Custom exporter — implement the protocol
+class MyExporter(TraceExporter):
+    async def export(self, trace: Trace) -> None: ...
+```
+
+**Key invariant**: `@traced()` must be called with parentheses. Spans are
+exported asynchronously; the decorated function's return value is unchanged.
+Import: `from lauren_ai import traced, Span, Trace, TraceStore, InMemoryTraceExporter`
+
+---
+
+### Section 36 — Persistent User Memory
+
+`@remember()` automatically extracts facts from conversations and injects
+relevant memories into the system prompt on the next turn. The underlying
+storage is swappable via the `UserMemoryStore` protocol.
+
+```python
+from lauren_ai import remember, MemoryFact, InMemoryUserMemoryStore
+
+store = InMemoryUserMemoryStore()
+
+@agent(model="claude-opus-4-6", system="You are a personal assistant.")
+@remember(store=store, extract=True, inject=True, top_k=5)
+class PersonalAgent: ...
+
+# MemoryFact — stored facts
+fact = MemoryFact(
+    user_id="user-42",
+    content="The user prefers concise answers.",
+    confidence=0.9,
+)
+
+# Implement custom storage
+from lauren_ai._memory import UserMemoryStore
+
+class RedisUserMemoryStore(UserMemoryStore):
+    async def save(self, user_id: str, fact: MemoryFact) -> None: ...
+    async def search(self, user_id: str, query: str, top_k: int) -> list[MemoryFact]: ...
+    async def delete(self, user_id: str, fact_id: str) -> None: ...
+```
+
+**Key invariant**: `@remember()` must be placed below `@agent()` (applied first).
+`extract=True` adds a post-run hook; `inject=True` prepends facts before each run.
+Import: `from lauren_ai import remember, MemoryFact, InMemoryUserMemoryStore`
+
+---
+
+### Section 37 — Structured LLM Outputs
+
+`StructuredLLM[T]` wraps any transport and forces the model to return a
+Pydantic model on every completion. Obtained via `llm.with_structured_output()`.
+
+```python
+from lauren_ai import StructuredLLM
+from pydantic import BaseModel
+
+class SentimentResult(BaseModel):
+    sentiment: str       # "positive" | "negative" | "neutral"
+    confidence: float    # 0.0 – 1.0
+    summary: str
+
+# Obtain a typed wrapper from an LLMService instance
+structured: StructuredLLM[SentimentResult] = llm_service.with_structured_output(SentimentResult)
+
+result: SentimentResult = await structured.complete(
+    [Message(role="user", content="This product is amazing!")]
+)
+print(result.sentiment, result.confidence)
+
+# Also works in a Chain
+chain = prompt | structured
+result = await chain.invoke({"review": "Great quality."})
+```
+
+**Key invariant**: `StructuredLLM` uses tool-calling under the hood; the model
+must support function / tool calling. Validation errors raise `OutputParserError`.
+Import: `from lauren_ai import StructuredLLM`
+
+---
+
+### Section 38 — Multimodal Inputs
+
+`ImageContent`, `AudioContent`, and `DocumentContent` represent non-text parts
+of a message. `Message.from_multimodal()` constructs a properly formed message
+from a mixed list of strings and `ContentPart` instances.
+
+```python
+from lauren_ai import ImageContent, AudioContent, DocumentContent, ContentPart, Message
+
+# Image from URL
+img = ImageContent(url="https://example.com/chart.png")
+
+# Image from bytes
+img_bytes = ImageContent(data=raw_bytes, mime_type="image/png")
+
+# Audio
+audio = AudioContent(data=audio_bytes, mime_type="audio/mp3")
+
+# PDF / document
+doc = DocumentContent(data=pdf_bytes, mime_type="application/pdf")
+
+# Build a mixed message
+msg = Message.from_multimodal("user", [
+    "Please describe the chart and summarise the document:",
+    img,
+    doc,
+])
+
+# Pass directly to LLMService
+result = await llm_service.complete([msg])
+```
+
+**Key invariant**: Only transports that advertise multimodal support will accept
+`ImageContent`/`AudioContent`/`DocumentContent`; unsupported transports raise
+`TransportError` at call time, not at startup.
+Import: `from lauren_ai import ImageContent, AudioContent, DocumentContent`
+
+---
+
+### Section 39 — Semantic Router
+
+`SemanticRouter` classifies free-text input to a named route using embedding
+similarity. Call `compile()` once at startup to embed examples, then `route()`
+per request.
+
+```python
+from lauren_ai import SemanticRouter, Route, RouteMatch
+
+async def embed_fn(texts: list[str]) -> list[list[float]]:
+    embeddings = await embed_service.embed(texts)
+    return [e.vector for e in embeddings]
+
+router = SemanticRouter(
+    routes=[
+        Route(name="weather", examples=["What's the weather?", "Is it raining today?"]),
+        Route(name="booking", examples=["Book a flight", "Reserve a hotel room"]),
+    ],
+    embed_fn=embed_fn,
+    min_confidence=0.7,
+)
+
+await router.compile()  # Must be called before route()
+
+match: RouteMatch = await router.route("Will it snow tomorrow?")
+print(match.route)       # "weather"
+print(match.confidence)  # float, e.g. 0.91
+print(match.matched)     # bool — False if below min_confidence
+
+# Integrate with Lauren routing
+@get("/chat")
+async def chat(q: Query[str], router: SemanticRouter) -> dict:
+    match = await router.route(q)
+    return {"route": match.route, "confidence": match.confidence}
+```
+
+**Key invariant**: `compile()` must be awaited before any `route()` call; calling
+`route()` before `compile()` raises `RouterNotCompiledError`.
+Import: `from lauren_ai import SemanticRouter, Route, RouteMatch`
+
+---
+
+### Section 40 — Cost & Rate Tracking
+
+`CostTracker` accumulates token spend across requests. `TokenBudget` caps
+per-conversation token usage. `RateLimiter` enforces a requests-per-minute ceiling.
+
+```python
+from lauren_ai import (
+    CostTracker, TokenBudget, RateLimiter,
+    PricingTable, ModelPricing, CostEstimate,
+    default_pricing_table,
+)
+from lauren_ai._cost import BudgetExceededError, RateLimitExhaustedError
+
+# Pricing table
+table: PricingTable = default_pricing_table()
+custom_table = PricingTable(models={
+    "claude-opus-4-6": ModelPricing(input_per_1k=0.015, output_per_1k=0.075),
+})
+
+# Cost tracker (injectable singleton)
+tracker = CostTracker(pricing=table)
+
+async with tracker.session() as session:
+    result = await agent_runner.run(messages, agent_class=MyAgent)
+    estimate: CostEstimate = session.estimate   # cost so far
+
+report = await tracker.report()  # aggregated across all sessions
+print(report.total_usd, report.total_tokens)
+
+# Token budget per conversation
+budget = TokenBudget(max_tokens_per_conversation=100_000)
+# Raises BudgetExceededError when the limit is hit
+
+# Rate limiter
+limiter = RateLimiter(requests_per_minute=60)
+# Raises RateLimitExhaustedError when the ceiling is breached
+```
+
+**Key invariant**: `CostTracker` is safe to inject as a `Scope.SINGLETON`; its
+internal counters are protected by an asyncio lock.
+Import: `from lauren_ai import CostTracker, TokenBudget, RateLimiter, default_pricing_table`
+
+---
+
+### Section 41 — Guardrails & Content Safety
+
+`@guardrail()` attaches input and/or output filters to an agent. Each filter
+returns a `GuardrailDecision` — the runner acts on `action` before calling the
+model (input) or returning the response (output).
+
+```python
+from lauren_ai import guardrail, TopicFilter, PIIRedactor, LengthFilter
+from lauren_ai._guardrails import (
+    PromptInjectionFilter,
+    LLMGuardrail,
+    GuardrailDecision,
+)
+
+@agent(model="claude-opus-4-6", system="Customer support assistant.")
+@guardrail(
+    input=[
+        TopicFilter(allowed_topics=["billing", "support", "account"]),
+        PIIRedactor(entities=["EMAIL", "PHONE", "SSN"]),
+        PromptInjectionFilter(),
+    ],
+    output=[
+        LengthFilter(max_chars=500),
+    ],
+)
+class SupportAgent: ...
+
+# LLMGuardrail — use another LLM to evaluate safety
+llm_guard = LLMGuardrail(
+    llm=transport,
+    prompt="Does the following text contain harmful content? Reply YES or NO.\n\n{content}",
+    block_if="YES",
+)
+
+# GuardrailDecision
+decision = GuardrailDecision(
+    action="modify",                          # "pass" | "block" | "modify"
+    modified_content="[REDACTED]",            # Used when action == "modify"
+    violation="PII detected: email address",  # Human-readable reason
+)
+```
+
+**Key invariant**: `@guardrail()` must be called with parentheses; bare `@guardrail`
+raises `DecoratorUsageError`. Input guardrails run before the model call; output
+guardrails run after. A `"block"` decision causes the runner to return a
+`GuardrailBlockedError` rather than calling the model or surfacing the response.
+Import: `from lauren_ai import guardrail, TopicFilter, PIIRedactor, LengthFilter`

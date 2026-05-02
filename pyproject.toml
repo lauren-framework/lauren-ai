@@ -1,0 +1,126 @@
+[build-system]
+requires = ["setuptools>=72", "setuptools-scm>=8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lauren-ai"
+dynamic = ["version"]
+description = "First-party AI/LLM companion to the Lauren web framework"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "Lauren Contributors" }]
+keywords = ["llm", "ai", "agents", "framework", "lauren"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "lauren>=1.0",
+    "httpx>=0.27",
+    "anyio>=4.0",
+    "pydantic>=2.7",
+    "typing-extensions>=4.11",
+]
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.35"]
+openai    = ["openai>=1.35"]
+ollama    = []                              # pure httpx, no extra dep
+litellm   = ["litellm>=1.40"]
+pgvector  = ["asyncpg>=0.29", "pgvector>=0.3"]
+chroma    = ["chromadb>=0.5"]
+qdrant    = ["qdrant-client>=1.9"]
+redis     = ["redis[hiredis]>=5.0"]
+pypdf     = ["pypdf>=4.0"]
+all       = [
+    "lauren-ai[anthropic,openai,litellm,pgvector,chroma,qdrant,redis,pypdf]",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "pytest-benchmark>=4.0",
+    "anyio[trio]>=4.0",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "nox>=2024.4",
+    "prek>=0.1",
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "pymdown-extensions>=10.7",
+]
+
+[project.urls]
+Homepage   = "https://github.com/lauren-framework/lauren-ai"
+Repository = "https://github.com/lauren-framework/lauren-ai"
+
+[tool.setuptools_scm]
+fallback_version = "0.0.0+unknown"
+version_scheme = "post-release"
+local_scheme = "dirty-tag"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv.sources]
+lauren = { path = "../lauren-framework", editable = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ANN"]
+ignore = [
+    "ANN101", "ANN102", "ANN401",   # self/cls/Any annotations
+    "B008",                          # function calls in default args (common in DI)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "S101"]
+"noxfile.py" = ["ANN"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+addopts = "-m 'not benchmark and not eval'"
+markers = [
+    "benchmark: marks tests as benchmarks (excluded from default run)",
+    "eval: marks evaluation tests (excluded from default run; may require API keys)",
+    "integration: marks integration tests that require external services",
+]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["src/lauren_ai"]
+omit = [
+    "tests/*",
+    # Provider implementations require live API credentials
+    "src/lauren_ai/_transport/_anthropic.py",
+    "src/lauren_ai/_transport/_openai.py",
+    "src/lauren_ai/_transport/_ollama.py",
+    # Skills require external services (web search, HTTP)
+    "src/lauren_ai/_skills/__init__.py",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+
+[dependency-groups]
+dev = [
+    "nox>=2026.4.10",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+]
