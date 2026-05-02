@@ -436,13 +436,32 @@ class AgentModule:
     :class:`~lauren_ai._tools._registry.ToolRegistry`, and all registered agent
     class instances.
 
-    Usage::
+    The module wires :class:`AgentRunner` via ``use_factory``, injecting the
+    ``Transport`` and ``LLMConfig`` tokens from the Lauren DI container.  Those
+    tokens are provided by the ``@module`` returned by
+    :meth:`LLMModule.for_root`.  Because Lauren enforces NestJS-style module
+    encapsulation, the generated agent module can only *see* tokens that are
+    **exported by a module it explicitly imports**.  Pass the ``LLMModule``
+    result via the ``imports`` parameter so the ``Transport`` + ``LLMConfig``
+    tokens are visible inside the generated module and the ``use_factory``
+    resolves correctly::
+
+        LLMProvider = LLMModule.for_root(LLMConfig.for_anthropic(model="claude-opus-4-6"))
 
         AIAgentModule = AgentModule.for_root(
             agents=[ResearchAgent, SummarizerAgent],
             tools=[WebSearchTool, CodeExecutionTool],
+            imports=LLMProvider,        # ← required so Transport is visible
             config=AgentConfig(max_turns=5, max_cost_usd=0.50),
         )
+
+        @module(imports=[LLMProvider, AIAgentModule])
+        class AppModule: ...
+
+    Without ``imports=LLMProvider`` the generated module has an empty
+    ``imports`` list, so ``Transport`` and ``LLMConfig`` are not in its visible
+    set and the ``use_factory`` injection raises ``MissingProviderError`` at
+    startup.
     """
 
     @classmethod
@@ -451,6 +470,8 @@ class AgentModule:
         *,
         agents: list[type],
         tools: list[Any] | None = None,
+        imports: Any | None = None,
+        signals: Any | None = None,
         memory: Any | None = None,
         conversation_store: Any | None = None,
         config: AgentConfig | None = None,
@@ -464,6 +485,19 @@ class AgentModule:
         :param tools: Shared tools available to all agents (supplementing
             per-agent ``@use_tools()`` registrations).
         :type tools: list[Any] | None
+        :param imports: A single ``@module``-decorated class **or** a list of
+            them to import into the generated agent module.  Pass the result of
+            :meth:`LLMModule.for_root` here so ``Transport`` and ``LLMConfig``
+            are visible inside the generated module and the ``use_factory`` for
+            :class:`~lauren_ai._agents._runner.AgentRunner` can inject them.
+            Without this the two modules are siblings in the application module
+            graph, and the generated agent module cannot see the LLM module's
+            exports.
+        :type imports: type | list[type] | None
+        :param signals: Optional :class:`~lauren_ai._signals.SignalBus` to wire
+            into the :class:`~lauren_ai._agents._runner.AgentRunner` so it emits
+            ``ModelCallComplete`` / ``AgentRunComplete`` events.
+        :type signals: Any | None
         :param memory: Long-term memory store instance.
         :type memory: Any | None
         :param conversation_store: Conversation history store instance.
@@ -519,6 +553,7 @@ class AgentModule:
                 _safe_register(tool_item, f"tool for {agent_cls.__name__!r}")
 
         _captured_tool_cache = tool_cache
+        _captured_signals = signals
 
         # Use use_value for the registry (already built)
         _registry_provider = use_value(provide=ToolRegistry, value=registry)
@@ -533,12 +568,15 @@ class AgentModule:
             exports.append(agent_cls)
 
         # AgentRunner: resolve Transport and LLMConfig from the DI graph.
-        # LLMModule (imported by the app module) must provide both.
+        #
+        # Both tokens are provided (and exported) by the @module that
+        # LLMModule.for_root() generates.  For them to be visible inside
+        # *this* generated module the caller must pass that LLM module via
+        # the ``imports`` parameter; without it the two modules are siblings
+        # in the application graph, and this module's use_factory cannot see
+        # the sibling's exports — a MissingProviderError at startup.
         try:
             from lauren_ai._transport import Transport as _Transport  # noqa: PLC0415
-
-            _captured_registry = registry
-            _captured_tc = _captured_tool_cache
 
             _runner_provider = use_factory(
                 provide=AgentRunner,
@@ -546,8 +584,8 @@ class AgentModule:
                     transport=transport,
                     registry=reg,
                     config=cfg,
-                    signals=None,
-                    cache_backend=_captured_tc,
+                    signals=_captured_signals,
+                    cache_backend=_captured_tool_cache,
                 ),
                 inject=[_Transport, ToolRegistry, LLMConfig],
                 scope=Scope.SINGLETON,
@@ -562,7 +600,15 @@ class AgentModule:
                 exc,
             )
 
-        @module(providers=providers, exports=exports)
+        # Normalise the imports argument: None → [], single class → [cls], list → list.
+        if imports is None:
+            _imports: list[Any] = []
+        elif isinstance(imports, (list, tuple)):
+            _imports = list(imports)
+        else:
+            _imports = [imports]
+
+        @module(imports=_imports, providers=providers, exports=exports)
         class _AgentModule:
             """Auto-generated agent provider module."""
 
