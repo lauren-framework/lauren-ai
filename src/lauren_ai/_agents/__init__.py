@@ -298,12 +298,7 @@ def agent(
     """
     # Detect bare usage: @agent instead of @agent()
     if args and callable(args[0]):
-        try:
-            from lauren_ai._exceptions import DecoratorUsageError  # noqa: PLC0415
-        except ImportError:
-
-            class DecoratorUsageError(Exception):  # type: ignore[no-redef]
-                pass
+        from lauren_ai._exceptions import DecoratorUsageError  # noqa: PLC0415
 
         raise DecoratorUsageError(
             "@agent must be used with parentheses: @agent()",
@@ -343,12 +338,9 @@ def agent(
         # Auto-apply @injectable(scope=Scope.SINGLETON) unless already applied.
         _INJECTABLE_META = "__lauren_injectable__"
         if _INJECTABLE_META not in cls.__dict__:
-            try:
-                from lauren import Scope, injectable  # type: ignore[import]  # noqa: PLC0415
+            from lauren import Scope, injectable  # noqa: PLC0415
 
-                cls = injectable(scope=Scope.SINGLETON)(cls)
-            except ImportError:
-                pass  # lauren not available; skip DI registration
+            cls = injectable(scope=Scope.SINGLETON)(cls)
 
         return cls  # type: ignore[return-value]
 

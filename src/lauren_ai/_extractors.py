@@ -26,16 +26,11 @@ Usage::
     ) -> dict:
         response = await agent.run(body.query)
         return {"answer": response.content, "turns": response.turns}
-
-If the ``lauren`` package is not importable (e.g. standalone usage), all four
-markers fall back to lightweight stubs that document the intended interface but
-cannot integrate with the framework's extraction pipeline.
 """
 
 from __future__ import annotations
 
 __all__ = [
-    "LAUREN_EXTRACTORS_AVAILABLE",
     "Agent",
     "Completion",
     "Embed",
@@ -50,138 +45,74 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-# ---------------------------------------------------------------------------
-# Try to import from lauren; fall back to stubs when unavailable
-# ---------------------------------------------------------------------------
-
-try:
-    from lauren import Scope, injectable  # type: ignore[import]
-    from lauren.extractors import Extraction, ExtractionMarker  # type: ignore[import]
-    from lauren.types import ExecutionContext  # type: ignore[import]
-
-    LAUREN_EXTRACTORS_AVAILABLE = True
-except ImportError:
-    LAUREN_EXTRACTORS_AVAILABLE = False
-
-    class ExtractionMarker:  # type: ignore[no-redef]
-        """Minimal stub when ``lauren`` is not installed."""
-
-        source: str = "unknown"
-
-        def __class_getitem__(cls, item: Any) -> Any:
-            return cls
-
-    class Extraction:  # type: ignore[no-redef]
-        """Minimal stub when ``lauren`` is not installed."""
-
-        inner_type: type = object
-        name: str = ""
-
-    class ExecutionContext:  # type: ignore[no-redef]
-        """Minimal stub when ``lauren`` is not installed."""
-
-        request: Any = None
-        metadata: dict[str, Any] = {}
-
-        def get_metadata(self, key: str, default: Any = None) -> Any:
-            return self.metadata.get(key, default)
-
-    class Scope:  # type: ignore[no-redef]
-        SINGLETON = "singleton"
-
-    def injectable(*args: Any, **kwargs: Any) -> Any:  # type: ignore[no-redef]
-        def decorator(cls: Any) -> Any:
-            return cls
-        return decorator
-
+from lauren import Scope, injectable
+from lauren.extractors import ExtractionMarker
 
 # ---------------------------------------------------------------------------
 # Agent[T] extractor
 # ---------------------------------------------------------------------------
 
 
-if LAUREN_EXTRACTORS_AVAILABLE:
-    @injectable(scope=Scope.SINGLETON)  # type: ignore[misc]
-    class Agent(ExtractionMarker):  # type: ignore[misc]
-        """Resolve an ``@agent()``-decorated class instance from the DI container.
+@injectable(scope=Scope.SINGLETON)
+class Agent(ExtractionMarker):
+    """Resolve an ``@agent()``-decorated class instance from the DI container.
 
-        Use as a handler parameter annotation to inject a resolved agent
-        instance that can immediately be called with ``agent.run(message)``::
+    Use as a handler parameter annotation to inject a resolved agent
+    instance that can immediately be called with ``agent.run(message)``::
 
-            @post("/research")
-            async def research(
-                self,
-                body: Json[ResearchRequest],
-                agent: Agent[ResearchAgent],
-            ) -> dict:
-                response = await agent.run(body.query)
-                return {"answer": response.content}
-
-        :param runner: The :class:`~lauren_ai._agents._runner.AgentRunner`
-            singleton (injected by the DI container).
-        :type runner: Any
-        :param container: The DI container used to resolve the agent class.
-        :type container: Any
-        """
-
-        source: str = "lauren_ai.agent"
-
-        def __init__(self, runner: Any, container: Any) -> None:
-            self._runner = runner
-            self._container = container
-
-        async def extract(
+        @post("/research")
+        async def research(
             self,
-            execution_context: Any,
-            extraction: Any,
-        ) -> Any:
-            """Resolve the agent class from the DI container.
+            body: Json[ResearchRequest],
+            agent: Agent[ResearchAgent],
+        ) -> dict:
+            response = await agent.run(body.query)
+            return {"answer": response.content}
 
-            :param execution_context: The current request execution context.
-            :type execution_context: ExecutionContext
-            :param extraction: The extraction descriptor (provides ``inner_type``
-                which is the agent class ``T`` in ``Agent[T]``).
-            :type extraction: Extraction
-            :return: A resolved instance of the ``@agent()``-decorated class.
-            :rtype: Any
-            :raises MissingProviderError: When the agent class is not registered
-                in the DI container.
-            """
-            agent_cls = extraction.inner_type
-            return await self._container.resolve(agent_cls)
+    :param runner: The :class:`~lauren_ai._agents._runner.AgentRunner`
+        singleton (injected by the DI container).
+    :type runner: Any
+    :param container: The DI container used to resolve the agent class.
+    :type container: Any
+    """
 
-        def __class_getitem__(cls, item: Any) -> Any:
-            """Support ``Agent[MyAgent]`` subscript syntax.
+    source: str = "lauren_ai.agent"
 
-            :param item: The agent class to resolve.
-            :type item: Any
-            :return: An ``Annotated[item, Agent]`` type hint.
-            :rtype: Any
-            """
-            try:
-                from typing import Annotated  # noqa: PLC0415
+    def __init__(self, runner: Any, container: Any) -> None:
+        self._runner = runner
+        self._container = container
 
-                return Annotated[item, cls]  # type: ignore[valid-type]
-            except ImportError:
-                return cls
+    async def extract(
+        self,
+        execution_context: Any,
+        extraction: Any,
+    ) -> Any:
+        """Resolve the agent class from the DI container.
 
-else:
-    class Agent(ExtractionMarker):  # type: ignore[no-redef,misc]
-        """Stub ``Agent`` extractor (lauren not available).
-
-        See :class:`lauren_ai._extractors.Agent` for full documentation.
+        :param execution_context: The current request execution context.
+        :type execution_context: ExecutionContext
+        :param extraction: The extraction descriptor (provides ``inner_type``
+            which is the agent class ``T`` in ``Agent[T]``).
+        :type extraction: Extraction
+        :return: A resolved instance of the ``@agent()``-decorated class.
+        :rtype: Any
+        :raises MissingProviderError: When the agent class is not registered
+            in the DI container.
         """
+        agent_cls = extraction.inner_type
+        return await self._container.resolve(agent_cls)
 
-        source: str = "lauren_ai.agent"
+    def __class_getitem__(cls, item: Any) -> Any:
+        """Support ``Agent[MyAgent]`` subscript syntax.
 
-        def __init__(self, runner: Any = None, container: Any = None) -> None:
-            self._runner = runner
-            self._container = container
+        :param item: The agent class to resolve.
+        :type item: Any
+        :return: An ``Annotated[item, Agent]`` type hint.
+        :rtype: Any
+        """
+        from typing import Annotated  # noqa: PLC0415
 
-        async def extract(self, execution_context: Any, extraction: Any) -> Any:
-            raise RuntimeError(
-                "Agent extractor is not available: lauren package is not installed."
-            )
+        return Annotated[item, cls]  # type: ignore[valid-type]
 
 
 # ---------------------------------------------------------------------------
@@ -189,187 +120,165 @@ else:
 # ---------------------------------------------------------------------------
 
 
-if LAUREN_EXTRACTORS_AVAILABLE:
-    @injectable(scope=Scope.SINGLETON)  # type: ignore[misc]
-    class Completion(ExtractionMarker):  # type: ignore[misc]
-        """Run a single structured LLM completion and return a typed ``T`` instance.
+@injectable(scope=Scope.SINGLETON)
+class Completion(ExtractionMarker):
+    """Run a single structured LLM completion and return a typed ``T`` instance.
 
-        The prompt is read (in priority order) from:
+    The prompt is read (in priority order) from:
 
-        1. ``execution_context.get_metadata("completion_prompt")`` — a string
-           prompt set by middleware or ``@set_metadata``.
-        2. ``execution_context.get_metadata("completion_prompt_field")`` — a
-           field name; the value is read from the parsed request body at that
-           field.
-        3. Fallback: ``repr`` of ``request.body`` (or an empty string).
+    1. ``execution_context.get_metadata("completion_prompt")`` — a string
+       prompt set by middleware or ``@set_metadata``.
+    2. ``execution_context.get_metadata("completion_prompt_field")`` — a
+       field name; the value is read from the parsed request body at that
+       field.
+    3. Fallback: ``repr`` of ``request.body`` (or an empty string).
 
-        Example::
+    Example::
 
-            @post("/classify")
-            async def classify(
-                self,
-                body: Json[ClassifyRequest],
-                result: Completion[SentimentLabel],
-            ) -> SentimentLabel:
-                ...
-
-        :param transport: The LLM transport.
-        :type transport: Any
-        :param config: The LLM configuration.
-        :type config: LLMConfig
-        """
-
-        source: str = "lauren_ai.completion"
-
-        def __init__(self, transport: Any, config: Any) -> None:
-            self._transport = transport
-            self._config = config
-
-        async def extract(
+        @post("/classify")
+        async def classify(
             self,
-            execution_context: Any,
-            extraction: Any,
-        ) -> Any:
-            """Run one LLM completion call and return a validated ``T`` instance.
+            body: Json[ClassifyRequest],
+            result: Completion[SentimentLabel],
+        ) -> SentimentLabel:
+            ...
 
-            :param execution_context: The current request execution context.
-            :type execution_context: ExecutionContext
-            :param extraction: The extraction descriptor; ``inner_type`` is the
-                target Pydantic model or type ``T``.
-            :type extraction: Extraction
-            :return: A validated instance of ``T``.
-            :rtype: Any
-            :raises TransportError: When the LLM provider returns an error.
-            """
-            from lauren_ai._transport import Message  # noqa: PLC0415
+    :param transport: The LLM transport.
+    :type transport: Any
+    :param config: The LLM configuration.
+    :type config: LLMConfig
+    """
 
-            prompt = self._resolve_prompt(execution_context)
-            inner_type = extraction.inner_type
+    source: str = "lauren_ai.completion"
 
-            # Build messages
-            messages = [Message(role="user", content=prompt)]
+    def __init__(self, transport: Any, config: Any) -> None:
+        self._transport = transport
+        self._config = config
 
-            # Try structured output via tool use
-            try:
-                from pydantic import TypeAdapter  # noqa: PLC0415
+    async def extract(
+        self,
+        execution_context: Any,
+        extraction: Any,
+    ) -> Any:
+        """Run one LLM completion call and return a validated ``T`` instance.
 
-                adapter = TypeAdapter(inner_type)
-                schema = adapter.json_schema()
-                structured_tool: list[Any] = [
-                    {
-                        "name": "structured_output",
-                        "description": "Return a structured response matching the requested schema.",
-                        "input_schema": schema,
-                    }
-                ]
-
-                completion = await self._transport.complete(
-                    messages,
-                    model=self._config.model,
-                    max_tokens=self._config.max_tokens,
-                    temperature=self._config.temperature,
-                    tools=structured_tool,
-                    tool_choice={"type": "tool", "name": "structured_output"},
-                    stream=False,
-                )
-
-                # Extract the tool call input and validate
-                if completion.tool_calls:
-                    raw_input = completion.tool_calls[0].input
-                    return adapter.validate_python(raw_input)
-
-                # Fallback: parse JSON from content
-                content = completion.content.strip()
-                return adapter.validate_json(content)
-
-            except Exception as exc:  # noqa: BLE001
-                logger.debug(
-                    "lauren_ai.Completion.extract: structured output failed, "
-                    "falling back to raw content: %s",
-                    exc,
-                )
-                # Last resort: return raw completion content
-                completion = await self._transport.complete(
-                    messages,
-                    model=self._config.model,
-                    max_tokens=self._config.max_tokens,
-                    temperature=self._config.temperature,
-                    stream=False,
-                )
-                return completion.content
-
-        @staticmethod
-        def _resolve_prompt(execution_context: Any) -> str:
-            """Determine the completion prompt from the execution context.
-
-            :param execution_context: The current request execution context.
-            :type execution_context: ExecutionContext
-            :return: The prompt string.
-            :rtype: str
-            """
-            # Priority 1: explicit prompt in metadata
-            prompt = None
-            if hasattr(execution_context, "get_metadata"):
-                prompt = execution_context.get_metadata("completion_prompt")
-
-            if prompt is not None:
-                return str(prompt)
-
-            # Priority 2: prompt field name — read from request state
-            if hasattr(execution_context, "get_metadata"):
-                field_name = execution_context.get_metadata("completion_prompt_field")
-                if field_name is not None:
-                    request = getattr(execution_context, "request", None)
-                    if request is not None:
-                        state = getattr(request, "state", None)
-                        if state is not None:
-                            body = getattr(state, "body", None) or getattr(state, "parsed_body", None)
-                            if body is not None and isinstance(body, dict):
-                                value = body.get(field_name)
-                                if value is not None:
-                                    return str(value)
-
-            # Priority 3: repr of request body
-            request = getattr(execution_context, "request", None)
-            if request is not None:
-                body = getattr(request, "body", None)
-                if body is not None:
-                    return repr(body)
-
-            return ""
-
-        def __class_getitem__(cls, item: Any) -> Any:
-            """Support ``Completion[T]`` subscript syntax.
-
-            :param item: The return type.
-            :type item: Any
-            :return: An ``Annotated[item, Completion]`` type hint.
-            :rtype: Any
-            """
-            try:
-                from typing import Annotated  # noqa: PLC0415
-
-                return Annotated[item, cls]  # type: ignore[valid-type]
-            except ImportError:
-                return cls
-
-else:
-    class Completion(ExtractionMarker):  # type: ignore[no-redef,misc]
-        """Stub ``Completion`` extractor (lauren not available).
-
-        See :class:`lauren_ai._extractors.Completion` for full documentation.
+        :param execution_context: The current request execution context.
+        :type execution_context: ExecutionContext
+        :param extraction: The extraction descriptor; ``inner_type`` is the
+            target Pydantic model or type ``T``.
+        :type extraction: Extraction
+        :return: A validated instance of ``T``.
+        :rtype: Any
+        :raises TransportError: When the LLM provider returns an error.
         """
+        from lauren_ai._transport import Message  # noqa: PLC0415
 
-        source: str = "lauren_ai.completion"
+        prompt = self._resolve_prompt(execution_context)
+        inner_type = extraction.inner_type
 
-        def __init__(self, transport: Any = None, config: Any = None) -> None:
-            self._transport = transport
-            self._config = config
+        # Build messages
+        messages = [Message(role="user", content=prompt)]
 
-        async def extract(self, execution_context: Any, extraction: Any) -> Any:
-            raise RuntimeError(
-                "Completion extractor is not available: lauren package is not installed."
+        # Try structured output via tool use
+        try:
+            from pydantic import TypeAdapter  # noqa: PLC0415
+
+            adapter = TypeAdapter(inner_type)
+            schema = adapter.json_schema()
+            structured_tool: list[Any] = [
+                {
+                    "name": "structured_output",
+                    "description": "Return a structured response matching the requested schema.",
+                    "input_schema": schema,
+                }
+            ]
+
+            completion = await self._transport.complete(
+                messages,
+                model=self._config.model,
+                max_tokens=self._config.max_tokens,
+                temperature=self._config.temperature,
+                tools=structured_tool,
+                tool_choice={"type": "tool", "name": "structured_output"},
+                stream=False,
             )
+
+            # Extract the tool call input and validate
+            if completion.tool_calls:
+                raw_input = completion.tool_calls[0].input
+                return adapter.validate_python(raw_input)
+
+            # Fallback: parse JSON from content
+            content = completion.content.strip()
+            return adapter.validate_json(content)
+
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "lauren_ai.Completion.extract: structured output failed, "
+                "falling back to raw content: %s",
+                exc,
+            )
+            # Last resort: return raw completion content
+            completion = await self._transport.complete(
+                messages,
+                model=self._config.model,
+                max_tokens=self._config.max_tokens,
+                temperature=self._config.temperature,
+                stream=False,
+            )
+            return completion.content
+
+    @staticmethod
+    def _resolve_prompt(execution_context: Any) -> str:
+        """Determine the completion prompt from the execution context.
+
+        :param execution_context: The current request execution context.
+        :type execution_context: ExecutionContext
+        :return: The prompt string.
+        :rtype: str
+        """
+        # Priority 1: explicit prompt in metadata
+        prompt = None
+        if hasattr(execution_context, "get_metadata"):
+            prompt = execution_context.get_metadata("completion_prompt")
+
+        if prompt is not None:
+            return str(prompt)
+
+        # Priority 2: prompt field name — read from request state
+        if hasattr(execution_context, "get_metadata"):
+            field_name = execution_context.get_metadata("completion_prompt_field")
+            if field_name is not None:
+                request = getattr(execution_context, "request", None)
+                if request is not None:
+                    state = getattr(request, "state", None)
+                    if state is not None:
+                        body = getattr(state, "body", None) or getattr(state, "parsed_body", None)
+                        if body is not None and isinstance(body, dict):
+                            value = body.get(field_name)
+                            if value is not None:
+                                return str(value)
+
+        # Priority 3: repr of request body
+        request = getattr(execution_context, "request", None)
+        if request is not None:
+            body = getattr(request, "body", None)
+            if body is not None:
+                return repr(body)
+
+        return ""
+
+    def __class_getitem__(cls, item: Any) -> Any:
+        """Support ``Completion[T]`` subscript syntax.
+
+        :param item: The return type.
+        :type item: Any
+        :return: An ``Annotated[item, Completion]`` type hint.
+        :rtype: Any
+        """
+        from typing import Annotated  # noqa: PLC0415
+
+        return Annotated[item, cls]  # type: ignore[valid-type]
 
 
 # ---------------------------------------------------------------------------
@@ -377,126 +286,104 @@ else:
 # ---------------------------------------------------------------------------
 
 
-if LAUREN_EXTRACTORS_AVAILABLE:
-    @injectable(scope=Scope.SINGLETON)  # type: ignore[misc]
-    class Embed(ExtractionMarker):  # type: ignore[misc]
-        """Compute an embedding vector for the request body text.
+@injectable(scope=Scope.SINGLETON)
+class Embed(ExtractionMarker):
+    """Compute an embedding vector for the request body text.
 
-        Reads the text to embed from (in priority order):
+    Reads the text to embed from (in priority order):
 
-        1. ``request.state.embed_input`` — set by middleware or the caller.
-        2. The raw request body decoded as UTF-8.
-        3. Empty string fallback.
+    1. ``request.state.embed_input`` — set by middleware or the caller.
+    2. The raw request body decoded as UTF-8.
+    3. Empty string fallback.
 
-        Example::
+    Example::
 
-            @post("/semantic-search")
-            async def search(
-                self,
-                body: Json[SearchRequest],
-                query_embedding: Embed[list[float]],
-            ) -> list[SearchResult]:
-                ...
-
-        :param transport: The LLM transport (used for embedding calls).
-        :type transport: Any
-        :param config: The LLM configuration.
-        :type config: LLMConfig
-        """
-
-        source: str = "lauren_ai.embed"
-
-        def __init__(self, transport: Any, config: Any) -> None:
-            self._transport = transport
-            self._config = config
-
-        async def extract(
+        @post("/semantic-search")
+        async def search(
             self,
-            execution_context: Any,
-            extraction: Any,
-        ) -> list[float]:
-            """Compute an embedding and return the first vector.
+            body: Json[SearchRequest],
+            query_embedding: Embed[list[float]],
+        ) -> list[SearchResult]:
+            ...
 
-            :param execution_context: The current request execution context.
-            :type execution_context: ExecutionContext
-            :param extraction: The extraction descriptor.
-            :type extraction: Extraction
-            :return: The embedding vector as a list of floats.
-            :rtype: list[float]
-            :raises TransportError: When the embedding call fails.
-            """
-            embed_input = self._resolve_embed_input(execution_context)
-            embed_model = self._config.embed_model or self._config.model
+    :param transport: The LLM transport (used for embedding calls).
+    :type transport: Any
+    :param config: The LLM configuration.
+    :type config: LLMConfig
+    """
 
-            embeddings = await self._transport.embed(
-                [embed_input],
-                model=embed_model,
-                dimensions=self._config.embed_dimensions,
-            )
+    source: str = "lauren_ai.embed"
 
-            if embeddings:
-                return embeddings[0].vector
-            return []
+    def __init__(self, transport: Any, config: Any) -> None:
+        self._transport = transport
+        self._config = config
 
-        @staticmethod
-        def _resolve_embed_input(execution_context: Any) -> str:
-            """Determine the text to embed from the execution context.
+    async def extract(
+        self,
+        execution_context: Any,
+        extraction: Any,
+    ) -> list[float]:
+        """Compute an embedding and return the first vector.
 
-            :param execution_context: The current request execution context.
-            :type execution_context: ExecutionContext
-            :return: The text to embed.
-            :rtype: str
-            """
-            request = getattr(execution_context, "request", None)
-            if request is not None:
-                state = getattr(request, "state", None)
-                if state is not None:
-                    embed_input = getattr(state, "embed_input", None)
-                    if embed_input is not None:
-                        return str(embed_input)
-
-            # Fallback: try to read the raw body
-            if request is not None:
-                body = getattr(request, "body", None)
-                if body is not None:
-                    if isinstance(body, bytes):
-                        return body.decode("utf-8", errors="replace")
-                    return str(body)
-
-            return ""
-
-        def __class_getitem__(cls, item: Any) -> Any:
-            """Support ``Embed[T]`` subscript syntax.
-
-            :param item: The return type annotation.
-            :type item: Any
-            :return: An ``Annotated[item, Embed]`` type hint.
-            :rtype: Any
-            """
-            try:
-                from typing import Annotated  # noqa: PLC0415
-
-                return Annotated[item, cls]  # type: ignore[valid-type]
-            except ImportError:
-                return cls
-
-else:
-    class Embed(ExtractionMarker):  # type: ignore[no-redef,misc]
-        """Stub ``Embed`` extractor (lauren not available).
-
-        See :class:`lauren_ai._extractors.Embed` for full documentation.
+        :param execution_context: The current request execution context.
+        :type execution_context: ExecutionContext
+        :param extraction: The extraction descriptor.
+        :type extraction: Extraction
+        :return: The embedding vector as a list of floats.
+        :rtype: list[float]
+        :raises TransportError: When the embedding call fails.
         """
+        embed_input = self._resolve_embed_input(execution_context)
+        embed_model = self._config.embed_model or self._config.model
 
-        source: str = "lauren_ai.embed"
+        embeddings = await self._transport.embed(
+            [embed_input],
+            model=embed_model,
+            dimensions=self._config.embed_dimensions,
+        )
 
-        def __init__(self, transport: Any = None, config: Any = None) -> None:
-            self._transport = transport
-            self._config = config
+        if embeddings:
+            return embeddings[0].vector
+        return []
 
-        async def extract(self, execution_context: Any, extraction: Any) -> list[float]:
-            raise RuntimeError(
-                "Embed extractor is not available: lauren package is not installed."
-            )
+    @staticmethod
+    def _resolve_embed_input(execution_context: Any) -> str:
+        """Determine the text to embed from the execution context.
+
+        :param execution_context: The current request execution context.
+        :type execution_context: ExecutionContext
+        :return: The text to embed.
+        :rtype: str
+        """
+        request = getattr(execution_context, "request", None)
+        if request is not None:
+            state = getattr(request, "state", None)
+            if state is not None:
+                embed_input = getattr(state, "embed_input", None)
+                if embed_input is not None:
+                    return str(embed_input)
+
+        # Fallback: try to read the raw body
+        if request is not None:
+            body = getattr(request, "body", None)
+            if body is not None:
+                if isinstance(body, bytes):
+                    return body.decode("utf-8", errors="replace")
+                return str(body)
+
+        return ""
+
+    def __class_getitem__(cls, item: Any) -> Any:
+        """Support ``Embed[T]`` subscript syntax.
+
+        :param item: The return type annotation.
+        :type item: Any
+        :return: An ``Annotated[item, Embed]`` type hint.
+        :rtype: Any
+        """
+        from typing import Annotated  # noqa: PLC0415
+
+        return Annotated[item, cls]  # type: ignore[valid-type]
 
 
 # ---------------------------------------------------------------------------
@@ -504,141 +391,117 @@ else:
 # ---------------------------------------------------------------------------
 
 
-if LAUREN_EXTRACTORS_AVAILABLE:
-    @injectable(scope=Scope.SINGLETON)  # type: ignore[misc]
-    class StreamCompletion(ExtractionMarker):  # type: ignore[misc]
-        """Return a streaming completion iterator for use with ``EventStream``.
+@injectable(scope=Scope.SINGLETON)
+class StreamCompletion(ExtractionMarker):
+    """Return a streaming completion iterator for use with ``EventStream``.
 
-        Example::
+    Example::
 
-            @post("/chat")
-            async def chat(
-                self,
-                body: Json[ChatRequest],
-                stream: StreamCompletion[str],
-            ) -> EventStream:
-                return EventStream(stream, keep_alive=15.0)
-
-        The returned iterator yields
-        :class:`~lauren_ai._transport.CompletionChunk` items as they arrive
-        from the provider.
-
-        :param transport: The LLM transport.
-        :type transport: Any
-        :param config: The LLM configuration.
-        :type config: LLMConfig
-        """
-
-        source: str = "lauren_ai.stream_completion"
-
-        def __init__(self, transport: Any, config: Any) -> None:
-            self._transport = transport
-            self._config = config
-
-        async def extract(
+        @post("/chat")
+        async def chat(
             self,
-            execution_context: Any,
-            extraction: Any,
-        ) -> AsyncIterator[Any]:
-            """Return a streaming completion async iterator.
+            body: Json[ChatRequest],
+            stream: StreamCompletion[str],
+        ) -> EventStream:
+            return EventStream(stream, keep_alive=15.0)
 
-            Reads the prompt using the same priority order as
-            :class:`Completion`.
+    The returned iterator yields
+    :class:`~lauren_ai._transport.CompletionChunk` items as they arrive
+    from the provider.
 
-            :param execution_context: The current request execution context.
-            :type execution_context: ExecutionContext
-            :param extraction: The extraction descriptor.
-            :type extraction: Extraction
-            :return: An async iterator of
-                :class:`~lauren_ai._transport.CompletionChunk` items.
-            :rtype: AsyncIterator[CompletionChunk]
-            :raises TransportError: When the streaming call cannot be started.
-            """
-            from lauren_ai._transport import Message  # noqa: PLC0415
+    :param transport: The LLM transport.
+    :type transport: Any
+    :param config: The LLM configuration.
+    :type config: LLMConfig
+    """
 
-            # Reuse the Completion prompt resolution logic
-            prompt = self._resolve_prompt(execution_context)
-            messages = [Message(role="user", content=prompt)]
+    source: str = "lauren_ai.stream_completion"
 
-            stream = await self._transport.complete(
-                messages,
-                model=self._config.model,
-                max_tokens=self._config.max_tokens,
-                temperature=self._config.temperature,
-                stream=True,
-            )
-            return stream
+    def __init__(self, transport: Any, config: Any) -> None:
+        self._transport = transport
+        self._config = config
 
-        @staticmethod
-        def _resolve_prompt(execution_context: Any) -> str:
-            """Determine the completion prompt from the execution context.
+    async def extract(
+        self,
+        execution_context: Any,
+        extraction: Any,
+    ) -> AsyncIterator[Any]:
+        """Return a streaming completion async iterator.
 
-            Mirrors :meth:`Completion._resolve_prompt`.
+        Reads the prompt using the same priority order as
+        :class:`Completion`.
 
-            :param execution_context: The current request execution context.
-            :type execution_context: ExecutionContext
-            :return: The prompt string.
-            :rtype: str
-            """
-            prompt = None
-            if hasattr(execution_context, "get_metadata"):
-                prompt = execution_context.get_metadata("completion_prompt")
-
-            if prompt is not None:
-                return str(prompt)
-
-            if hasattr(execution_context, "get_metadata"):
-                field_name = execution_context.get_metadata("completion_prompt_field")
-                if field_name is not None:
-                    request = getattr(execution_context, "request", None)
-                    if request is not None:
-                        state = getattr(request, "state", None)
-                        if state is not None:
-                            body = getattr(state, "body", None) or getattr(state, "parsed_body", None)
-                            if body is not None and isinstance(body, dict):
-                                value = body.get(field_name)
-                                if value is not None:
-                                    return str(value)
-
-            request = getattr(execution_context, "request", None)
-            if request is not None:
-                body = getattr(request, "body", None)
-                if body is not None:
-                    return repr(body)
-
-            return ""
-
-        def __class_getitem__(cls, item: Any) -> Any:
-            """Support ``StreamCompletion[T]`` subscript syntax.
-
-            :param item: The element type annotation.
-            :type item: Any
-            :return: An ``Annotated[item, StreamCompletion]`` type hint.
-            :rtype: Any
-            """
-            try:
-                from typing import Annotated  # noqa: PLC0415
-
-                return Annotated[item, cls]  # type: ignore[valid-type]
-            except ImportError:
-                return cls
-
-else:
-    class StreamCompletion(ExtractionMarker):  # type: ignore[no-redef,misc]
-        """Stub ``StreamCompletion`` extractor (lauren not available).
-
-        See :class:`lauren_ai._extractors.StreamCompletion` for full documentation.
+        :param execution_context: The current request execution context.
+        :type execution_context: ExecutionContext
+        :param extraction: The extraction descriptor.
+        :type extraction: Extraction
+        :return: An async iterator of
+            :class:`~lauren_ai._transport.CompletionChunk` items.
+        :rtype: AsyncIterator[CompletionChunk]
+        :raises TransportError: When the streaming call cannot be started.
         """
+        from lauren_ai._transport import Message  # noqa: PLC0415
 
-        source: str = "lauren_ai.stream_completion"
+        # Reuse the Completion prompt resolution logic
+        prompt = self._resolve_prompt(execution_context)
+        messages = [Message(role="user", content=prompt)]
 
-        def __init__(self, transport: Any = None, config: Any = None) -> None:
-            self._transport = transport
-            self._config = config
+        stream = await self._transport.complete(
+            messages,
+            model=self._config.model,
+            max_tokens=self._config.max_tokens,
+            temperature=self._config.temperature,
+            stream=True,
+        )
+        return stream
 
-        async def extract(self, execution_context: Any, extraction: Any) -> AsyncIterator[Any]:
-            raise RuntimeError(
-                "StreamCompletion extractor is not available: lauren package is not installed."
-            )
-            # Unreachable; satisfies type checkers expecting an async generator
-            yield  # type: ignore[misc]
+    @staticmethod
+    def _resolve_prompt(execution_context: Any) -> str:
+        """Determine the completion prompt from the execution context.
+
+        Mirrors :meth:`Completion._resolve_prompt`.
+
+        :param execution_context: The current request execution context.
+        :type execution_context: ExecutionContext
+        :return: The prompt string.
+        :rtype: str
+        """
+        prompt = None
+        if hasattr(execution_context, "get_metadata"):
+            prompt = execution_context.get_metadata("completion_prompt")
+
+        if prompt is not None:
+            return str(prompt)
+
+        if hasattr(execution_context, "get_metadata"):
+            field_name = execution_context.get_metadata("completion_prompt_field")
+            if field_name is not None:
+                request = getattr(execution_context, "request", None)
+                if request is not None:
+                    state = getattr(request, "state", None)
+                    if state is not None:
+                        body = getattr(state, "body", None) or getattr(state, "parsed_body", None)
+                        if body is not None and isinstance(body, dict):
+                            value = body.get(field_name)
+                            if value is not None:
+                                return str(value)
+
+        request = getattr(execution_context, "request", None)
+        if request is not None:
+            body = getattr(request, "body", None)
+            if body is not None:
+                return repr(body)
+
+        return ""
+
+    def __class_getitem__(cls, item: Any) -> Any:
+        """Support ``StreamCompletion[T]`` subscript syntax.
+
+        :param item: The element type annotation.
+        :type item: Any
+        :return: An ``Annotated[item, StreamCompletion]`` type hint.
+        :rtype: Any
+        """
+        from typing import Annotated  # noqa: PLC0415
+
+        return Annotated[item, cls]  # type: ignore[valid-type]

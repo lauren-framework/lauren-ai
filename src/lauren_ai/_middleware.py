@@ -55,17 +55,7 @@ def conversation_middleware(
               ``@use_middlewares()``.
     :rtype: type
     """
-    try:
-        from lauren import Scope, injectable
-        from lauren.middleware import middleware  # type: ignore[import-not-found]
-        from lauren.types import Request, Response
-    except ImportError:
-        # Fallback: return a class with the expected interface even if lauren not available
-        class _FallbackMiddleware:  # type: ignore[no-redef]
-            async def dispatch(self, request: Any, call_next: Any) -> Any:
-                return await call_next(request)
-
-        return _FallbackMiddleware
+    from lauren import Scope, injectable, middleware
 
     @middleware()
     @injectable(scope=Scope.REQUEST)
@@ -262,15 +252,8 @@ def ai_rate_limit(
     _store = store or InMemoryRateLimitStore()
     _key_fn = key_fn or _default_key_fn
 
-    try:
-        from lauren import Scope, injectable
-        from lauren.middleware import middleware  # type: ignore[import-not-found]
-    except ImportError:
-        class _FallbackMiddleware:  # type: ignore[no-redef]
-            async def dispatch(self, request: Any, call_next: Any) -> Any:
-                return await call_next(request)
-
-        return _FallbackMiddleware
+    from lauren import Scope, injectable, middleware  # noqa: F401
+    from lauren.types import Response
 
     @middleware()
     class _RateLimitMiddleware:
@@ -288,26 +271,18 @@ def ai_rate_limit(
             if requests_per_minute is not None:
                 usage = await _store.get_usage(key, window_seconds=60)
                 if usage.requests >= requests_per_minute:
-                    try:
-                        from lauren.types import Response
-                        return Response.json(
-                            {"error": "rate_limit_exceeded", "limit": "requests_per_minute"},
-                            status=429,
-                        )
-                    except ImportError:
-                        pass
+                    return Response.json(
+                        {"error": "rate_limit_exceeded", "limit": "requests_per_minute"},
+                        status=429,
+                    )
 
             if tokens_per_minute is not None:
                 usage = await _store.get_usage(key, window_seconds=60)
                 if usage.tokens >= tokens_per_minute:
-                    try:
-                        from lauren.types import Response
-                        return Response.json(
-                            {"error": "rate_limit_exceeded", "limit": "tokens_per_minute"},
-                            status=429,
-                        )
-                    except ImportError:
-                        pass
+                    return Response.json(
+                        {"error": "rate_limit_exceeded", "limit": "tokens_per_minute"},
+                        status=429,
+                    )
 
             await _store.increment(key, window_seconds=60)
             return await call_next(request)

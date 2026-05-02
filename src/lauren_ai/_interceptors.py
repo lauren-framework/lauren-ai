@@ -50,14 +50,7 @@ def ai_metrics_interceptor() -> type:
         )
         class AppModule: ...
     """
-    try:
-        from lauren.interceptors import interceptor  # type: ignore[import-not-found]
-    except ImportError:
-        class _FallbackInterceptor:  # type: ignore[no-redef]
-            async def intercept(self, ctx: Any, call_next: Any) -> Any:
-                return await call_next(ctx)
-
-        return _FallbackInterceptor
+    from lauren import interceptor
 
     @interceptor()
     class _AIMetricsInterceptor:
@@ -132,14 +125,7 @@ def token_usage_response_interceptor() -> type:
         )
         class AppModule: ...
     """
-    try:
-        from lauren.interceptors import interceptor  # type: ignore[import-not-found]
-    except ImportError:
-        class _FallbackInterceptor:  # type: ignore[no-redef]
-            async def intercept(self, ctx: Any, call_next: Any) -> Any:
-                return await call_next(ctx)
-
-        return _FallbackInterceptor
+    from lauren import interceptor
 
     @interceptor()
     class _TokenUsageResponseInterceptor:

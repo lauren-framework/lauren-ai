@@ -31,9 +31,8 @@ Typical usage::
 
     app = LaurenFactory.create(AppModule)
 
-Both module factories degrade gracefully when ``lauren`` is not importable.
-In that case the returned class carries the service instances as class
-attributes, and callers wire dependencies manually.
+Both module factories return a ``@module``-decorated class ready for use
+with the ``lauren`` DI and module system.
 """
 
 from __future__ import annotations
@@ -57,36 +56,7 @@ from lauren_ai._transport import Completion, CompletionChunk, Embedding, Message
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Conditional lauren imports
-# ---------------------------------------------------------------------------
-
-try:
-    from lauren import Scope, injectable, module, use_factory, use_value  # type: ignore[import]
-
-    _LAUREN_AVAILABLE = True
-except ImportError:
-    _LAUREN_AVAILABLE = False
-
-    def injectable(*args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
-        def decorator(cls: Any) -> Any:
-            return cls
-        return decorator
-
-    def module(*args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
-        def decorator(cls: Any) -> Any:
-            return cls
-        return decorator
-
-    def use_value(**kwargs: Any) -> Any:  # type: ignore[misc]
-        return kwargs
-
-    def use_factory(**kwargs: Any) -> Any:  # type: ignore[misc]
-        return kwargs
-
-    class Scope:  # type: ignore[no-redef]
-        SINGLETON = "singleton"
-
+from lauren import Scope, module, use_factory, use_value
 
 # ---------------------------------------------------------------------------
 # Transport builder
@@ -412,61 +382,48 @@ class LLMModule:
         llm_service = LLMService(transport=transport, config=config)
         embed_service = EmbedService(llm_service=llm_service)
 
-        if _LAUREN_AVAILABLE:
-            # Register pre-built singletons via use_value providers so the DI
-            # container hands out the same instances on every resolve.
-            _llm_service_provider = use_value(
-                provide=LLMService, value=llm_service
+        # Register pre-built singletons via use_value providers so the DI
+        # container hands out the same instances on every resolve.
+        _llm_service_provider = use_value(
+            provide=LLMService, value=llm_service
+        )
+        _embed_service_provider = use_value(
+            provide=EmbedService, value=embed_service
+        )
+        _config_provider = use_value(
+            provide=LLMConfig, value=config
+        )
+
+        providers = [
+            _llm_service_provider,
+            _embed_service_provider,
+            _config_provider,
+        ]
+        exports = [LLMService, EmbedService, LLMConfig]
+
+        # Also try to export the transport under the Transport protocol token
+        try:
+            from lauren_ai._transport import Transport as _Transport  # noqa: PLC0415
+
+            _transport_provider = use_value(
+                provide=_Transport, value=transport
             )
-            _embed_service_provider = use_value(
-                provide=EmbedService, value=embed_service
-            )
-            _config_provider = use_value(
-                provide=LLMConfig, value=config
-            )
+            providers.insert(0, _transport_provider)
+            exports.insert(0, _Transport)
+        except ImportError:
+            pass
 
-            providers = [
-                _llm_service_provider,
-                _embed_service_provider,
-                _config_provider,
-            ]
-            exports = [LLMService, EmbedService, LLMConfig]
+        @module(providers=providers, exports=exports)
+        class _LLMModule:
+            """Auto-generated LLM provider module."""
 
-            # Also try to export the transport under the Transport protocol token
-            try:
-                from lauren_ai._transport import Transport as _Transport  # noqa: PLC0415
+            transport_instance: Any = transport
+            llm_service_instance: LLMService = llm_service
+            embed_service_instance: EmbedService = embed_service
 
-                _transport_provider = use_value(
-                    provide=_Transport, value=transport
-                )
-                providers.insert(0, _transport_provider)
-                exports.insert(0, _Transport)
-            except ImportError:
-                pass
-
-            @module(providers=providers, exports=exports)  # type: ignore[misc]
-            class _LLMModule:
-                """Auto-generated LLM provider module."""
-
-                transport_instance: Any = transport
-                llm_service_instance: LLMService = llm_service
-                embed_service_instance: EmbedService = embed_service
-
-            _LLMModule.__name__ = "LLMModule"
-            _LLMModule.__qualname__ = "LLMModule"
-            return _LLMModule
-
-        else:
-            # lauren not available — plain class with instances as attributes
-            class _LLMModuleFallback:
-                """LLM module (lauren not available; wire services manually)."""
-
-                transport_instance: Any = transport
-                llm_service_instance: LLMService = llm_service
-                embed_service_instance: EmbedService = embed_service
-
-            _LLMModuleFallback.__name__ = "LLMModule"
-            return _LLMModuleFallback  # type: ignore[return-value]
+        _LLMModule.__name__ = "LLMModule"
+        _LLMModule.__qualname__ = "LLMModule"
+        return _LLMModule
 
 
 # ---------------------------------------------------------------------------
@@ -563,67 +520,55 @@ class AgentModule:
 
         _captured_tool_cache = tool_cache
 
-        if _LAUREN_AVAILABLE:
-            # Use use_value for the registry (already built)
-            _registry_provider = use_value(provide=ToolRegistry, value=registry)
+        # Use use_value for the registry (already built)
+        _registry_provider = use_value(provide=ToolRegistry, value=registry)
 
-            providers: list[Any] = [_registry_provider]
-            exports: list[Any] = [ToolRegistry]
+        providers: list[Any] = [_registry_provider]
+        exports: list[Any] = [ToolRegistry]
 
-            # Register all agent classes as providers (they are already
-            # @injectable(scope=Scope.SINGLETON) from @agent())
-            for agent_cls in agents:
-                providers.append(agent_cls)
-                exports.append(agent_cls)
+        # Register all agent classes as providers (they are already
+        # @injectable(scope=Scope.SINGLETON) from @agent())
+        for agent_cls in agents:
+            providers.append(agent_cls)
+            exports.append(agent_cls)
 
-            # AgentRunner: resolve Transport and LLMConfig from the DI graph.
-            # LLMModule (imported by the app module) must provide both.
-            try:
-                from lauren_ai._transport import Transport as _Transport  # noqa: PLC0415
+        # AgentRunner: resolve Transport and LLMConfig from the DI graph.
+        # LLMModule (imported by the app module) must provide both.
+        try:
+            from lauren_ai._transport import Transport as _Transport  # noqa: PLC0415
 
-                _captured_registry = registry
-                _captured_tc = _captured_tool_cache
+            _captured_registry = registry
+            _captured_tc = _captured_tool_cache
 
-                _runner_provider = use_factory(
-                    provide=AgentRunner,
-                    factory=lambda transport, reg, cfg: AgentRunner(
-                        transport=transport,
-                        registry=reg,
-                        config=cfg,
-                        signals=None,
-                        cache_backend=_captured_tc,
-                    ),
-                    inject=[_Transport, ToolRegistry, LLMConfig],
-                    scope=Scope.SINGLETON,
-                )
-                providers.append(_runner_provider)
-                exports.append(AgentRunner)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "lauren_ai.AgentModule: could not build AgentRunner use_factory "
-                    "provider (Transport or LLMConfig token unavailable at definition "
-                    "time): %s.  AgentRunner will need to be wired manually.",
-                    exc,
-                )
+            _runner_provider = use_factory(
+                provide=AgentRunner,
+                factory=lambda transport, reg, cfg: AgentRunner(
+                    transport=transport,
+                    registry=reg,
+                    config=cfg,
+                    signals=None,
+                    cache_backend=_captured_tc,
+                ),
+                inject=[_Transport, ToolRegistry, LLMConfig],
+                scope=Scope.SINGLETON,
+            )
+            providers.append(_runner_provider)
+            exports.append(AgentRunner)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "lauren_ai.AgentModule: could not build AgentRunner use_factory "
+                "provider (Transport or LLMConfig token unavailable at definition "
+                "time): %s.  AgentRunner will need to be wired manually.",
+                exc,
+            )
 
-            @module(providers=providers, exports=exports)  # type: ignore[misc]
-            class _AgentModule:
-                """Auto-generated agent provider module."""
+        @module(providers=providers, exports=exports)
+        class _AgentModule:
+            """Auto-generated agent provider module."""
 
-                registry_instance: ToolRegistry = registry
-                agent_classes: list[type] = list(agents)
+            registry_instance: ToolRegistry = registry
+            agent_classes: list[type] = list(agents)
 
-            _AgentModule.__name__ = "AgentModule"
-            _AgentModule.__qualname__ = "AgentModule"
-            return _AgentModule
-
-        else:
-            # lauren not available — plain class
-            class _AgentModuleFallback:
-                """Agent module (lauren not available; wire manually)."""
-
-                registry_instance: ToolRegistry = registry  # type: ignore[assignment]
-                agent_classes: list[type] = list(agents)
-
-            _AgentModuleFallback.__name__ = "AgentModule"
-            return _AgentModuleFallback  # type: ignore[return-value]
+        _AgentModule.__name__ = "AgentModule"
+        _AgentModule.__qualname__ = "AgentModule"
+        return _AgentModule

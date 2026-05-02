@@ -396,12 +396,8 @@ def tool(
     """
     # Detect bare usage: @tool instead of @tool()
     if args and callable(args[0]):
-        # Defer import to avoid circular dependency at module load time
-        try:
-            from lauren.exceptions import DecoratorUsageError  # type: ignore[import]
-        except ImportError:
-            class DecoratorUsageError(Exception):  # type: ignore[no-redef]
-                pass
+        from lauren.exceptions import DecoratorUsageError  # noqa: PLC0415
+
         raise DecoratorUsageError(
             "@tool must be used with parentheses: @tool()"
         )

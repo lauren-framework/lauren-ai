@@ -1,8 +1,6 @@
 """Lifecycle signals emitted by the ``lauren-ai`` agent and transport layers.
 
-All signal classes inherit from :class:`LifecycleEvent` when the ``lauren``
-framework is importable; otherwise they fall back to a minimal standalone
-base class so that ``lauren-ai`` can operate without the framework installed.
+All signal classes inherit from :class:`lauren.signals.LifecycleEvent`.
 
 Signal classes
 --------------
@@ -19,9 +17,8 @@ Signal classes
 :class:`SignalBus`
 ------------------
 
-A lightweight standalone event bus that does not require the ``lauren``
-framework.  Handlers are registered per event type and called concurrently
-when an event is emitted.
+A lightweight standalone async event bus.  Handlers are registered per event
+type and called concurrently when an event is emitted.
 """
 
 from __future__ import annotations
@@ -49,24 +46,7 @@ __all__ = [
 
 T = TypeVar("T")
 
-# ---------------------------------------------------------------------------
-# Base class — use lauren's LifecycleEvent when available
-# ---------------------------------------------------------------------------
-
-try:
-    from lauren.signals import LifecycleEvent  # type: ignore[import-untyped]
-    _LAUREN_SIGNALS_AVAILABLE = True
-except ImportError:
-    @dataclass  # type: ignore[misc]
-    class LifecycleEvent:  # type: ignore[no-redef]
-        """Minimal lifecycle event base class used when ``lauren`` is not installed.
-
-        When ``lauren`` is installed, this is replaced by
-        ``lauren.signals.LifecycleEvent``.
-        """
-
-    _LAUREN_SIGNALS_AVAILABLE = False
-
+from lauren.signals import LifecycleEvent
 
 # ---------------------------------------------------------------------------
 # Model call signals

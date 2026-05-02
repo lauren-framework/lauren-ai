@@ -119,14 +119,13 @@ class TestAiRateLimit:
         assert cls is not None
         assert callable(cls)
 
-    def test_fallback_middleware_has_dispatch(self):
+    def test_middleware_has_dispatch(self):
         cls = ai_rate_limit(requests_per_minute=100)
-        # In the fallback path (no lauren), it should have a dispatch method
         obj = cls()
         assert hasattr(obj, "dispatch")
 
     @pytest.mark.asyncio
-    async def test_fallback_dispatch_passes_through(self):
+    async def test_dispatch_passes_through_within_limit(self):
         cls = ai_rate_limit(requests_per_minute=100)
         obj = cls()
 
@@ -140,7 +139,6 @@ class TestAiRateLimit:
         async def call_next(req):
             return "response"
 
-        # In fallback mode, dispatch should just call call_next
         result = await obj.dispatch(FakeRequest(), call_next)
         assert result == "response"
 
@@ -236,21 +234,43 @@ class TestConversationMiddleware:
         assert cls is not None
         assert callable(cls)
 
-    def test_fallback_has_dispatch(self):
-        cls = conversation_middleware(None)
-        # In fallback mode (no lauren), should have dispatch
-        obj = cls()
+    def test_middleware_has_dispatch(self):
+        class FakeStore:
+            async def load(self, cid):
+                return []
+
+            async def save(self, cid, msgs):
+                pass
+
+        store = FakeStore()
+        cls = conversation_middleware(store)
+        obj = cls(conv_store=store)
         assert hasattr(obj, "dispatch")
 
     @pytest.mark.asyncio
-    async def test_fallback_dispatch_passes_through(self):
-        cls = conversation_middleware(None)
-        obj = cls()
+    async def test_dispatch_passes_through(self):
+        class FakeStore:
+            async def load(self, cid):
+                return []
+
+            async def save(self, cid, msgs):
+                pass
+
+        store = FakeStore()
+        cls = conversation_middleware(store)
+        obj = cls(conv_store=store)
 
         async def call_next(req):
             return "response"
 
-        result = await obj.dispatch(object(), call_next)
+        class FakeRequest:
+            headers = {}
+            cookies = {}
+
+            class state:
+                pass
+
+        result = await obj.dispatch(FakeRequest(), call_next)
         assert result == "response"
 
     @pytest.mark.asyncio

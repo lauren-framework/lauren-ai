@@ -36,7 +36,6 @@ from lauren_ai._exceptions import AuthTransportError, TransientTransportError, T
 from lauren_ai._transport import (
     Completion,
     CompletionChunk,
-    ContentBlock,
     Embedding,
     Message,
     TokenUsage,
@@ -76,25 +75,26 @@ def _require_openai() -> Any:
 # ---------------------------------------------------------------------------
 
 
-def _content_block_to_openai(block: ContentBlock) -> dict[str, Any]:
-    """Convert a :class:`~lauren_ai._transport.ContentBlock` to OpenAI format.
+def _content_block_to_openai(block: Any) -> dict[str, Any]:
+    """Convert a :class:`~lauren_ai._transport.ContentBlock` (or plain dict) to OpenAI format.
+
+    Accepts both ``ContentBlock`` dataclass instances and plain dicts (as stored
+    by ``ShortTermMemory`` at runtime).
 
     :param block: The content block to convert.
-    :type block: ContentBlock
     :return: OpenAI-compatible content dict.
     :rtype: dict[str, Any]
     """
-    if block.type == "text":
-        return {"type": "text", "text": block.text or ""}
-    if block.type == "image":
-        return {
-            "type": "image_url",
-            "image_url": block.source or {},
-        }
-    if block.type == "tool_result":
+    block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", "")
+    if block_type == "text":
+        text = block.get("text", "") if isinstance(block, dict) else (block.text or "")
+        return {"type": "text", "text": text}
+    if block_type == "image":
+        source = block.get("source", {}) if isinstance(block, dict) else (block.source or {})
+        return {"type": "image_url", "image_url": source}
+    if block_type == "tool_result":
         # Tool results are handled as separate messages in OpenAI's format.
-        # Return a text representation if called within a message block.
-        content = block.content
+        content = block.get("content", "") if isinstance(block, dict) else block.content
         if isinstance(content, list):
             content = json.dumps(content)
         return {"type": "text", "text": str(content or "")}
@@ -102,42 +102,54 @@ def _content_block_to_openai(block: ContentBlock) -> dict[str, Any]:
     return {"type": "text", "text": ""}
 
 
-def _message_to_openai(message: Message) -> list[dict[str, Any]]:
-    """Convert a :class:`~lauren_ai._transport.Message` to OpenAI message dict(s).
+def _message_to_openai(message: Any) -> list[dict[str, Any]]:
+    """Convert a :class:`~lauren_ai._transport.Message` (or plain dict) to OpenAI message dict(s).
 
-    OpenAI uses a flat message list; tool results must be emitted as separate
-    ``role="tool"`` messages.  This function returns a list so that tool-result
-    blocks can be expanded into individual messages.
+    Accepts both ``Message`` dataclass instances and plain dicts (as stored by
+    ``ShortTermMemory`` at runtime).  OpenAI uses a flat message list; tool
+    results are emitted as separate ``role="tool"`` messages.
 
     :param message: The message to convert.
-    :type message: Message
     :return: List of OpenAI-compatible message dicts (usually length 1).
     :rtype: list[dict[str, Any]]
     """
-    if isinstance(message.content, str):
-        return [{"role": message.role, "content": message.content}]
+    if isinstance(message, dict):
+        role: str = message.get("role", "user")
+        content: Any = message.get("content", "")
+    else:
+        role = message.role
+        content = message.content
+
+    if isinstance(content, str):
+        return [{"role": role, "content": content}]
 
     result: list[dict[str, Any]] = []
     # Separate tool_result blocks from regular content.
-    regular_blocks: list[ContentBlock] = []
-    tool_result_blocks: list[ContentBlock] = []
+    regular_blocks: list[Any] = []
+    tool_result_blocks: list[Any] = []
 
-    for block in message.content:
-        if block.type == "tool_result":
+    for block in content:
+        block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", "")
+        if block_type == "tool_result":
             tool_result_blocks.append(block)
         else:
             regular_blocks.append(block)
 
     # Emit tool result messages (role="tool") for user messages.
     for block in tool_result_blocks:
-        content = block.content
-        if isinstance(content, list):
-            content = json.dumps(content)
+        if isinstance(block, dict):
+            blk_content = block.get("content", "")
+            blk_tool_use_id = block.get("tool_use_id", "")
+        else:
+            blk_content = block.content
+            blk_tool_use_id = block.tool_use_id or ""
+        if isinstance(blk_content, list):
+            blk_content = json.dumps(blk_content)
         result.append(
             {
                 "role": "tool",
-                "tool_call_id": block.tool_use_id or "",
-                "content": str(content or ""),
+                "tool_call_id": blk_tool_use_id,
+                "content": str(blk_content or ""),
             }
         )
 
@@ -146,21 +158,31 @@ def _message_to_openai(message: Message) -> list[dict[str, Any]]:
         content_parts: list[dict[str, Any]] = []
         tool_calls_list: list[dict[str, Any]] = []
         for block in regular_blocks:
-            if block.type == "tool_use":
+            block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", "")
+            if block_type == "tool_use":
+                if isinstance(block, dict):
+                    # ShortTermMemory stores tool_use blocks with an "id" key
+                    blk_id = block.get("id") or block.get("tool_use_id") or f"call_{uuid.uuid4().hex[:16]}"
+                    blk_name = block.get("name", "")
+                    blk_input = block.get("input", {})
+                else:
+                    blk_id = block.tool_use_id or f"call_{uuid.uuid4().hex[:16]}"
+                    blk_name = block.name or ""
+                    blk_input = block.input or {}
                 tool_calls_list.append(
                     {
-                        "id": block.tool_use_id or f"call_{uuid.uuid4().hex[:16]}",
+                        "id": blk_id,
                         "type": "function",
                         "function": {
-                            "name": block.name or "",
-                            "arguments": json.dumps(block.input or {}),
+                            "name": blk_name,
+                            "arguments": json.dumps(blk_input),
                         },
                     }
                 )
             else:
                 content_parts.append(_content_block_to_openai(block))
 
-        msg: dict[str, Any] = {"role": message.role}
+        msg: dict[str, Any] = {"role": role}
         if content_parts:
             if len(content_parts) == 1 and content_parts[0].get("type") == "text":
                 msg["content"] = content_parts[0]["text"]
@@ -175,20 +197,30 @@ def _message_to_openai(message: Message) -> list[dict[str, Any]]:
     return result
 
 
-def _tool_schema_to_openai(schema: ToolSchema) -> dict[str, Any]:
+def _tool_schema_to_openai(schema: Any) -> dict[str, Any]:
     """Convert a :class:`~lauren_ai._transport.ToolSchema` to the OpenAI tools format.
 
+    Accepts both the ``ToolSchema`` dataclass and plain dicts (as returned by
+    ``ToolRegistry.get_schemas()`` at runtime).
+
     :param schema: The tool schema to convert.
-    :type schema: ToolSchema
     :return: OpenAI-compatible tool dict.
     :rtype: dict[str, Any]
     """
+    if isinstance(schema, dict):
+        name = schema.get("name", "")
+        description = schema.get("description", "")
+        input_schema = schema.get("input_schema", {})
+    else:
+        name = schema.name
+        description = schema.description
+        input_schema = schema.input_schema
     return {
         "type": "function",
         "function": {
-            "name": schema.name,
-            "description": schema.description,
-            "parameters": schema.input_schema,
+            "name": name,
+            "description": description,
+            "parameters": input_schema,
         },
     }
 

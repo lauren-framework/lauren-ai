@@ -27,7 +27,6 @@ from lauren_ai._exceptions import AuthTransportError, TransientTransportError, T
 from lauren_ai._transport import (
     Completion,
     CompletionChunk,
-    ContentBlock,
     Embedding,
     Message,
     RedactedThinkingBlock,
@@ -69,70 +68,110 @@ def _require_anthropic() -> Any:
 # ---------------------------------------------------------------------------
 
 
-def _content_block_to_anthropic(block: ContentBlock) -> dict[str, Any]:
-    """Convert a :class:`~lauren_ai._transport.ContentBlock` to the Anthropic API dict.
+def _content_block_to_anthropic(block: Any) -> dict[str, Any]:
+    """Convert a :class:`~lauren_ai._transport.ContentBlock` (or plain dict) to the Anthropic API dict.
+
+    Accepts both ``ContentBlock`` dataclass instances and plain dicts (as stored
+    by ``ShortTermMemory`` at runtime).
 
     :param block: The content block to convert.
-    :type block: ContentBlock
     :return: Anthropic-compatible dict.
     :rtype: dict[str, Any]
     """
-    if block.type == "text":
-        return {"type": "text", "text": block.text or ""}
-    if block.type == "tool_use":
+    block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", "")
+    if block_type == "text":
+        text = block.get("text", "") if isinstance(block, dict) else (block.text or "")
+        return {"type": "text", "text": text}
+    if block_type == "tool_use":
+        if isinstance(block, dict):
+            return {
+                "type": "tool_use",
+                "id": block.get("id") or block.get("tool_use_id", ""),
+                "name": block.get("name", ""),
+                "input": block.get("input", {}),
+            }
         return {
             "type": "tool_use",
             "id": block.tool_use_id,
             "name": block.name,
             "input": block.input or {},
         }
-    if block.type == "tool_result":
-        result: dict[str, Any] = {
-            "type": "tool_result",
-            "tool_use_id": block.tool_use_id,
-        }
-        if isinstance(block.content, str) or isinstance(block.content, list):
-            result["content"] = block.content
+    if block_type == "tool_result":
+        if isinstance(block, dict):
+            result: dict[str, Any] = {
+                "type": "tool_result",
+                "tool_use_id": block.get("tool_use_id", ""),
+            }
+            blk_content = block.get("content")
+            if blk_content is not None:
+                result["content"] = blk_content
+        else:
+            result = {
+                "type": "tool_result",
+                "tool_use_id": block.tool_use_id,
+            }
+            if isinstance(block.content, (str, list)):
+                result["content"] = block.content
         return result
-    if block.type == "image":
-        return {"type": "image", "source": block.source or {}}
-    raise ValueError(f"Unknown ContentBlock type: {block.type!r}")
+    if block_type == "image":
+        source = block.get("source", {}) if isinstance(block, dict) else (block.source or {})
+        return {"type": "image", "source": source}
+    raise ValueError(f"Unknown ContentBlock type: {block_type!r}")
 
 
-def _message_to_anthropic(message: Message) -> dict[str, Any]:
-    """Convert a :class:`~lauren_ai._transport.Message` to an Anthropic message dict.
+def _message_to_anthropic(message: Any) -> dict[str, Any]:
+    """Convert a :class:`~lauren_ai._transport.Message` (or plain dict) to an Anthropic message dict.
+
+    Accepts both ``Message`` dataclass instances and plain dicts (as stored by
+    ``ShortTermMemory`` at runtime).
 
     :param message: The message to convert.
-    :type message: Message
     :return: Anthropic-compatible message dict.
     :rtype: dict[str, Any]
     """
-    if isinstance(message.content, str):
-        return {"role": message.role, "content": message.content}
+    if isinstance(message, dict):
+        role: str = message.get("role", "user")
+        content: Any = message.get("content", "")
+    else:
+        role = message.role
+        content = message.content
+
+    if isinstance(content, str):
+        return {"role": role, "content": content}
     return {
-        "role": message.role,
-        "content": [_content_block_to_anthropic(b) for b in message.content],
+        "role": role,
+        "content": [_content_block_to_anthropic(b) for b in content],
     }
 
 
 def _tool_schema_to_anthropic(
-    schema: ToolSchema,
+    schema: Any,
     *,
     cache: bool = False,
 ) -> dict[str, Any]:
     """Convert a :class:`~lauren_ai._transport.ToolSchema` to the Anthropic format.
 
+    Accepts both the ``ToolSchema`` dataclass and plain dicts (as returned by
+    ``ToolRegistry.get_schemas()`` at runtime).
+
     :param schema: The tool schema to convert.
-    :type schema: ToolSchema
     :param cache: Whether to attach prompt-caching headers to this tool.
     :type cache: bool
     :return: Anthropic-compatible tool dict.
     :rtype: dict[str, Any]
     """
+    if isinstance(schema, dict):
+        name = schema.get("name", "")
+        description = schema.get("description", "")
+        input_schema = schema.get("input_schema", {})
+    else:
+        name = schema.name
+        description = schema.description
+        input_schema = schema.input_schema
     result: dict[str, Any] = {
-        "name": schema.name,
-        "description": schema.description,
-        "input_schema": schema.input_schema,
+        "name": name,
+        "description": description,
+        "input_schema": input_schema,
     }
     if cache:
         result["cache_control"] = {"type": "ephemeral"}
