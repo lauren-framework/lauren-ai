@@ -321,3 +321,57 @@ class TestAgentTestClientWithTools:
         response2 = await client.run_async("Simple question")
         assert response2.content == "Simple answer."
         assert len(client.calls) == 1  # fresh count after reset
+
+
+# ---------------------------------------------------------------------------
+# Tests: _build_runner edge cases (coverage for None tool_ref and failed
+# registration)
+# ---------------------------------------------------------------------------
+
+
+class TestAgentTestClientBuildRunnerEdgeCases:
+    def test_none_tool_ref_in_meta_is_skipped(self):
+        """None entries in tool_classes are silently skipped (line 176 coverage)."""
+        from dataclasses import replace
+
+        from lauren_ai._agents import AGENT_META, AgentMeta
+        from lauren_ai._agents._runner import AgentRunner
+
+        @agent(model="mock-model", system="Edge case agent.")
+        class EdgeAgent:
+            pass
+
+        # Inject a None into tool_classes on a fresh copy of the meta.
+        original_meta: AgentMeta = getattr(EdgeAgent, AGENT_META)
+        patched_meta = replace(original_meta, tool_classes=(None,))
+        setattr(EdgeAgent, AGENT_META, patched_meta)
+
+        try:
+            mock = MockTransport()
+            mock.queue_response(simple_completion("Edge!"))
+            client = AgentTestClient(EdgeAgent(), mock)
+            assert isinstance(client._runner, AgentRunner)
+        finally:
+            setattr(EdgeAgent, AGENT_META, original_meta)
+
+    def test_tool_registration_failure_is_swallowed(self):
+        """A tool that raises during registration is silently ignored (lines 180-181)."""
+        from unittest.mock import patch
+
+        from lauren_ai._agents._runner import AgentRunner
+
+        @agent(model="mock-model", system="Broken tools agent.")
+        @use_tools(double_tool)
+        class BrokenToolAgent:
+            pass
+
+        mock = MockTransport()
+        mock.queue_response(simple_completion("OK!"))
+
+        with patch(
+            "lauren_ai._tools._registry.ToolRegistry.register",
+            side_effect=RuntimeError("boom"),
+        ):
+            client = AgentTestClient(BrokenToolAgent(), mock)
+
+        assert isinstance(client._runner, AgentRunner)

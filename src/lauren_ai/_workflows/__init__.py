@@ -27,6 +27,7 @@ Example::
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -136,7 +137,7 @@ class Step:
 
         start = time.monotonic()
         try:
-            if asyncio.iscoroutinefunction(self._fn):
+            if inspect.iscoroutinefunction(self._fn):
                 output = await self._fn(context, **self._kwargs)
             else:
                 output = await asyncio.get_event_loop().run_in_executor(
@@ -239,7 +240,7 @@ class Condition:
         :rtype: StepResult
         """
         try:
-            if asyncio.iscoroutinefunction(self._predicate):
+            if inspect.iscoroutinefunction(self._predicate):
                 cond = await self._predicate(context)
             else:
                 cond = self._predicate(context)
@@ -294,7 +295,7 @@ class Loop:
 
         for _ in range(self._max):
             try:
-                if asyncio.iscoroutinefunction(self._condition):
+                if inspect.iscoroutinefunction(self._condition):
                     keep_going = await self._condition(context)
                 else:
                     keep_going = self._condition(context)

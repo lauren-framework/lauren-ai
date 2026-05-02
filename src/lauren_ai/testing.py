@@ -89,7 +89,7 @@ class AgentTestClient:
         :return: The :class:`~lauren_ai._agents.AgentResponse`.
         :rtype: AgentResponse
         """
-        return asyncio.get_event_loop().run_until_complete(
+        return asyncio.run(
             self.run_async(
                 message,
                 conversation_id=conversation_id,

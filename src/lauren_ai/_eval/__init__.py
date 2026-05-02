@@ -26,6 +26,7 @@ Example::
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -237,10 +238,10 @@ class AccuracyEval:
             error: Exception | None = None
             actual = ""
             try:
-                if asyncio.iscoroutinefunction(agent_client):
+                if inspect.iscoroutinefunction(agent_client):
                     resp = await agent_client(ex.input)
                 elif hasattr(agent_client, "run"):
-                    if asyncio.iscoroutinefunction(agent_client.run):
+                    if inspect.iscoroutinefunction(agent_client.run):
                         resp = await agent_client.run(ex.input)
                     else:
                         resp = agent_client.run(ex.input)
@@ -315,7 +316,7 @@ class TrajectoryEval:
             actual_tools: list[str] = []
             try:
                 if hasattr(agent_client, "run"):
-                    if asyncio.iscoroutinefunction(agent_client.run):
+                    if inspect.iscoroutinefunction(agent_client.run):
                         resp = await agent_client.run(ex.input)
                     else:
                         resp = agent_client.run(ex.input)
@@ -396,7 +397,7 @@ class PerformanceEval:
             total_tokens = 0
             try:
                 if hasattr(agent_client, "run"):
-                    if asyncio.iscoroutinefunction(agent_client.run):
+                    if inspect.iscoroutinefunction(agent_client.run):
                         resp = await agent_client.run(ex.input)
                     else:
                         resp = agent_client.run(ex.input)
