@@ -6,7 +6,7 @@ import pytest
 from lauren_ai._agents import USE_TOOLS_META, agent, use_tools
 from lauren_ai._agents._compile import validate_agent_class, validate_tool
 from lauren_ai._exceptions import AgentConfigError, ToolConfigError
-from lauren_ai._tools import TOOL_META, tool
+from lauren_ai._tools import TOOL_META, ToolContext, tool
 
 # ---------------------------------------------------------------------------
 # validate_tool tests
@@ -124,7 +124,7 @@ class TestValidateTool:
     def test_ctx_param_skipped(self):
         """ctx parameter should not require annotation."""
         @tool()
-        async def tool_with_ctx(query: str, ctx=None) -> str:
+        async def tool_with_ctx(query: str, ctx: ToolContext=None) -> str:
             """A tool. Args: query: The query."""
             return query
 

@@ -163,6 +163,51 @@ internally by `ToolExecutor` and never exposed to the LLM.
 
 ---
 
+## Agent DI — auto-injectable singletons
+
+`@agent()` automatically applies `@injectable(scope=Scope.SINGLETON)` unless
+the class is already `@injectable`.  This means every `@agent()`-decorated class
+is a registered DI provider once it is listed in `AgentModule.for_root()`.
+
+`AgentModule.for_root()` adds each agent class to **both** `providers` and
+`exports`, so controllers in the parent module can declare it as a constructor
+argument and receive the fully-resolved singleton:
+
+```python
+# CORRECT — inject the agent instance via DI, pass the instance to runner.run()
+from lauren_ai import AgentRunner
+
+class ChatController:
+    def __init__(self, runner: AgentRunner, agent: ChatAgent) -> None:
+        self._runner = runner
+        self._agent = agent   # ← DI-resolved singleton
+
+    async def chat(self, message: str) -> str:
+        response = await self._runner.run(self._agent, message)
+        return response.content
+```
+
+**Critical invariant: pass instances, not classes, to `runner.run()`.**
+
+```python
+# WRONG — passes the class itself, not an instance
+response = await self._runner.run(ChatAgent, message)
+```
+
+Passing the class bypasses DI and **breaks lifecycle hooks** (`on_start`,
+`on_turn_complete`, `on_tool_result`, `on_finish`).  When `runner.run()` receives
+a class, `getattr(cls, 'on_start')` returns an unbound function; calling
+`hook(ctx)` treats `ctx` as `self`, raising:
+
+```
+TypeError: ChatAgent.on_start() missing 1 required positional argument: 'ctx'
+```
+
+Always obtain the agent instance from DI (constructor injection) and pass that
+instance to `runner.run()`.
+
+---
+
 ## Agent runner — agentic loop
 
 ```

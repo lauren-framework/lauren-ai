@@ -772,16 +772,31 @@ class AgentRunner:
 
         No-op when the hook is not defined.  Handles both sync and async hooks.
 
-        :param agent: The agent instance.
+        When *agent* is a class (not an instance) and the hook attribute is an
+        unbound instance method, a temporary no-arg instance is created so the
+        method can be bound and called normally.  If instantiation requires
+        arguments (DI-injected deps), the hook is silently skipped.
+
+        :param agent: The agent instance or class.
         :type agent: Any
         :param hook_name: Name of the hook method.
         :type hook_name: str
         :param args: Positional arguments forwarded to the hook.
         """
+        import inspect  # noqa: PLC0415
+
+        # When a class is passed instead of an instance (e.g. runner.run(MyAgent, ...))
+        # getattr returns an unbound function.  Bind it by creating a throwaway
+        # instance so lifecycle hooks defined as normal instance methods work correctly.
+        if isinstance(agent, type) and inspect.isfunction(getattr(agent, hook_name, None)):
+            try:
+                agent = agent()
+            except Exception:  # noqa: BLE001
+                return  # Requires DI args — skip hook rather than crash
+
         hook = getattr(agent, hook_name, None)
         if hook is None:
             return
-        import inspect  # noqa: PLC0415
 
         try:
             result = hook(*args)
@@ -804,7 +819,9 @@ class AgentRunner:
     ) -> Any:
         """Invoke an optional lifecycle hook and return its result.
 
-        :param agent: The agent instance.
+        Same class-vs-instance handling as :meth:`_call_hook`.
+
+        :param agent: The agent instance or class.
         :type agent: Any
         :param hook_name: Name of the hook method.
         :type hook_name: str
@@ -812,10 +829,17 @@ class AgentRunner:
         :return: The hook's return value, or ``None`` if not defined or on error.
         :rtype: Any
         """
+        import inspect  # noqa: PLC0415
+
+        if isinstance(agent, type) and inspect.isfunction(getattr(agent, hook_name, None)):
+            try:
+                agent = agent()
+            except Exception:  # noqa: BLE001
+                return None
+
         hook = getattr(agent, hook_name, None)
         if hook is None:
             return None
-        import inspect  # noqa: PLC0415
 
         try:
             result = hook(*args)

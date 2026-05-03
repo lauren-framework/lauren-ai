@@ -1,6 +1,6 @@
 # Memory
 
-`lauren-ai` provides three memory tiers with different scopes and persistence
+`lauren-ai` provides four memory tiers with different scopes and persistence
 characteristics.
 
 ---
@@ -23,8 +23,16 @@ print(mem.token_estimate)             # rough token count
 ```
 
 You never need to create `ShortTermMemory` manually — `AgentRunner.run()` creates
-a fresh one per call.  If you need access to it, use the `on_start` hook via
-`ctx.memory`.
+a fresh one per call.  To access it from lifecycle hooks, use `ctx.memory`:
+
+```python
+from lauren_ai import agent, AgentContext
+
+@agent(model="claude-opus-4-6")
+class MyAgent:
+    async def on_start(self, ctx: AgentContext) -> None:
+        print(f"Memory has {ctx.memory.token_estimate} tokens so far")
+```
 
 ---
 
@@ -47,7 +55,25 @@ history = await store.get(conversation_id="sess-1")
 # list[Message]
 ```
 
-**Custom persistent store:** Implement the `ConversationStore` protocol:
+Pass the store to `AgentRunner`:
+
+```python
+from lauren_ai import AgentRunner, LLMConfig
+
+cfg = LLMConfig(provider="anthropic", model="claude-opus-4-6")
+runner = AgentRunner(
+    transport=transport,
+    config=cfg,
+    conversation_store=store,
+)
+
+# All calls with the same conversation_id share history
+result = await runner.run(MyAgent(), "What did I say before?", conversation_id="sess-1")
+```
+
+### Custom persistent store
+
+Implement the `ConversationStore` protocol:
 
 ```python
 class RedisConversationStore(ConversationStore):
@@ -64,16 +90,21 @@ Long-term facts extracted from conversations and injected as context in future
 turns.
 
 ```python
-from lauren_ai import InMemoryUserMemoryStore, remember, agent, guardrail, use_tools
+from lauren_ai import (
+    agent, remember, use_guardrails, use_tools,
+    InMemoryUserMemoryStore, PromptInjectionFilter,
+)
 
 _memory = InMemoryUserMemoryStore()
 
-@agent(model="openai/gpt-4o-mini", system="You are a personal assistant.")
-@remember(store=None, extract=True, inject=True, top_k=5)
-@guardrail(input=[PromptInjectionFilter()])
+@agent(model="claude-opus-4-6", system="You are a personal assistant.")
+@remember(store=_memory, extract=True, inject=True, top_k=5)
+@use_guardrails(input=[PromptInjectionFilter()])
 @use_tools(my_tool)
 class PersonalAssistant: ...
 ```
+
+**Decorator order:** `@agent` / `@remember` / `@use_guardrails` / `@use_tools`
 
 **How it works:**
 
@@ -86,12 +117,31 @@ class PersonalAssistant: ...
    ```
 
 2. **Extract** (`extract=True`): After each conversation turn, the LLM extracts
-   new facts from the exchange and stores them.
+   new facts from the exchange and stores them automatically.
 
-**Manual store access:**
+### `@remember` parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `store` | `UserMemoryStore` or `str` | required | Store instance, or DI token string |
+| `extract` | `bool` | `True` | Extract new facts after each turn |
+| `inject` | `bool` | `True` | Inject remembered facts into system prompt |
+| `top_k` | `int` | `5` | Number of most relevant facts to inject |
+
+### Using a DI token for the store
 
 ```python
-from lauren_ai import MemoryFact
+@agent(model="claude-opus-4-6")
+@remember(store="UserMemoryStore", extract=True, inject=True)
+class PersonalAssistant: ...
+```
+
+The string `"UserMemoryStore"` is resolved from the DI container at runtime.
+
+### Manual store access
+
+```python
+from lauren_ai import InMemoryUserMemoryStore, MemoryFact
 
 store = InMemoryUserMemoryStore()
 
@@ -117,7 +167,9 @@ from lauren_ai._memory._remember import build_memory_context
 context_block = build_memory_context(facts)
 ```
 
-**Custom `UserMemoryStore`:** Implement the protocol:
+### Custom `UserMemoryStore`
+
+Implement the protocol:
 
 ```python
 from lauren_ai import UserMemoryStore, MemoryFact
@@ -156,6 +208,32 @@ for doc, score in results:
     print(f"{score:.3f} — {doc}")
 ```
 
+### Using `EmbedService` in a controller
+
+```python
+from lauren_ai import Embed  # DI extractor
+
+@controller("/api/search")
+class SearchController:
+    def __init__(self, embed: Embed) -> None:
+        self._embed = embed
+        self._store = InMemoryVectorStore()
+
+    @post("/index")
+    async def index(self, body: Json[IndexRequest]) -> dict:
+        await self._store.add(texts=body.texts, embed_service=self._embed)
+        return {"indexed": len(body.texts)}
+
+    @post("/query")
+    async def query(self, body: Json[QueryRequest]) -> list[dict]:
+        results = await self._store.search(
+            query=body.query,
+            embed_service=self._embed,
+            top_k=body.top_k,
+        )
+        return [{"text": doc, "score": score} for doc, score in results]
+```
+
 ---
 
 ## Team memory (`TeamMemory`)
@@ -171,3 +249,8 @@ await mem.set("researcher", "Quantum computing is ...")
 output = await mem.get("researcher")
 all_outputs = await mem.get_all()  # dict[str, str]
 ```
+
+`TeamMemory` is created and managed by `TeamRunner` — you do not need to
+instantiate it directly in normal usage.  It is passed to each worker via
+`AgentContext.metadata["team_memory"]` if you need to read prior worker
+outputs from within an agent lifecycle hook.

@@ -17,7 +17,7 @@ from .agents import ResearchAgent, AnalysisAgent, WriterAgent
 @team(
     name="content-team",
     mode="coordinator",          # "coordinator" | "collaborate"
-    model="openai/gpt-4o-mini",  # Model for coordinator LLM calls
+    model="claude-opus-4-6",     # Model for coordinator LLM calls
     max_rounds=5,                # Max coordinator-worker rounds
     coordinator_prompt=None,     # Override default routing prompt
 )
@@ -82,7 +82,7 @@ Next step (ROUTE: <worker> or DONE: <answer>):
 @team(
     name="research-team",
     mode="coordinator",
-    model="openai/gpt-4o-mini",
+    model="claude-opus-4-6",
     coordinator_prompt=MY_PROMPT,
 )
 class ResearchTeam:

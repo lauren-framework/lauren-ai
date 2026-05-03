@@ -237,9 +237,6 @@ def validate_tool(tool_func_or_cls: Any) -> ToolMeta:
             inspect.Parameter.VAR_KEYWORD,
         ):
             continue
-        # ToolContext is injected; missing annotation there is fine
-        if param_name == "ctx":
-            continue
         if param.annotation is inspect.Parameter.empty:
             raise ToolConfigError(
                 f"Tool {tool_name!r}: parameter '{param_name}' has no type "

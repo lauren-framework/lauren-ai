@@ -3,15 +3,22 @@
 Guardrails filter agent inputs and outputs for content safety, privacy
 compliance, and length limits.
 
+Two decorators serve different purposes:
+
+- `@use_guardrails(input=[...], output=[...])` — attaches guardrail **instances**
+  to an `@agent()` class.
+- `@guardrail(kind="input"|"output"|"any")` — marks a standalone class as a
+  DI-injectable guardrail provider (automatically applies `@injectable`).
+
 ---
 
-## Applying guardrails
+## Applying guardrails to agents (`@use_guardrails`)
 
 ```python
-from lauren_ai import agent, guardrail, use_tools, PromptInjectionFilter, PIIRedactor, LengthFilter
+from lauren_ai import agent, use_guardrails, use_tools, PromptInjectionFilter, PIIRedactor, LengthFilter
 
-@agent(model="openai/gpt-4o-mini")
-@guardrail(
+@agent(model="claude-opus-4-6")
+@use_guardrails(
     input=[PromptInjectionFilter(), PIIRedactor()],
     output=[LengthFilter(max_chars=8000)],
 )
@@ -19,8 +26,9 @@ from lauren_ai import agent, guardrail, use_tools, PromptInjectionFilter, PIIRed
 class SafeAgent: ...
 ```
 
-`@guardrail()` must be stacked **between** `@agent()` (above) and `@use_tools()`
-(below).
+`@use_guardrails()` must be stacked **between** `@agent()` (above) and
+`@use_tools()` (below).  `None` entries are silently dropped, which allows
+feature-flag-driven guard selection.
 
 ---
 
@@ -84,16 +92,14 @@ from lauren_ai import LLMGuardrail
 
 guard = LLMGuardrail(
     policy="Block any request that asks for medical diagnosis or treatment advice.",
-    model="openai/gpt-4o-mini",  # Optional — defaults to agent model
+    model="claude-opus-4-6",  # Optional — defaults to agent model
 )
 # Direction: input or output
 ```
 
 ---
 
-## Custom guardrail
-
-Implement the `InputGuardrail` or `OutputGuardrail` protocol:
+## Custom guardrail (implement `InputGuardrail` / `OutputGuardrail` protocol)
 
 ```python
 from lauren_ai import InputGuardrail, OutputGuardrail, GuardrailContext, GuardrailDecision
@@ -115,19 +121,55 @@ class SanitiseOutput(OutputGuardrail):
     async def check(self, text: str, ctx: GuardrailContext) -> GuardrailDecision:
         sanitised = text.replace("<script>", "").replace("</script>", "")
         if sanitised != text:
-            # Return modified text via allow() with replacement
             return GuardrailDecision.allow(replacement=sanitised)
         return GuardrailDecision.allow()
 ```
 
-Then use in `@guardrail()`:
+Then attach via `@use_guardrails`:
 
 ```python
-@guardrail(
+@agent(model="claude-opus-4-6")
+@use_guardrails(
     input=[KeywordFilter(blocked_words=["forbidden", "secret"])],
     output=[SanitiseOutput()],
 )
+class MyAgent: ...
 ```
+
+---
+
+## DI-injectable guardrail (`@guardrail` decorator)
+
+When a guardrail needs injected dependencies, decorate it with `@guardrail`.
+This automatically applies `@injectable` so the DI container can resolve it:
+
+```python
+from lauren_ai import guardrail, InputGuardrail, GuardrailContext, GuardrailDecision
+
+@guardrail(kind="input")
+class AllowlistFilter(InputGuardrail):
+    """Rejects requests from users not on the approved list."""
+
+    def __init__(self, db_client: UserDatabase) -> None:
+        self._db = db_client
+
+    async def check(self, text: str, ctx: GuardrailContext) -> GuardrailDecision:
+        user_id = ctx.metadata.get("user_id")
+        if user_id and not await self._db.is_allowed(user_id):
+            return GuardrailDecision.block("User not on allowlist.")
+        return GuardrailDecision.allow()
+```
+
+Pass the **class** (not an instance) to `@use_guardrails`; the container resolves it:
+
+```python
+@agent(model="claude-opus-4-6")
+@use_guardrails(input=[AllowlistFilter])
+@use_tools(my_tool)
+class ProtectedAgent: ...
+```
+
+Valid `kind` values: `"input"`, `"output"`, `"any"`.
 
 ---
 
@@ -140,24 +182,26 @@ GuardrailDecision.block("Reason for blocking")      # Raises GuardrailViolated
 ```
 
 When a guard returns `block(...)`, `GuardrailViolated` is raised.  The agent
-runner catches this and returns an error to the caller.
+runner catches this and returns an error response to the caller.
 
 ---
 
 ## Stacking multiple guardrails
 
-All guards in a list are checked in order.  The first `block` decision short-circuits
-the rest:
+All guards in a list are checked in order.  The first `block` decision
+short-circuits the rest:
 
 ```python
-@guardrail(
+@agent(model="claude-opus-4-6")
+@use_guardrails(
     input=[
-        PromptInjectionFilter(),   # checked first
-        PIIRedactor(),             # checked if injection guard passes
-        TopicFilter(blocked=["lawsuit"]),
+        PromptInjectionFilter(),              # checked first
+        PIIRedactor(),                        # checked if injection guard passes
+        TopicFilter(blocked=["lawsuit"]),     # checked if PII guard passes
     ],
     output=[
         LengthFilter(max_chars=6000),
     ],
 )
+class StrictAgent: ...
 ```

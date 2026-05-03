@@ -1361,6 +1361,26 @@ class AIModule: ...
 
 ### `AgentRunner.run()` accurate signature
 
+**Critical invariant — pass an instance, not a class.**
+`@agent()` applies `@injectable(scope=Scope.SINGLETON)`.  `AgentModule.for_root()`
+registers and **exports** each agent so DI injects an instance into controllers.
+Passing the class itself bypasses DI and raises `TypeError` on lifecycle hooks:
+
+```python
+# WRONG — passes the class, not an instance; breaks on_start / on_finish hooks
+response = await runner.run(MyAgent, "message")
+
+# CORRECT — inject the agent via constructor DI, then pass the instance
+class MyController:
+    def __init__(self, runner: AgentRunner, agent: MyAgent) -> None:
+        self._runner = runner
+        self._agent = agent  # DI-resolved singleton
+
+    async def handle(self, message: str) -> str:
+        response = await self._runner.run(self._agent, message)
+        return response.content
+```
+
 ```python
 # CORRECT
 response = await runner.run(agent_instance, "User message here")

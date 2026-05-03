@@ -11,7 +11,7 @@ guardrail, team, or memory code.
 ```python
 from lauren_ai import LLMConfig, LLMModule, LLMService, agent, tool, use_tools
 
-# 1. Define a tool (NO from __future__ import annotations in this file!)
+# 1. Define a tool (NO from __future__ import annotations in function-form tool files!)
 @tool()
 async def get_weather(city: str) -> dict:
     """Get weather for a city.
@@ -20,16 +20,16 @@ async def get_weather(city: str) -> dict:
     """
     return {"city": city, "temp_c": 18, "condition": "cloudy"}
 
-# 2. Define an agent
+# 2. Define an agent — @agent() outermost, @use_tools() below it
+@agent(model="claude-opus-4-6", system="You are a weather assistant.")
 @use_tools(get_weather)
-@agent(model="openai/gpt-4o-mini", system="You are a weather assistant.")
 class WeatherAgent: ...
 
 # 3. Wire via LLMModule + AgentRunner
 from lauren_ai._agents._runner import AgentRunner
 from lauren_ai._tools._registry import ToolRegistry
 
-cfg = LLMConfig(provider="openai", model="openai/gpt-4o-mini", api_key="sk-...")
+cfg = LLMConfig(provider="anthropic", model="claude-opus-4-6", api_key="sk-...")
 LLMProvider = LLMModule.for_root(cfg)
 transport = LLMProvider.transport_instance
 registry = ToolRegistry()
@@ -72,7 +72,7 @@ async def bad_tool(...): ...
 - Return type should be `dict`, `list`, `str`, `int`, or `float`.
 - Async is required (use `async def`).
 
-**Class-form tools** (for stateful tools):
+**Class-form tools** (for stateful / DI-injectable tools):
 
 ```python
 @tool()
@@ -84,8 +84,8 @@ class DatabaseTool:
     def __init__(self, connection_string: str) -> None:
         self._conn = connection_string
 
-    async def __call__(self, query: str) -> dict:
-        # execute query
+    async def run(self, query: str) -> dict:
+        # execute query — @tool() looks for run(), not __call__()
         return {"rows": []}
 ```
 
@@ -97,11 +97,12 @@ Marks a class as an AI agent.  **Must use parentheses.**
 
 ```python
 @agent(
-    model="openai/gpt-4o-mini",   # LLM model identifier
-    system="You are helpful.",      # System prompt (falls back to class docstring)
-    max_turns=10,                   # Agentic loop limit
-    temperature=0.7,                # Sampling temperature
-    max_cost_usd=0.50,             # Hard cost budget in USD (None = unlimited)
+    model="claude-opus-4-6",        # LLM model identifier
+    system="You are helpful.",       # System prompt (falls back to class docstring)
+    max_turns=10,                    # Agentic loop limit
+    temperature=0.7,                 # Sampling temperature
+    max_cost_usd=0.50,              # Hard cost budget in USD (None = unlimited)
+    config=AgentConfig(parallel_tool_calls=True),  # Full AgentConfig override
 )
 class MyAgent: ...
 ```
@@ -109,7 +110,7 @@ class MyAgent: ...
 **Lifecycle hooks** (all optional, all async or sync):
 
 ```python
-@agent(model="openai/gpt-4o-mini")
+@agent(model="claude-opus-4-6")
 class MyAgent:
     async def on_start(self, ctx: AgentContext) -> None:
         """Called once before the first LLM turn."""
@@ -131,36 +132,48 @@ class MyAgent:
 Attaches tool functions or classes to an agent.  Must be stacked **below** `@agent()`.
 
 ```python
+@agent(model="claude-opus-4-6")
 @use_tools(tool_a, tool_b, ToolClassC)
-@agent(model="openai/gpt-4o-mini")
 class MyAgent: ...
 ```
 
 Multiple `@use_tools` can be stacked; tools are merged:
 
 ```python
+@agent(model="claude-opus-4-6")
 @use_tools(extra_tool)
 @use_tools(base_tool)
-@agent(model="openai/gpt-4o-mini")
 class MyAgent: ...
 # result: [base_tool, extra_tool]
 ```
 
 ---
 
-### `@guardrail(input=[...], output=[...])`
+### `@use_guardrails(input=[...], output=[...])`
 
-Adds content safety checks.  **Must use parentheses.**  Stack between `@agent()`
-and `@use_tools()`.
+Attaches guardrail instances to an agent.  **Must use parentheses.**  Stack between
+`@agent()` and `@use_tools()`.
 
 ```python
-@agent(model="openai/gpt-4o-mini")
-@guardrail(
+from lauren_ai import use_guardrails, PromptInjectionFilter, PIIRedactor, LengthFilter
+
+@agent(model="claude-opus-4-6")
+@use_guardrails(
     input=[PromptInjectionFilter(), PIIRedactor()],
-    output=[LengthFilter(max_chars=8000), TopicFilter(blocked=["violence"])],
+    output=[LengthFilter(max_chars=8000)],
 )
 @use_tools(my_tool)
 class SafeAgent: ...
+```
+
+`None` entries are silently dropped (conditional guardrails):
+
+```python
+@agent(model="claude-opus-4-6")
+@use_guardrails(
+    input=[PromptInjectionFilter(), TopicFilter(allowed_topics=topics) if topics else None],
+)
+class DynamicAgent: ...
 ```
 
 **Built-in guardrails:**
@@ -168,22 +181,30 @@ class SafeAgent: ...
 | Class | Direction | Purpose |
 |-------|-----------|---------|
 | `PromptInjectionFilter()` | input | Blocks jailbreak / prompt-override attempts |
-| `PIIRedactor()` | input | Redacts emails, phone numbers, SSNs, credit cards |
+| `PIIRedactor(entities=[...])` | input | Redacts emails, phone numbers, SSNs, credit cards |
 | `LengthFilter(max_chars=N)` | output | Caps response length |
-| `TopicFilter(blocked=[...])` | input/output | Blocks specific topic keywords |
-| `LLMGuardrail(policy="...")` | input/output | LLM-powered content evaluation |
+| `TopicFilter(allowed_topics=[...])` | input/output | Allows only specified topics |
+| `LLMGuardrail(llm, prompt, block_if)` | input/output | LLM-powered content evaluation |
 
-**Custom guardrail** (implement the protocol):
+**Custom guardrail class** (implement the protocol and inject via DI):
 
 ```python
-from lauren_ai import InputGuardrail, GuardrailContext, GuardrailDecision
+from lauren_ai import guardrail, GuardrailDecision, GuardrailContext
 
-class MyGuardrail(InputGuardrail):
-    async def check(self, text: str, ctx: GuardrailContext) -> GuardrailDecision:
-        if "forbidden" in text.lower():
-            return GuardrailDecision.block("Forbidden word detected")
-        return GuardrailDecision.allow()
+@guardrail(kind="input")   # registers as DI-injectable singleton
+class ProfanityFilter:
+    async def check(self, message: str, ctx: GuardrailContext) -> GuardrailDecision:
+        if "badword" in message.lower():
+            return GuardrailDecision(
+                action="block",
+                violation="Profanity detected.",
+                guardrail_name="ProfanityFilter",
+            )
+        return GuardrailDecision(action="pass", guardrail_name="ProfanityFilter")
 ```
+
+Note: `@guardrail(kind="input"|"output"|"any")` is for making DI-injectable guardrail
+classes.  `@use_guardrails(input=[...], output=[...])` attaches instances to an agent.
 
 ---
 
@@ -195,11 +216,11 @@ between `@agent()` and `@guardrail()`.
 ```python
 from lauren_ai import InMemoryUserMemoryStore
 
-_memory = InMemoryUserMemoryStore()
+store = InMemoryUserMemoryStore()
 
-@agent(model="openai/gpt-4o-mini")
-@remember(store=None, extract=True, inject=True, top_k=5)
-@guardrail(input=[PromptInjectionFilter()])
+@agent(model="claude-opus-4-6")
+@remember(store=store, extract=True, inject=True, top_k=5)
+@use_guardrails(input=[PromptInjectionFilter()])
 @use_tools(my_tool)
 class PersonalAssistant: ...
 ```
@@ -222,7 +243,7 @@ Marks a class as a multi-agent team.  **Must use parentheses.**
 @team(
     name="research-team",
     mode="coordinator",      # "coordinator" | "collaborate"
-    model="openai/gpt-4o-mini",
+    model="claude-opus-4-6",
     max_rounds=4,
     coordinator_prompt=MY_PROMPT,  # Optional override
 )
@@ -381,19 +402,21 @@ context = build_memory_context(facts)
 ## Guardrails cookbook
 
 ```python
-from lauren_ai import guardrail, LengthFilter, PIIRedactor, PromptInjectionFilter, TopicFilter
+from lauren_ai import use_guardrails, LengthFilter, PIIRedactor, PromptInjectionFilter, TopicFilter
 
-# Compose multiple guardrails
-@guardrail(
+# Compose multiple guardrails on an agent
+@agent(model="claude-opus-4-6")
+@use_guardrails(
     input=[
         PromptInjectionFilter(),
         PIIRedactor(),
-        TopicFilter(blocked=["competitor", "lawsuit"]),
+        TopicFilter(allowed_topics=["customer support", "billing", "account"]),
     ],
     output=[
         LengthFilter(max_chars=4000),
     ],
 )
+class SupportAgent: ...
 ```
 
 LLM-powered guardrail (slower but flexible):
@@ -401,9 +424,15 @@ LLM-powered guardrail (slower but flexible):
 ```python
 from lauren_ai import LLMGuardrail
 
-@guardrail(
-    input=[LLMGuardrail(policy="Block any request that asks for medical advice.")],
+@agent(model="claude-opus-4-6")
+@use_guardrails(
+    input=[LLMGuardrail(
+        llm=llm_service,
+        prompt="Does this text contain medical advice? Reply YES or NO.\n\n{content}",
+        block_if="YES",
+    )],
 )
+class SafeAgent: ...
 ```
 
 ---
@@ -432,30 +461,23 @@ async def log_run(event: AgentRunComplete) -> None:
 ```python
 from lauren_ai import CostTracker, TokenBudget, RateLimiter, default_pricing_table
 
-# Cost tracking
+# Cost tracking (injectable singleton)
 tracker = CostTracker(pricing=default_pricing_table())
 
-@signal_bus.on(ModelCallComplete)
-async def track(event: ModelCallComplete) -> None:
-    await tracker._on_model_call_complete(event)
+async with tracker.session() as session:
+    result = await agent_runner.run(agent_instance, "Hello!")
+    # session.estimate available during the run
 
-report = tracker.report()
-print(f"Total cost: ${report.total_cost_usd:.4f}")
+report = await tracker.report()
+print(f"Total cost: ${report.total_usd:.4f}")
 
 # Token budget — prevent runaway costs
-budget = TokenBudget(
-    max_tokens_per_conversation=50_000,
-    max_usd_per_conversation=0.50,
-)
-budget.check(
-    conversation_id="sess-1",
-    current_usd=0.40,
-    estimated_usd=0.05,
-)  # Raises BudgetExceededError if over limit
+budget = TokenBudget(max_tokens_per_conversation=50_000)
+# Raises BudgetExceededError when exceeded (checked by AgentRunner per turn)
 
 # Rate limiting
 limiter = RateLimiter(requests_per_minute=60)
-await limiter.acquire()  # Blocks if rate exceeded
+await limiter.acquire()  # Raises RateLimitExhaustedError when ceiling breached
 ```
 
 ---
@@ -463,17 +485,17 @@ await limiter.acquire()  # Blocks if rate exceeded
 ## Structured output
 
 ```python
-from lauren_ai import StructuredLLM
+from lauren_ai import StructuredLLM, Message
 from pydantic import BaseModel
 
 class Sentiment(BaseModel):
     label: str
     score: float
 
-structured = StructuredLLM(transport=transport, schema=Sentiment)
+# Obtain via LLMService (injected by DI)
+structured: StructuredLLM[Sentiment] = llm_service.with_structured_output(Sentiment)
 result: Sentiment = await structured.complete(
-    [Message(role="user", content="I love this product!")],
-    model="openai/gpt-4o-mini",
+    [Message.user("I love this product!")]
 )
 print(result.label, result.score)
 ```
@@ -485,13 +507,10 @@ print(result.label, result.score)
 ```python
 from lauren_ai import ImageContent, Message
 
-msg = Message(
-    role="user",
-    content=[
-        ImageContent(url="https://example.com/chart.png"),
-        "Describe this chart.",
-    ],
-)
+msg = Message.from_multimodal("user", [
+    ImageContent(url="https://example.com/chart.png"),
+    "Describe this chart.",
+])
 response = await llm_service.complete([msg])
 ```
 
@@ -502,22 +521,61 @@ response = await llm_service.complete([msg])
 ```python
 from lauren_ai import SemanticRouter, Route
 
-router = SemanticRouter(embed=embed_service)
-router.add(Route(name="weather", examples=["What's the weather?", "Is it raining?"]))
-router.add(Route(name="code", examples=["Write a function", "Debug this Python"]))
-await router.compile()
+async def embed_fn(texts: list[str]) -> list[list[float]]:
+    embeddings = await embed_service.embed(texts)
+    return [e.vector for e in embeddings]
+
+router = SemanticRouter(
+    routes=[
+        Route(name="weather", examples=["What's the weather?", "Is it raining?"]),
+        Route(name="code", examples=["Write a function", "Debug this Python"]),
+    ],
+    embed_fn=embed_fn,
+    min_confidence=0.7,
+)
+await router.compile()   # must be awaited before route()
 
 match = await router.route("What temperature is it outside?")
-print(match.name)  # "weather"
+print(match.route)       # "weather"
+print(match.confidence)  # float
+print(match.matched)     # bool — False if below min_confidence
 ```
+
+---
+
+## Agent DI integration
+
+`@agent()` automatically applies `@injectable(scope=Scope.SINGLETON)`.
+`AgentModule.for_root()` registers each agent class as a DI provider **and**
+exports it, so controllers in the parent module can inject it directly:
+
+```python
+from lauren_ai import AgentRunner
+
+class ChatController:
+    def __init__(self, runner: AgentRunner, agent: ChatAgent) -> None:
+        self._runner = runner
+        self._agent = agent   # DI-resolved singleton
+
+    async def chat(self, message: str) -> str:
+        response = await self._runner.run(self._agent, message)
+        return response.content
+```
+
+Always pass the **instance** (from DI) — never the class — to `runner.run()`.
+Passing the class breaks lifecycle hooks because `on_start` / `on_turn_complete`
+/ `on_tool_result` / `on_finish` are unbound at that point.
 
 ---
 
 ## Anti-patterns to avoid
 
-- **Do not** use `from __future__ import annotations` in files with `@tool()`.
-- **Do not** swap decorator order — `@agent` must be outermost.
-- **Do not** use bare `@agent`, `@tool`, `@guardrail`, `@remember`, `@team` (always use parentheses).
+- **Do not** use `from __future__ import annotations` in **function-form** `@tool()` files — it breaks schema generation (see note in `@tool()` section; class-form tools may use it for DI cycle-breaking).
+- **Do not** swap decorator order — `@agent` must be outermost (topmost in code), `@use_tools` innermost.
+- **Do not** use bare `@agent`, `@tool`, `@use_guardrails`, `@guardrail`, `@remember`, `@team` (always use parentheses).
+- **Do not** use `@guardrail(input=[...], output=[...])` on agents — that form is for DI-injectable guardrail classes; use `@use_guardrails(input=[...], output=[...])` on agents instead.
+- **Do not** define `__call__` in class-form tools — `@tool()` looks for `run()`.
 - **Do not** register the same tool in `ToolRegistry` twice — it will override silently.
 - **Do not** pass `conversation_id=None` when you want session persistence — always supply one.
 - **Do not** share `ShortTermMemory` across runs — it is created fresh per `AgentRunner.run()` call.
+- **Do not** pass agent **classes** to `runner.run()` — always pass a DI-resolved **instance**. Passing a class bypasses DI and breaks lifecycle hooks (raises `TypeError: on_start() missing 1 required positional argument: 'ctx'`).
