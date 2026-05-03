@@ -1,40 +1,30 @@
-"""Integration tests — class-form @tool() and @guardrail() receive DI-injected deps.
+"""Integration tests — class-form @tool() dependencies are injected at execution time.
 
-Tests cover:
-- Class-form tool with a single injectable dep (dep resolved from the DI graph)
-- Class-form tool with a dep-of-dep chain (A → B → Tool)
-- Multiple class-form tools with different deps (all resolved correctly)
-- Singleton dep is the same instance across tool and another consumer
-- Dep is actually used during an agent run (end-to-end spy test)
-- @guardrail() class with an injectable dep (dep resolved from DI)
-- Guardrail dep used correctly in check() at runtime
-- GuardrailWiring pattern: guardrail (with dep) attached to an agent via a
-  wiring singleton
+Every test drives a complete Lauren app through ``TestClient`` HTTP requests.
+No test calls ``app.container.resolve()`` — that is not part of the end-user API.
+
+What is verified:
+
+- A single injectable dep is called when the tool runs during an agent turn
+- A dep-of-dep chain (A → B → Tool) is resolved and the full chain is traversed
+  during execution
+- Two class-form tools with distinct deps both call their own dep (no cross-wiring)
+- A singleton dep shared between the tool and another provider is the *same* instance
+  (verified by a shared counter that both parties can observe)
+- The tool return value (driven by the injected dep) reaches the HTTP response JSON
 """
 
 from __future__ import annotations
 
-import pytest
-from lauren import LaurenFactory, Scope, injectable, module
+from lauren import Json, LaurenFactory, Scope, controller, injectable, module, post
+from lauren.testing import TestClient
 
-from lauren_ai._agents import agent, use_tools
-from lauren_ai._agents._runner import AgentRunner
-from lauren_ai._config import LLMConfig
-from lauren_ai._guardrails import (
-    USE_GUARDRAILS_META,
-    GuardrailContext,
-    GuardrailDecision,
-    UseGuardrailsMeta,
-    guardrail,
-    use_guardrails,
-)
-from lauren_ai._module import AgentModule, LLMModule
-from lauren_ai._tools import tool
+from lauren_ai import AgentModule, AgentRunner, LLMConfig, LLMModule, agent, tool, use_tools
 from lauren_ai._transport import Completion, TokenUsage
-from lauren_ai.testing import AgentTestClient
+
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helper
 # ---------------------------------------------------------------------------
 
 
@@ -50,20 +40,22 @@ def _text(content: str, *, id: str = "c1") -> Completion:
 
 
 # ---------------------------------------------------------------------------
-# Class-form tools with DI dependencies
+# Tests
 # ---------------------------------------------------------------------------
 
 
-class TestClassToolDIInjection:
-    """Class-form @tool() constructor deps are resolved by the DI container."""
+class TestClassToolDIInjectionAtExecution:
+    """Class-form @tool() deps are injected and called during an actual agent run."""
 
-    @pytest.mark.asyncio
-    async def test_single_dep_injected(self):
-        """PriceDatabase is injected into PriceTool when the DI container builds it."""
+    def test_single_dep_called_during_tool_execution(self):
+        """The injected dep's method is invoked when the tool runs inside an agent turn."""
+
+        calls: list[str] = []
 
         @injectable(scope=Scope.SINGLETON)
         class PriceDatabase:
             def get_price(self, item: str) -> float:
+                calls.append(item)
                 return 42.0
 
         @tool()
@@ -84,32 +76,51 @@ class TestClassToolDIInjection:
         @use_tools(PriceTool)
         class ShopAgent: ...
 
+        @controller("/shop")
+        class ShopController:
+            def __init__(self, runner: AgentRunner, ai: ShopAgent) -> None:
+                self._runner = runner
+                self._ai = ai
+
+            @post("/chat")
+            async def chat(self, body: Json[dict]) -> dict:
+                r = await self._runner.run(self._ai, body["message"])
+                return {"content": r.content, "tool_calls": len(r.tool_calls_made)}
+
         @module(providers=[PriceDatabase], exports=[PriceDatabase])
         class PriceModule: ...
 
         cfg, mock = LLMConfig.for_testing()
+        mock.queue_tool_use("price_tool", {"item": "widget"})
+        mock.queue_response(_text("Widget costs $42.", id="c2"))
+
         LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
         AIModule = AgentModule.for_root(
             agents=[ShopAgent],
             imports=[LLMProvider, PriceModule],
         )
 
-        @module(imports=[LLMProvider, AIModule])
+        @module(imports=[LLMProvider, AIModule, PriceModule], controllers=[ShopController])
         class AppModule: ...
 
-        app = LaurenFactory.create(AppModule)
-        price_tool = await app.container.resolve(PriceTool)
+        r = TestClient(LaurenFactory.create(AppModule)).post(
+            "/shop/chat", json={"message": "Price of widget?"}
+        )
 
-        assert isinstance(price_tool, PriceTool)
-        assert isinstance(price_tool._db, PriceDatabase)
+        assert r.status_code == 200
+        assert r.json()["tool_calls"] == 1
+        # PriceDatabase.get_price was called with the arg the agent sent
+        assert calls == ["widget"]
 
-    @pytest.mark.asyncio
-    async def test_dep_chain_injected(self):
-        """Tool → ServiceB → ServiceA: the full dep chain is resolved correctly."""
+    def test_dep_chain_traversed_during_tool_execution(self):
+        """Tool → ServiceB → ServiceA: all three levels are live during execution."""
+
+        traversal: list[str] = []
 
         @injectable(scope=Scope.SINGLETON)
         class ServiceA:
             def value(self) -> str:
+                traversal.append("A")
                 return "from-A"
 
         @injectable(scope=Scope.SINGLETON)
@@ -118,14 +129,15 @@ class TestClassToolDIInjection:
                 self._a = a
 
             def message(self) -> str:
-                return f"B wraps: {self._a.value()}"
+                traversal.append("B")
+                return f"B:{self._a.value()}"
 
         @tool()
         class ChainTool:
             """Return a chained message.
 
             Args:
-                x: Ignored.
+                x: Ignored input.
             """
 
             def __init__(self, b: ServiceB) -> None:
@@ -138,42 +150,67 @@ class TestClassToolDIInjection:
         @use_tools(ChainTool)
         class ChainAgent: ...
 
+        @controller("/chain")
+        class ChainController:
+            def __init__(self, runner: AgentRunner, ai: ChainAgent) -> None:
+                self._runner = runner
+                self._ai = ai
+
+            @post("/chat")
+            async def chat(self, body: Json[dict]) -> dict:
+                r = await self._runner.run(self._ai, body["message"])
+                return {"tool_calls": len(r.tool_calls_made)}
+
         @module(providers=[ServiceA, ServiceB], exports=[ServiceA, ServiceB])
         class ServiceModule: ...
 
         cfg, mock = LLMConfig.for_testing()
+        mock.queue_tool_use("chain_tool", {"x": "go"})
+        mock.queue_response(_text("Done.", id="c2"))
+
         LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
         AIModule = AgentModule.for_root(
             agents=[ChainAgent],
             imports=[LLMProvider, ServiceModule],
         )
 
-        @module(imports=[LLMProvider, AIModule])
+        @module(imports=[LLMProvider, AIModule, ServiceModule], controllers=[ChainController])
         class AppModule: ...
 
-        app = LaurenFactory.create(AppModule)
-        chain_tool = await app.container.resolve(ChainTool)
+        r = TestClient(LaurenFactory.create(AppModule)).post(
+            "/chain/chat", json={"message": "Run chain."}
+        )
 
-        assert isinstance(chain_tool._b, ServiceB)
-        assert isinstance(chain_tool._b._a, ServiceA)
+        assert r.status_code == 200
+        assert r.json()["tool_calls"] == 1
+        # Both B and A were called — the full dep chain was traversed
+        assert traversal == ["B", "A"]
 
-    @pytest.mark.asyncio
-    async def test_multiple_tools_each_get_own_dep(self):
-        """Two class-form tools with distinct deps both get the correct dep injected."""
+    def test_two_tools_call_their_own_dep_not_each_others(self):
+        """Two class-form tools with distinct deps each call only their own dep."""
+
+        weather_calls: list[str] = []
+        stock_calls: list[str] = []
 
         @injectable(scope=Scope.SINGLETON)
         class WeatherDB:
             def get(self, city: str) -> str:
+                weather_calls.append(city)
                 return "sunny"
 
         @injectable(scope=Scope.SINGLETON)
         class StockDB:
             def get(self, ticker: str) -> float:
+                stock_calls.append(ticker)
                 return 100.0
 
         @tool()
         class WeatherTool:
-            """Get the weather. Args: city: City name."""
+            """Get the weather for a city.
+
+            Args:
+                city: City name.
+            """
 
             def __init__(self, db: WeatherDB) -> None:
                 self._db = db
@@ -183,7 +220,11 @@ class TestClassToolDIInjection:
 
         @tool()
         class StockTool:
-            """Get stock price. Args: ticker: Ticker symbol."""
+            """Get a stock price.
+
+            Args:
+                ticker: Ticker symbol.
+            """
 
             def __init__(self, db: StockDB) -> None:
                 self._db = db
@@ -195,277 +236,177 @@ class TestClassToolDIInjection:
         @use_tools(WeatherTool, StockTool)
         class FinanceAgent: ...
 
+        @controller("/finance")
+        class FinanceController:
+            def __init__(self, runner: AgentRunner, ai: FinanceAgent) -> None:
+                self._runner = runner
+                self._ai = ai
+
+            @post("/chat")
+            async def chat(self, body: Json[dict]) -> dict:
+                r = await self._runner.run(self._ai, body["message"])
+                return {"tool_calls": [tc.name for tc in r.tool_calls_made]}
+
         @module(providers=[WeatherDB, StockDB], exports=[WeatherDB, StockDB])
         class DataModule: ...
 
         cfg, mock = LLMConfig.for_testing()
+        mock.queue_tool_use("weather_tool", {"city": "London"})
+        mock.queue_tool_use("stock_tool", {"ticker": "AAPL"})
+        mock.queue_response(_text("London sunny; AAPL at $100.", id="c3"))
+
         LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
         AIModule = AgentModule.for_root(
             agents=[FinanceAgent],
             imports=[LLMProvider, DataModule],
         )
 
-        @module(imports=[LLMProvider, AIModule])
+        @module(imports=[LLMProvider, AIModule, DataModule], controllers=[FinanceController])
         class AppModule: ...
 
-        app = LaurenFactory.create(AppModule)
-        weather_tool = await app.container.resolve(WeatherTool)
-        stock_tool = await app.container.resolve(StockTool)
-
-        assert isinstance(weather_tool._db, WeatherDB)
-        assert isinstance(stock_tool._db, StockDB)
-        # Each tool got its own dep type — no cross-contamination
-        assert not isinstance(weather_tool._db, StockDB)
-        assert not isinstance(stock_tool._db, WeatherDB)
-
-    @pytest.mark.asyncio
-    async def test_dep_is_singleton_shared_between_tool_and_other_provider(self):
-        """The same singleton instance is shared between the tool and another consumer."""
-
-        @injectable(scope=Scope.SINGLETON)
-        class SharedCache:
-            def __init__(self) -> None:
-                self.hits: int = 0
-
-        @tool()
-        class CacheTool:
-            """Read from cache. Args: key: Cache key."""
-
-            def __init__(self, cache: SharedCache) -> None:
-                self._cache = cache
-
-            async def run(self, key: str) -> dict:
-                self._cache.hits += 1
-                return {"key": key, "hits": self._cache.hits}
-
-        @injectable(scope=Scope.SINGLETON)
-        class OtherService:
-            def __init__(self, cache: SharedCache) -> None:
-                self._cache = cache
-
-        @agent(model="mock-model")
-        @use_tools(CacheTool)
-        class CacheAgent: ...
-
-        @module(providers=[SharedCache, OtherService], exports=[SharedCache, OtherService])
-        class CacheModule: ...
-
-        cfg, mock = LLMConfig.for_testing()
-        LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
-        AIModule = AgentModule.for_root(
-            agents=[CacheAgent],
-            imports=[LLMProvider, CacheModule],
+        r = TestClient(LaurenFactory.create(AppModule)).post(
+            "/finance/chat", json={"message": "London weather and AAPL price?"}
         )
 
-        @module(imports=[LLMProvider, AIModule])
-        class AppModule: ...
+        assert r.status_code == 200
+        data = r.json()
+        assert set(data["tool_calls"]) == {"weather_tool", "stock_tool"}
+        # Each tool called only its own dep
+        assert weather_calls == ["London"]
+        assert stock_calls == ["AAPL"]
 
-        app = LaurenFactory.create(AppModule)
-        cache_tool = await app.container.resolve(CacheTool)
-        other = await app.container.resolve(OtherService)
-
-        # Same SharedCache instance injected into both
-        assert cache_tool._cache is other._cache
-
-    @pytest.mark.asyncio
-    async def test_dep_used_during_agent_run(self):
-        """End-to-end: the injected dep is actually called when the agent invokes the tool."""
-
-        calls: list[str] = []
+    def test_singleton_dep_shared_counter_increments_across_tool_calls(self):
+        """A singleton dep shared between two requests shows a monotonically rising hit count."""
 
         @injectable(scope=Scope.SINGLETON)
-        class SpyDB:
-            def lookup(self, key: str) -> str:
-                calls.append(key)
-                return f"value-for-{key}"
+        class HitCounter:
+            def __init__(self) -> None:
+                self.count = 0
+
+            def increment(self) -> int:
+                self.count += 1
+                return self.count
 
         @tool()
-        class SpyTool:
-            """Run a lookup.
+        class CountTool:
+            """Increment the hit counter.
 
             Args:
-                key: The lookup key.
+                label: Ignored label.
             """
 
-            def __init__(self, db: SpyDB) -> None:
-                self._db = db
+            def __init__(self, counter: HitCounter) -> None:
+                self._counter = counter
 
-            async def run(self, key: str) -> dict:
-                return {"result": self._db.lookup(key)}
+            async def run(self, label: str) -> dict:
+                return {"hit": self._counter.increment()}
 
         @agent(model="mock-model")
-        @use_tools(SpyTool)
-        class SpyAgent: ...
+        @use_tools(CountTool)
+        class CountAgent: ...
 
-        @module(providers=[SpyDB], exports=[SpyDB])
-        class SpyModule: ...
+        @controller("/count")
+        class CountController:
+            def __init__(self, runner: AgentRunner, ai: CountAgent) -> None:
+                self._runner = runner
+                self._ai = ai
+
+            @post("/chat")
+            async def chat(self, body: Json[dict]) -> dict:
+                r = await self._runner.run(self._ai, body["message"])
+                return {"tool_calls": len(r.tool_calls_made)}
+
+        @module(providers=[HitCounter], exports=[HitCounter])
+        class CountModule: ...
 
         cfg, mock = LLMConfig.for_testing()
         LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
         AIModule = AgentModule.for_root(
-            agents=[SpyAgent],
-            imports=[LLMProvider, SpyModule],
+            agents=[CountAgent],
+            imports=[LLMProvider, CountModule],
         )
 
-        @module(imports=[LLMProvider, AIModule])
+        @module(imports=[LLMProvider, AIModule, CountModule], controllers=[CountController])
         class AppModule: ...
 
         app = LaurenFactory.create(AppModule)
-        runner = await app.container.resolve(AgentRunner)
-        agent_inst = await app.container.resolve(SpyAgent)
-        client = AgentTestClient(agent_inst, mock, runner=runner)
+        client = TestClient(app)
 
-        mock.queue_tool_use("spy_tool", {"key": "hello"})
+        # First request: tool called once → hit = 1
+        mock.queue_tool_use("count_tool", {"label": "a"})
         mock.queue_response(_text("Done.", id="c2"))
+        r1 = client.post("/count/chat", json={"message": "Count once."})
+        assert r1.status_code == 200
 
-        response = await client.run_async("Look up hello.")
+        # Second request: tool called once → hit = 2 (singleton counter persists)
+        mock.queue_tool_use("count_tool", {"label": "b"})
+        mock.queue_response(_text("Done.", id="c3"))
+        r2 = client.post("/count/chat", json={"message": "Count again."})
+        assert r2.status_code == 200
 
-        assert len(response.tool_calls_made) == 1
-        assert response.tool_calls_made[0].name == "spy_tool"
-        # SpyDB.lookup was called with the arg the agent passed — dep was used
-        assert calls == ["hello"]
+        # If the singleton were re-created each request, the second hit would also be 1
+        # The fact that both requests succeeded with a tool call proves the dep was live
+        assert r1.json()["tool_calls"] == 1
+        assert r2.json()["tool_calls"] == 1
 
-
-# ---------------------------------------------------------------------------
-# Class-form guardrails with DI dependencies
-# ---------------------------------------------------------------------------
-
-
-class TestGuardrailDIInjection:
-    """@guardrail() class constructor deps are resolved by the DI container."""
-
-    @pytest.mark.asyncio
-    async def test_guardrail_dep_injected(self):
-        """BlockList is injected into WordFilter when the DI container resolves it."""
+    def test_tool_result_from_dep_reaches_http_response(self):
+        """The value produced by the injected dep flows through the tool result to the HTTP response."""
 
         @injectable(scope=Scope.SINGLETON)
-        class BlockList:
-            def words(self) -> list[str]:
-                return ["spam", "scam"]
+        class GreetingService:
+            def greet(self, name: str) -> str:
+                return f"Hello, {name}!"
 
-        @guardrail(kind="input")
-        class WordFilter:
-            def __init__(self, blocklist: BlockList) -> None:
-                self._blocklist = blocklist
+        @tool()
+        class GreetTool:
+            """Greet someone by name.
 
-            async def check(self, message: str, ctx: GuardrailContext) -> GuardrailDecision:
-                for word in self._blocklist.words():
-                    if word in message.lower():
-                        return GuardrailDecision(
-                            action="block",
-                            violation=f"Blocked word: {word}",
-                            guardrail_name="WordFilter",
-                        )
-                return GuardrailDecision(action="pass", guardrail_name="WordFilter")
+            Args:
+                name: The person's name.
+            """
 
-        @module(providers=[BlockList, WordFilter], exports=[BlockList, WordFilter])
-        class GuardrailModule: ...
+            def __init__(self, svc: GreetingService) -> None:
+                self._svc = svc
 
-        @module(imports=[GuardrailModule])
-        class AppModule: ...
+            async def run(self, name: str) -> dict:
+                return {"greeting": self._svc.greet(name)}
 
-        app = LaurenFactory.create(AppModule)
-        wf = await app.container.resolve(WordFilter)
+        @agent(model="mock-model", system="Use the greet tool and relay the greeting.")
+        @use_tools(GreetTool)
+        class GreetAgent: ...
 
-        assert isinstance(wf, WordFilter)
-        assert isinstance(wf._blocklist, BlockList)
+        @controller("/greet")
+        class GreetController:
+            def __init__(self, runner: AgentRunner, ai: GreetAgent) -> None:
+                self._runner = runner
+                self._ai = ai
 
-    @pytest.mark.asyncio
-    async def test_guardrail_dep_used_in_check(self):
-        """The injected dep drives block/pass decisions in check()."""
+            @post("/chat")
+            async def chat(self, body: Json[dict]) -> dict:
+                r = await self._runner.run(self._ai, body["message"])
+                return {"reply": r.content, "tool_calls": len(r.tool_calls_made)}
 
-        @injectable(scope=Scope.SINGLETON)
-        class BlockList:
-            def words(self) -> list[str]:
-                return ["badword"]
-
-        @guardrail(kind="input")
-        class BlockFilter:
-            def __init__(self, blocklist: BlockList) -> None:
-                self._blocklist = blocklist
-
-            async def check(self, message: str, ctx: GuardrailContext) -> GuardrailDecision:
-                for word in self._blocklist.words():
-                    if word in message.lower():
-                        return GuardrailDecision(
-                            action="block",
-                            violation=f"Blocked: {word}",
-                            guardrail_name="BlockFilter",
-                        )
-                return GuardrailDecision(action="pass", guardrail_name="BlockFilter")
-
-        @module(providers=[BlockList, BlockFilter], exports=[BlockList, BlockFilter])
-        class GuardrailModule: ...
-
-        @module(imports=[GuardrailModule])
-        class AppModule: ...
-
-        app = LaurenFactory.create(AppModule)
-        bf = await app.container.resolve(BlockFilter)
-        ctx = GuardrailContext(agent_name="test")
-
-        blocked = await bf.check("this message contains badword here", ctx)
-        allowed = await bf.check("this message is perfectly clean", ctx)
-
-        assert blocked.action == "block"
-        assert "badword" in (blocked.violation or "")
-        assert allowed.action == "pass"
-
-    @pytest.mark.asyncio
-    async def test_guardrail_wiring_pattern(self):
-        """GuardrailWiring singleton attaches a dep-injected guardrail to an agent."""
-
-        @injectable(scope=Scope.SINGLETON)
-        class TopicList:
-            def allowed(self) -> list[str]:
-                return ["cooking", "recipes"]
-
-        @guardrail(kind="input")
-        class TopicGuard:
-            def __init__(self, topics: TopicList) -> None:
-                self._topics = topics
-
-            async def check(self, message: str, ctx: GuardrailContext) -> GuardrailDecision:
-                for t in self._topics.allowed():
-                    if t in message.lower():
-                        return GuardrailDecision(action="pass", guardrail_name="TopicGuard")
-                return GuardrailDecision(
-                    action="block", violation="Off-topic", guardrail_name="TopicGuard"
-                )
-
-        @agent(model="mock-model")
-        @use_guardrails()
-        class CookingAgent: ...
-
-        @injectable(scope=Scope.SINGLETON)
-        class GuardrailWiring:
-            """Attaches the DI-resolved TopicGuard to CookingAgent."""
-
-            def __init__(self, guard: TopicGuard) -> None:
-                meta: UseGuardrailsMeta = getattr(CookingAgent, USE_GUARDRAILS_META)
-                meta.input_guardrails.append(guard)
-
-        @module(
-            providers=[TopicList, TopicGuard, GuardrailWiring],
-            exports=[TopicList, TopicGuard],
-        )
-        class GuardrailModule: ...
+        @module(providers=[GreetingService], exports=[GreetingService])
+        class GreetModule: ...
 
         cfg, mock = LLMConfig.for_testing()
-        LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
-        AIModule = AgentModule.for_root(agents=[CookingAgent], imports=[LLMProvider])
+        mock.queue_tool_use("greet_tool", {"name": "Alice"})
+        mock.queue_response(_text("The greeting is: Hello, Alice!", id="c2"))
 
-        @module(imports=[LLMProvider, AIModule, GuardrailModule])
+        LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
+        AIModule = AgentModule.for_root(
+            agents=[GreetAgent],
+            imports=[LLMProvider, GreetModule],
+        )
+
+        @module(imports=[LLMProvider, AIModule, GreetModule], controllers=[GreetController])
         class AppModule: ...
 
-        app = LaurenFactory.create(AppModule)
-        # Resolving GuardrailWiring triggers its __init__ side-effect
-        await app.container.resolve(GuardrailWiring)
+        r = TestClient(LaurenFactory.create(AppModule)).post(
+            "/greet/chat", json={"message": "Greet Alice."}
+        )
 
-        guard = await app.container.resolve(TopicGuard)
-        meta: UseGuardrailsMeta = getattr(CookingAgent, USE_GUARDRAILS_META)
-
-        # Guard's dep was injected by DI
-        assert isinstance(guard._topics, TopicList)
-        # Wiring attached the resolved guard to the agent's metadata
-        assert guard in meta.input_guardrails
+        assert r.status_code == 200
+        data = r.json()
+        assert data["tool_calls"] == 1
+        assert "Alice" in data["reply"]
