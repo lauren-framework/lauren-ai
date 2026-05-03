@@ -512,54 +512,117 @@ class AgentModule:
         :return: A ``@module``-decorated class.
         :rtype: type
         """
+        import inspect as _inspect  # noqa: PLC0415
+
         from lauren_ai._agents import USE_TOOLS_META  # noqa: PLC0415
         from lauren_ai._agents._runner import AgentRunner  # noqa: PLC0415
+        from lauren_ai._tools import TOOL_META  # noqa: PLC0415
         from lauren_ai._tools._registry import ToolRegistry  # noqa: PLC0415
 
-        # Build and populate the shared ToolRegistry
-        registry = ToolRegistry()
+        _captured_tool_cache = tool_cache
+        _captured_signals = signals
 
-        def _safe_register(tool_item: Any, label: str) -> None:
+        # ── Categorize tools into function-form and class-form ──────────────
+        #
+        # Function-form tools (plain functions decorated with @tool()) are
+        # registered into the ToolRegistry immediately — no DI needed.
+        #
+        # Class-form tools (classes decorated with @tool()) are auto-marked
+        # @injectable(scope=SINGLETON) by @tool() and are added as DI
+        # providers.  The ToolRegistry is built lazily via use_factory so the
+        # DI container can inject fully-resolved tool instances (with their
+        # own constructor dependencies) into the registry.
+
+        _fn_tools: list[Any] = []
+        _class_tools: list[type] = []
+        _seen_tool_names: set[str] = set()
+
+        def _categorize(tool_item: Any) -> None:
             if tool_item is None:
                 return
-            from lauren_ai._tools import TOOL_META  # noqa: PLC0415
-
-            tool_meta = getattr(tool_item, TOOL_META, None)
-            if tool_meta is None:
+            meta = getattr(tool_item, TOOL_META, None)
+            if meta is None:
                 logger.warning(
                     "lauren_ai.AgentModule: %r has no @tool() metadata — skipping",
                     tool_item,
                 )
                 return
-            if tool_meta.name in registry:
-                return  # Already registered; skip silently
-            try:
-                registry.register(tool_item)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "lauren_ai.AgentModule: could not register %s %r: %s",
-                    label,
-                    tool_item,
-                    exc,
-                )
+            if meta.name in _seen_tool_names:
+                return  # deduplicate across shared + per-agent lists
+            _seen_tool_names.add(meta.name)
+            if _inspect.isclass(tool_item):
+                _class_tools.append(tool_item)
+            else:
+                _fn_tools.append(tool_item)
 
-        # Register shared tools
         for tool_item in (tools or []):
-            _safe_register(tool_item, "shared tool")
+            _categorize(tool_item)
 
-        # Register per-agent tools (from @use_tools())
         for agent_cls in agents:
             for tool_item in getattr(agent_cls, USE_TOOLS_META, ()):
-                _safe_register(tool_item, f"tool for {agent_cls.__name__!r}")
+                _categorize(tool_item)
 
-        _captured_tool_cache = tool_cache
-        _captured_signals = signals
+        # ── Build providers / exports lists ──────────────────────────────────
 
-        # Use use_value for the registry (already built)
-        _registry_provider = use_value(provide=ToolRegistry, value=registry)
-
-        providers: list[Any] = [_registry_provider]
+        providers: list[Any] = []
         exports: list[Any] = [ToolRegistry]
+
+        # _eager_registry is set when no class-form tools are present (the
+        # registry is built immediately and exposed via use_value).  When
+        # class-form tools exist this stays None (registry is built lazily by DI).
+        _eager_registry: ToolRegistry | None = None
+
+        if _class_tools:
+            # Class-form tools need DI resolution.  Build the ToolRegistry via
+            # a factory that receives the DI-resolved instances positionally.
+            _captured_fn_tools = list(_fn_tools)
+
+            def _build_registry(*class_instances: Any) -> ToolRegistry:
+                r = ToolRegistry()
+                for fn_tool in _captured_fn_tools:
+                    try:
+                        r.register(fn_tool)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "lauren_ai.AgentModule: could not register fn tool %r: %s",
+                            fn_tool,
+                            exc,
+                        )
+                for instance in class_instances:
+                    try:
+                        r.register(type(instance), instance=instance)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "lauren_ai.AgentModule: could not register class tool instance %r: %s",
+                            instance,
+                            exc,
+                        )
+                return r
+
+            _registry_provider = use_factory(
+                provide=ToolRegistry,
+                factory=_build_registry,
+                inject=list(_class_tools),
+                scope=Scope.SINGLETON,
+            )
+            # Add class-form tools as DI providers (auto-injectable from @tool())
+            for cls_tool in _class_tools:
+                providers.append(cls_tool)
+        else:
+            # No class-form tools — build the registry eagerly (simpler path).
+            _eager_registry = ToolRegistry()
+            for fn_tool in _fn_tools:
+                try:
+                    _eager_registry.register(fn_tool)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "lauren_ai.AgentModule: could not register fn tool %r: %s",
+                        fn_tool,
+                        exc,
+                    )
+            _registry_provider = use_value(provide=ToolRegistry, value=_eager_registry)
+
+        providers.insert(0, _registry_provider)
 
         # Register all agent classes as providers (they are already
         # @injectable(scope=Scope.SINGLETON) from @agent())
@@ -612,7 +675,10 @@ class AgentModule:
         class _AgentModule:
             """Auto-generated agent provider module."""
 
-            registry_instance: ToolRegistry = registry
+            # Exposes the pre-built registry when only function-form tools are
+            # used (eager path).  None when class-form tools are present and
+            # the registry is built lazily by DI.
+            registry_instance: ToolRegistry | None = _eager_registry
             agent_classes: list[type] = list(agents)
 
         _AgentModule.__name__ = "AgentModule"

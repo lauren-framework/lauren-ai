@@ -291,13 +291,23 @@ def _build_meta(
 
     is_async = inspect.iscoroutinefunction(entry)
 
-    # Check whether entry point has a `ctx: ToolContext` parameter
+    # Check whether entry point has a `ctx: ToolContext` parameter.
+    # Use typing.get_type_hints() so that `from __future__ import annotations`
+    # (PEP 563) in the user's file doesn't turn the annotation into a string.
     reads_context = False
     try:
         sig = inspect.signature(entry)
+        import sys as _sys
+        import typing as _typing
+        _entry_module = _sys.modules.get(entry.__module__)
+        _globalns = vars(_entry_module) if _entry_module is not None else {}
+        try:
+            _hints = _typing.get_type_hints(entry, globalns=_globalns, include_extras=False)
+        except Exception:
+            _hints = {}
         for param_name, param in sig.parameters.items():
             if param_name == "ctx":
-                ann = param.annotation
+                ann = _hints.get(param_name, param.annotation)
                 # Accept bare ToolContext or Optional[ToolContext]
                 if ann is ToolContext:
                     reads_context = True
@@ -415,6 +425,21 @@ def tool(
             cache_key_fn=cache_key_fn,
         )
         setattr(fn_or_cls, TOOL_META, meta)
+
+        # For class-form tools: auto-apply @injectable(scope=SINGLETON) so the
+        # class can participate in the Lauren DI container and receive injected
+        # constructor dependencies (database, HTTP clients, other services, …).
+        # This mirrors what @agent() does for agent classes.
+        if inspect.isclass(fn_or_cls):
+            try:
+                from lauren import Scope, injectable  # noqa: PLC0415
+
+                # Only apply if not already marked injectable.
+                if not hasattr(fn_or_cls, "__lauren_injectable__"):
+                    injectable(scope=Scope.SINGLETON)(fn_or_cls)
+            except ImportError:
+                pass  # lauren not installed — DI unavailable, skip silently
+
         return fn_or_cls
 
     return decorator

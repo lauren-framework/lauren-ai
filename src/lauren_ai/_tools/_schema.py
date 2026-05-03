@@ -397,6 +397,20 @@ def generate_tool_schema(
     required: list[str] = []
 
     if sig is not None:
+        # Resolve annotations via typing.get_type_hints() so that
+        # `from __future__ import annotations` (PEP 563) in the user's file
+        # doesn't break schema generation. get_type_hints() evaluates the
+        # string annotations in the module's global namespace, returning real
+        # types instead of raw strings.
+        _entry_module = sys.modules.get(entry_fn.__module__)
+        _globalns = vars(_entry_module) if _entry_module is not None else {}
+        try:
+            _hints: dict[str, Any] = typing.get_type_hints(
+                entry_fn, globalns=_globalns, include_extras=False
+            )
+        except Exception:
+            _hints = {}
+
         for param_name, param in sig.parameters.items():
             # Skip 'self' and 'cls'
             if param_name in ("self", "cls"):
@@ -404,14 +418,16 @@ def generate_tool_schema(
             # Skip private parameters
             if param_name.startswith("_"):
                 continue
+
+            # Resolve annotation (PEP 563 safe: prefer get_type_hints result)
+            ann = _hints.get(param_name, param.annotation)
+
             # Skip ctx: ToolContext / ctx: ToolContext | None
             if param_name == "ctx":
-                ann = param.annotation
                 ann_str = str(ann)
                 if ann is ToolContext or "ToolContext" in ann_str:
                     continue
 
-            ann = param.annotation
             prop_schema = type_to_json_schema(ann)
 
             # Add description from docstring if available
