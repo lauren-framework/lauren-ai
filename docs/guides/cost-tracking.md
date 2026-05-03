@@ -14,7 +14,7 @@ tokens.
 from lauren_ai._cost import PricingTable, ModelPricing
 
 table = PricingTable(models={
-    "my-model": ModelPricing(input_per_m=1.00, output_per_m=5.00),
+    "my-model": ModelPricing(input_per_1k=0.001, output_per_1k=0.005),
 })
 ```
 

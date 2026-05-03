@@ -120,6 +120,11 @@ class AgentContext:
     :param request: Originating HTTP :class:`~lauren.types.Request`, or
         ``None`` when the agent is not invoked from a web handler.
     :type request: Any | None
+    :param execution_context: The lauren :class:`~lauren.types.ExecutionContext`
+        (carries ``request``, ``handler_class``, ``handler_func``,
+        ``route_template``, and ``metadata``) when the agent is invoked
+        from a route handler.  ``None`` otherwise.
+    :type execution_context: Any | None
     :param signals: Signal bus for emitting lifecycle events.  ``None`` in
         environments where no :class:`SignalBus` is registered.
     :type signals: Any | None
@@ -133,6 +138,7 @@ class AgentContext:
     turn: int
     metadata: dict[str, Any]
     request: Any | None = None
+    execution_context: Any | None = None  # lauren ExecutionContext, or None
     signals: Any | None = None
 
     def get_metadata(self, key: str, default: Any = None) -> Any:

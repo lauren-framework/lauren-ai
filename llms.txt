@@ -91,7 +91,11 @@ Rules:
 - Schema is generated from type annotations + Google-style `Args:` docstring section
 - Any parameter annotated as `ToolContext` (or `ToolContext | None`) is injected by
   the runner and excluded from the JSON schema — the parameter may have **any name**
-- **Never add `from __future__ import annotations`** to files with `@tool()` decorators
+- `from __future__ import annotations` is safe in tool/agent files
+- Class-form tools get `@injectable(scope=SINGLETON)` applied automatically; use
+  `@tool() @injectable(scope=Scope.REQUEST)` to override the scope
+- Subclasses of `@tool()`-decorated classes must re-apply `@tool()` themselves;
+  the registry raises `MetadataInheritanceError` otherwise
 
 ### @agent() + @use_tools() — declare an agent
 
@@ -104,7 +108,7 @@ class WeatherAgent: ...
 ```
 
 - `@agent()` is the **outermost** decorator; `@use_tools()` is below it (applied first)
-- Mandatory ordering: `@agent` → `@remember` → `@guardrail` → `@use_tools`
+- Mandatory ordering: `@agent` → `@remember` → `@use_guardrails` → `@use_tools`
 - Agents are singletons in the DI container by default
 
 ### AgentRunner — running agents
@@ -115,10 +119,11 @@ from lauren_ai import AgentRunner
 runner = AgentRunner(transport=transport, registry=registry, config=llm_config)
 
 response = await runner.run(
-    agent_instance,          # @agent()-decorated class instance
-    "What's the weather?",   # User message string
+    agent_instance,              # @agent()-decorated class instance
+    "What's the weather?",       # User message string
     conversation_id="sess-1",
     metadata={"user_id": "u1"},
+    execution_context=exec_ctx,  # lauren ExecutionContext (optional, from route handler)
 )
 
 print(response.content)       # str — final text output
@@ -129,13 +134,13 @@ print(response.tool_calls_made)  # list[ToolCall]
 print(response.reasoning_traces) # list[str] — extended thinking traces (Anthropic)
 ```
 
-### @guardrail() — content safety
+### @use_guardrails() — attach guardrail instances to an agent
 
 ```python
-from lauren_ai import guardrail, PromptInjectionFilter, PIIRedactor, LengthFilter, TopicFilter
+from lauren_ai import use_guardrails, PromptInjectionFilter, PIIRedactor, LengthFilter, TopicFilter
 
 @agent(model="claude-opus-4-6")
-@guardrail(
+@use_guardrails(
     input=[PromptInjectionFilter(), PIIRedactor()],
     output=[LengthFilter(max_chars=8000)],
 )
@@ -144,6 +149,22 @@ class SafeAgent: ...
 ```
 
 Built-ins: `PromptInjectionFilter`, `PIIRedactor`, `LengthFilter`, `TopicFilter`, `LLMGuardrail`.
+
+### @guardrail() — DI-injectable guardrail class
+
+```python
+from lauren_ai import guardrail, GuardrailDecision, GuardrailContext
+
+@guardrail(kind="input")   # also marks as @injectable(scope=Scope.SINGLETON)
+class ProfanityFilter:
+    async def check(self, message: str, ctx: GuardrailContext) -> GuardrailDecision:
+        if "badword" in message.lower():
+            return GuardrailDecision(action="block", violation="Profanity",
+                                     guardrail_name="ProfanityFilter")
+        return GuardrailDecision(action="pass", guardrail_name="ProfanityFilter")
+```
+
+`kind` may be `"input"`, `"output"`, or `"any"` (default).
 
 ### @remember() — persistent user memory
 
@@ -154,12 +175,12 @@ _memory = InMemoryUserMemoryStore()
 
 @agent(model="claude-opus-4-6")
 @remember(store=_memory, extract=True, inject=True, top_k=5)
-@guardrail(input=[PromptInjectionFilter()])
+@use_guardrails(input=[PromptInjectionFilter()])
 @use_tools(my_tool)
 class PersonalAgent: ...
 ```
 
-- Stack between `@agent()` and `@guardrail()`
+- Stack between `@agent()` and `@use_guardrails()`
 - `extract=True`: facts extracted from each turn and stored
 - `inject=True`: top-k relevant facts prepended to system prompt
 
@@ -189,11 +210,12 @@ from lauren_ai import ToolContext
 @tool()
 async def my_tool(query: str, ctx: ToolContext | None = None) -> dict:
     """..."""
-    # ctx.agent_context  — AgentContext for the running agent
-    # ctx.tool_use_id    — Provider-assigned tool call ID
-    # ctx.turn           — Current agentic loop iteration (0-based)
-    # ctx.request        — Originating HTTP request (or None)
-    # ctx.state          — Mutable dict for per-call local storage
+    # ctx.agent_context      — AgentContext for the running agent
+    # ctx.tool_use_id        — Provider-assigned tool call ID
+    # ctx.turn               — Current agentic loop iteration (0-based)
+    # ctx.request            — Originating HTTP request (or None)
+    # ctx.execution_context  — lauren ExecutionContext (route/handler metadata, or None)
+    # ctx.state              — Mutable dict for per-call local storage
     # ctx.get_metadata("key")  — Read from agent_context.metadata
     return {"result": query}
 ```
@@ -394,7 +416,8 @@ msg = Message.from_multimodal("user", [
 | `@tool()` | Expose a function or class as an agent tool | Yes |
 | `@agent()` | Declare an agent class | Yes |
 | `@use_tools(t1, t2)` | Attach tools to an agent | Yes |
-| `@guardrail()` | Attach input/output guardrails | Yes |
+| `@use_guardrails(...)` | Attach guardrail instances to an agent | Yes |
+| `@guardrail()` | Mark a class as a DI-injectable guardrail | Yes |
 | `@remember()` | Enable persistent user memory | Yes |
 | `@team()` | Declare a multi-agent team | Yes |
 | `@traced()` | Wrap with tracing spans | Yes |
@@ -402,10 +425,10 @@ msg = Message.from_multimodal("user", [
 ## Decorator ordering (mandatory)
 
 ```
-@agent()        ← outermost
-@remember()     ← optional
-@guardrail()    ← optional
-@use_tools()    ← innermost
+@agent()            ← outermost
+@remember()         ← optional
+@use_guardrails()   ← optional
+@use_tools()        ← innermost
 class Agent: ...
 ```
 

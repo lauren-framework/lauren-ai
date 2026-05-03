@@ -4,10 +4,19 @@
 Guardrails are callables that inspect or modify text before it is sent to an LLM
 (input guardrails) or after the model responds (output guardrails).
 
+Two decorators are provided:
+
+| Decorator | Purpose |
+|---|---|
+| `@guardrail()` | **Class decorator** — marks a class as a DI-injectable guardrail provider.  Analogous to `@injectable()`. |
+| `@use_guardrails()` | **Agent decorator** — attaches pre-built guardrail instances to an `@agent()` class.  Analogous to `@use_guards()`. |
+
+---
+
 ## Core types
 
 ```python
-from lauren_ai._guardrails import (
+from lauren_ai import (
     GuardrailDecision,
     GuardrailContext,
     InputGuardrail,
@@ -39,18 +48,19 @@ ctx = GuardrailContext(
 )
 ```
 
-## @guardrail() decorator
+---
 
-Apply `@guardrail()` **below** `@agent()` to attach safety checks to an agent
-class.  Input guardrails run before the LLM is called; output guardrails run
-after:
+## @use_guardrails() — attach instances to an agent
+
+Apply `@use_guardrails()` **below** `@agent()` to attach safety checks to an
+agent class.  Input guardrails run before the LLM is called; output guardrails
+run after:
 
 ```python
-from lauren_ai._agents import agent
-from lauren_ai._guardrails import guardrail, TopicFilter, PIIRedactor
+from lauren_ai import agent, use_guardrails, TopicFilter, PIIRedactor
 
 @agent(model="claude-haiku-4-5")
-@guardrail(
+@use_guardrails(
     input=[TopicFilter(allowed_topics=["cooking", "recipes", "food"])],
     output=[PIIRedactor(entities=["EMAIL", "PHONE"])],
 )
@@ -58,8 +68,107 @@ class CookingAssistant:
     """A cooking assistant that only discusses food topics."""
 ```
 
-`@guardrail` must be called with parentheses.  Using the bare form raises
+`None` entries are silently dropped, enabling conditional selection:
+
+```python
+@agent(model="claude-opus-4-6")
+@use_guardrails(
+    input=[
+        PromptInjectionFilter(),
+        TopicFilter(allowed_topics=allowed) if allowed else None,
+    ],
+)
+class DynamicAgent: ...
+```
+
+`@use_guardrails` must be called with parentheses.  Using the bare form raises
 `DecoratorUsageError`.
+
+---
+
+## @guardrail() — DI-injectable guardrail class
+
+Use `@guardrail()` to mark a class as a DI provider.  This registers it with
+the Lauren DI container (via `@injectable()`) so it can be resolved, injected,
+and lifecycle-managed by the framework — exactly the same as `@injectable()`,
+but also stamps the class with `GUARDRAIL_CLASS_META` so the system knows it is
+a guardrail implementation.
+
+```python
+from lauren_ai import guardrail, GuardrailDecision, GuardrailContext
+
+@guardrail(kind="input")
+class ProfanityFilter:
+    """Block messages containing profanity.
+
+    DI-injectable: resolved as a SINGLETON by the Lauren DI container.
+    """
+
+    WORDS = {"badword1", "badword2"}
+
+    async def check(self, message: str, context: GuardrailContext) -> GuardrailDecision:
+        for word in self.WORDS:
+            if word in message.lower():
+                return GuardrailDecision(
+                    action="block",
+                    violation="Profanity detected.",
+                    guardrail_name=type(self).__name__,
+                )
+        return GuardrailDecision(action="pass", guardrail_name=type(self).__name__)
+```
+
+`kind` hints at the intended position (`"input"` / `"output"` / `"any"`); it
+does not affect runtime behaviour but aids static analysis and documentation.
+
+### Wiring DI guardrails into agents
+
+Because `@guardrail()` classes are registered as DI singletons, you can inject
+them into a wiring class that attaches them to agents at startup — the same
+pattern used for delegation tools:
+
+```python
+# guardrail_wiring.py — HAS from __future__ import annotations
+from __future__ import annotations
+
+import logging
+from lauren import Scope, injectable
+from lauren_ai import USE_GUARDRAILS_META, UseGuardrailsMeta
+
+from .filters import ProfanityFilter
+from .my_agent import MyAgent
+
+logger = logging.getLogger(__name__)
+
+
+@injectable(scope=Scope.SINGLETON)
+class GuardrailWiring:
+    """Wires DI-resolved guardrails into agent metadata at startup."""
+
+    def __init__(
+        self,
+        profanity_filter: ProfanityFilter,
+        my_agent: MyAgent,
+    ) -> None:
+        meta: UseGuardrailsMeta = getattr(my_agent, USE_GUARDRAILS_META, None)
+        if meta is None:
+            meta = UseGuardrailsMeta()
+            setattr(my_agent, USE_GUARDRAILS_META, meta)
+        meta.input_guardrails.append(profanity_filter)
+        logger.debug("GuardrailWiring: ProfanityFilter wired into MyAgent")
+```
+
+Register `GuardrailWiring` in your module's `providers=[...]` list alongside
+the guardrail class:
+
+```python
+@module(
+    imports=[LLMProvider, AgentProvider],
+    providers=[ProfanityFilter, GuardrailWiring],
+)
+class AppModule: ...
+```
+
+---
 
 ## Built-in guardrails
 
@@ -78,15 +187,13 @@ guard = TopicFilter(
 ```
 
 Keyword matching is case-insensitive and checks whether any topic string appears
-literally in the message.  For semantic matching, supply an `embed_fn` that
-accepts a list of strings and returns objects with a `.vector` attribute (or
-plain lists).
+literally in the message.
 
 ### PIIRedactor
 
-Redacts personally-identifiable information from LLM responses using regex
-patterns.  Returns `action="modify"` with the cleaned text when PII is found,
-or `action="pass"` when the text is clean.
+Redacts personally-identifiable information using regex patterns.  Returns
+`action="modify"` with the cleaned text when PII is found, `action="pass"`
+otherwise.
 
 ```python
 guard = PIIRedactor(
@@ -133,7 +240,7 @@ Uses a secondary LLM call to judge whether content is safe.  The `prompt` must
 contain `{content}` which is replaced with the text being evaluated:
 
 ```python
-from lauren_ai._guardrails import LLMGuardrail
+from lauren_ai import LLMGuardrail
 
 guard = LLMGuardrail(
     llm=llm_service,
@@ -147,30 +254,33 @@ guard = LLMGuardrail(
 )
 ```
 
-The `block_if` comparison is case-insensitive.  The secondary LLM call is made
-with the same `LLMService` you pass in; use a cheap, fast model.
+The `block_if` comparison is case-insensitive.  Use a cheap, fast model for the
+secondary call.
+
+---
 
 ## Writing a custom guardrail
 
 Any object with a `check(text, context) -> GuardrailDecision` coroutine method
-satisfies the `InputGuardrail` / `OutputGuardrail` protocol:
+satisfies the `InputGuardrail` / `OutputGuardrail` protocol.  To make it
+DI-injectable, add `@guardrail()`:
 
 ```python
-from lauren_ai._guardrails import GuardrailDecision, GuardrailContext
+from lauren_ai import guardrail, GuardrailDecision, GuardrailContext
 
+# Plain class — instantiate manually and pass to @use_guardrails()
 class ProfanityFilter:
-    WORDS = {"badword1", "badword2"}
-
     async def check(self, message: str, context: GuardrailContext) -> GuardrailDecision:
-        for word in self.WORDS:
-            if word in message.lower():
-                return GuardrailDecision(
-                    action="block",
-                    violation="Profanity detected.",
-                    guardrail_name=type(self).__name__,
-                )
-        return GuardrailDecision(action="pass", guardrail_name=type(self).__name__)
+        ...
+
+# DI-injectable class — resolved by the Lauren DI container
+@guardrail(kind="input")
+class ProfanityFilter:
+    async def check(self, message: str, context: GuardrailContext) -> GuardrailDecision:
+        ...
 ```
+
+---
 
 ## GuardrailViolated signal
 
@@ -178,8 +288,7 @@ class ProfanityFilter:
 when a guardrail fires, enabling centralized audit logging:
 
 ```python
-from lauren_ai._guardrails import GuardrailViolated
-from lauren_ai._signals import SignalBus
+from lauren_ai import GuardrailViolated, SignalBus
 
 bus = SignalBus()
 
@@ -191,12 +300,26 @@ async def log_violation(event: GuardrailViolated) -> None:
     )
 ```
 
-## Error types
+---
 
-| Error | Module | Raised when |
-|---|---|---|
-| `DecoratorUsageError` | `_exceptions` | `@guardrail` used without parentheses |
+## Decorator ordering — mandatory
 
-Guardrail violations are expressed as `GuardrailDecision(action="block")` values,
-not exceptions — the caller (typically the agent runner) decides how to handle
-them.
+```
+@agent()            ← outermost
+@remember()         ← optional
+@use_guardrails()   ← optional (attaches guardrail instances)
+@use_tools()        ← innermost
+class MyAgent: ...
+```
+
+---
+
+## Error reference
+
+| Error | Raised when |
+|---|---|
+| `DecoratorUsageError` | `@use_guardrails` or `@guardrail` used without parentheses |
+| `GuardrailViolated` | A guardrail returns `action="block"` and the runner propagates it |
+
+Guardrail block decisions are expressed as `GuardrailDecision(action="block")`,
+not exceptions — the agent runner decides how to handle them.

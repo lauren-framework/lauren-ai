@@ -87,6 +87,7 @@ class ToolContext:
     tool_use_id: str
     turn: int
     request: Any | None = None
+    execution_context: Any | None = None  # lauren ExecutionContext, or None
     state: dict[str, Any] = field(default_factory=dict)
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
@@ -214,6 +215,12 @@ class ToolMeta:
         ``input`` dict and returns a string key.  When ``None`` a default
         JSON-based key is derived from ``name + sorted(input.items())``.
     :type cache_key_fn: Callable[[dict[str, Any]], str] | None
+    :param context_param_name: Name of the parameter annotated with
+        ``ToolContext`` in the entry-point signature.  ``None`` when the
+        entry point does not declare a context parameter.  Used by the
+        executor to inject the context under the correct keyword name
+        (the parameter may be named anything — ``ctx``, ``agent_ctx``, …).
+    :type context_param_name: str | None
     """
 
     name: str
@@ -221,6 +228,7 @@ class ToolMeta:
     parameters: ToolSchema
     is_async: bool
     reads_context: bool
+    context_param_name: str | None = None
     requires_confirmation: bool = False
     pre_hook: Callable[..., Any] | None = None
     post_hook: Callable[..., Any] | None = None
@@ -295,6 +303,7 @@ def _build_meta(
     # Use typing.get_type_hints() so that `from __future__ import annotations`
     # (PEP 563) in the user's file doesn't turn the annotation into a string.
     reads_context = False
+    context_param_name: str | None = None
     try:
         sig = inspect.signature(entry)
         import sys as _sys
@@ -311,11 +320,13 @@ def _build_meta(
             # regardless of the parameter name.
             if ann is ToolContext:
                 reads_context = True
+                context_param_name = param_name
                 break
             # Handle Optional / X | None via string check for forward refs
             ann_str = str(ann)
             if "ToolContext" in ann_str:
                 reads_context = True
+                context_param_name = param_name
                 break
     except (ValueError, TypeError):
         pass
@@ -326,6 +337,7 @@ def _build_meta(
         parameters=schema,
         is_async=is_async,
         reads_context=reads_context,
+        context_param_name=context_param_name,
         requires_confirmation=requires_confirmation,
         pre_hook=pre_hook,
         post_hook=post_hook,
@@ -424,21 +436,25 @@ def tool(
             cache_ttl=cache_ttl,
             cache_key_fn=cache_key_fn,
         )
-        setattr(fn_or_cls, TOOL_META, meta)
 
         # For class-form tools: auto-apply @injectable(scope=SINGLETON) so the
         # class can participate in the Lauren DI container and receive injected
         # constructor dependencies (database, HTTP clients, other services, …).
         # This mirrors what @agent() does for agent classes.
+        # NOTE: assign back — injectable() may return a new object.
         if inspect.isclass(fn_or_cls):
             try:
                 from lauren import Scope, injectable  # noqa: PLC0415
 
-                # Only apply if not already marked injectable.
-                if not hasattr(fn_or_cls, "__lauren_injectable__"):
-                    injectable(scope=Scope.SINGLETON)(fn_or_cls)
+                # Only apply if not already marked injectable (check __dict__
+                # to avoid detecting inherited __lauren_injectable__).
+                if "__lauren_injectable__" not in fn_or_cls.__dict__:
+                    fn_or_cls = injectable(scope=Scope.SINGLETON)(fn_or_cls)
             except ImportError:
                 pass  # lauren not installed — DI unavailable, skip silently
+
+        # Set TOOL_META after the injectable block so it lands on the final object.
+        setattr(fn_or_cls, TOOL_META, meta)
 
         return fn_or_cls
 

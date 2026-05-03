@@ -11,6 +11,7 @@ import nox
 # ---------------------------------------------------------------------------
 
 nox.options.sessions = ["lint", "tests"]
+nox.options.default_venv_backend = "uv"
 nox.options.reuse_existing_virtualenvs = True
 # Keep envs in a user-writable location so `nox` works regardless of which
 # user originally bootstrapped the project (root vs ai-slave, etc.).
@@ -29,13 +30,12 @@ LAUREN_FRAMEWORK_PATH = "../lauren-framework"
 
 
 def _install_dev(session: nox.Session) -> None:
-    """Install the package in editable mode with dev extras.
+    """Install the package in editable mode with dev extras via uv.
 
-    ``[tool.uv.sources]`` is a uv-only feature; pip (used by nox) cannot
-    resolve local path overrides from pyproject.toml.  We pass both the local
-    ``lauren`` path and this package in **one** pip call so that pip's
-    resolver sees the local ``lauren`` editable install and accepts it as
-    satisfying ``lauren>=1.0``.
+    ``[tool.uv.sources]`` is not honoured by ``uv pip install`` (only by
+    ``uv sync``).  We pass both the local ``lauren`` path and this package in
+    **one** call so that uv's resolver sees the local ``lauren`` editable
+    install and accepts it as satisfying ``lauren>=1.0``.
     """
     session.install("-e", LAUREN_FRAMEWORK_PATH, "-e", ".[dev,anthropic]")
 

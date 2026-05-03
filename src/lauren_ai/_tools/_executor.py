@@ -401,9 +401,10 @@ class ToolExecutor:
         # Build kwargs from tool_input
         kwargs = dict(tool_input)
 
-        # Inject ToolContext if needed
-        if meta.reads_context:
-            kwargs["ctx"] = tool_context
+        # Inject ToolContext if needed — use the annotation-discovered param name,
+        # not a hardcoded "ctx", so any parameter name works.
+        if meta.reads_context and meta.context_param_name:
+            kwargs[meta.context_param_name] = tool_context
 
         # Call (sync or async)
         if meta.is_async:

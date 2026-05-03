@@ -6,15 +6,18 @@ import pytest
 from lauren_ai._config import LLMConfig
 from lauren_ai._exceptions import DecoratorUsageError
 from lauren_ai._guardrails import (
-    GUARDRAIL_META,
+    GUARDRAIL_CLASS_META,
+    USE_GUARDRAILS_META,
+    GuardrailClassMeta,
     GuardrailContext,
-    GuardrailMeta,
     LengthFilter,
     LLMGuardrail,
     PIIRedactor,
     PromptInjectionFilter,
     TopicFilter,
+    UseGuardrailsMeta,
     guardrail,
+    use_guardrails,
 )
 from lauren_ai._module import LLMService
 from lauren_ai._transport import Completion, TokenUsage
@@ -37,26 +40,117 @@ def _make_completion(content: str) -> Completion:
     )
 
 
-class TestGuardrailDecorator:
+# ---------------------------------------------------------------------------
+# @use_guardrails() — attaches instances to an agent class
+# ---------------------------------------------------------------------------
+
+
+class TestUseGuardrailsDecorator:
     def test_attaches_metadata(self):
         filter1 = LengthFilter(max_chars=100)
 
-        @guardrail(input=[filter1])
+        @use_guardrails(input=[filter1])
         class MyAgent:
             pass
 
-        meta: GuardrailMeta = getattr(MyAgent, GUARDRAIL_META)
+        meta: UseGuardrailsMeta = getattr(MyAgent, USE_GUARDRAILS_META)
         assert len(meta.input_guardrails) == 1
         assert meta.input_guardrails[0] is filter1
 
     def test_empty_guardrails(self):
-        @guardrail()
+        @use_guardrails()
         class MyAgent:
             pass
 
-        meta: GuardrailMeta = getattr(MyAgent, GUARDRAIL_META)
+        meta: UseGuardrailsMeta = getattr(MyAgent, USE_GUARDRAILS_META)
         assert meta.input_guardrails == []
         assert meta.output_guardrails == []
+
+    def test_bare_usage_raises(self):
+        with pytest.raises(DecoratorUsageError, match="parentheses"):
+            @use_guardrails
+            class Bad:
+                pass
+
+    def test_output_guardrails_attached(self):
+        @use_guardrails(output=[PIIRedactor()])
+        class MyAgent:
+            pass
+
+        meta: UseGuardrailsMeta = getattr(MyAgent, USE_GUARDRAILS_META)
+        assert len(meta.output_guardrails) == 1
+
+    def test_returns_same_class(self):
+        @use_guardrails(input=[LengthFilter()])
+        class MyAgent:
+            x = 42
+
+        assert MyAgent.x == 42
+        assert hasattr(MyAgent, USE_GUARDRAILS_META)
+
+    def test_combined_input_and_output(self):
+        inp = LengthFilter(max_chars=500)
+        out = PIIRedactor(entities=["EMAIL"])
+
+        @use_guardrails(input=[inp], output=[out])
+        class MyAgent:
+            pass
+
+        meta: UseGuardrailsMeta = getattr(MyAgent, USE_GUARDRAILS_META)
+        assert meta.input_guardrails == [inp]
+        assert meta.output_guardrails == [out]
+
+    def test_none_entries_are_dropped(self):
+        """None entries in the lists are silently filtered out."""
+        f = LengthFilter(max_chars=100)
+
+        @use_guardrails(input=[f, None, None], output=[None])
+        class MyAgent:
+            pass
+
+        meta: UseGuardrailsMeta = getattr(MyAgent, USE_GUARDRAILS_META)
+        assert meta.input_guardrails == [f]
+        assert meta.output_guardrails == []
+
+
+# ---------------------------------------------------------------------------
+# @guardrail() — marks a class as a DI-injectable guardrail
+# ---------------------------------------------------------------------------
+
+
+class TestGuardrailClassDecorator:
+    def test_attaches_class_metadata(self):
+        @guardrail()
+        class MyFilter:
+            async def check(self, message, context):
+                pass
+
+        meta: GuardrailClassMeta = getattr(MyFilter, GUARDRAIL_CLASS_META)
+        assert isinstance(meta, GuardrailClassMeta)
+
+    def test_default_kind_is_any(self):
+        @guardrail()
+        class MyFilter:
+            pass
+
+        meta: GuardrailClassMeta = getattr(MyFilter, GUARDRAIL_CLASS_META)
+        assert meta.kind == "any"
+
+    def test_kind_input(self):
+        @guardrail(kind="input")
+        class InputFilter:
+            pass
+
+        meta: GuardrailClassMeta = getattr(InputFilter, GUARDRAIL_CLASS_META)
+        assert meta.kind == "input"
+
+    def test_kind_output(self):
+        @guardrail(kind="output")
+        class OutputFilter:
+            pass
+
+        meta: GuardrailClassMeta = getattr(OutputFilter, GUARDRAIL_CLASS_META)
+        assert meta.kind == "output"
 
     def test_bare_usage_raises(self):
         with pytest.raises(DecoratorUsageError, match="parentheses"):
@@ -64,35 +158,63 @@ class TestGuardrailDecorator:
             class Bad:
                 pass
 
-    def test_output_guardrails_attached(self):
-        @guardrail(output=[PIIRedactor()])
-        class MyAgent:
+    def test_returns_same_class_identity_attributes(self):
+        """Decorated class preserves its own attributes."""
+        @guardrail()
+        class MyFilter:
+            threshold = 0.9
+
+        assert MyFilter.threshold == 0.9
+        assert hasattr(MyFilter, GUARDRAIL_CLASS_META)
+
+    def test_injectable_meta_is_set(self):
+        """@guardrail() must register INJECTABLE_META so the DI container picks it up."""
+        _INJECTABLE_META = "__lauren_injectable__"
+
+        @guardrail()
+        class InjFilter:
             pass
 
-        meta: GuardrailMeta = getattr(MyAgent, GUARDRAIL_META)
-        assert len(meta.output_guardrails) == 1
+        assert hasattr(InjFilter, _INJECTABLE_META), (
+            "@guardrail() must set __lauren_injectable__ for DI container registration"
+        )
 
-    def test_returns_same_class(self):
-        original_id = id
+    def test_scope_stored_in_class_meta(self):
+        """The DI scope is recorded in GuardrailClassMeta.scope."""
+        from lauren import Scope
 
-        @guardrail(input=[LengthFilter()])
-        class MyAgent:
-            x = 42
-
-        assert MyAgent.x == 42
-        assert hasattr(MyAgent, GUARDRAIL_META)
-
-    def test_combined_input_and_output(self):
-        inp = LengthFilter(max_chars=500)
-        out = PIIRedactor(entities=["EMAIL"])
-
-        @guardrail(input=[inp], output=[out])
-        class MyAgent:
+        @guardrail(scope=Scope.SINGLETON)
+        class ScopedFilter:
             pass
 
-        meta: GuardrailMeta = getattr(MyAgent, GUARDRAIL_META)
-        assert meta.input_guardrails == [inp]
-        assert meta.output_guardrails == [out]
+        meta: GuardrailClassMeta = getattr(ScopedFilter, GUARDRAIL_CLASS_META)
+        assert meta.scope == Scope.SINGLETON
+
+    def test_idempotent_when_already_injectable(self):
+        """If the class already has @injectable applied, @guardrail() must not double-apply."""
+        from lauren import Scope, injectable
+
+        @guardrail()
+        @injectable(scope=Scope.SINGLETON)
+        class AlreadyInjectable:
+            pass
+
+        # Must not raise, and GUARDRAIL_CLASS_META must be present
+        meta: GuardrailClassMeta = getattr(AlreadyInjectable, GUARDRAIL_CLASS_META)
+        assert meta is not None
+
+    def test_does_not_affect_use_guardrails_sentinel(self):
+        """@guardrail() on a provider class must NOT set USE_GUARDRAILS_META."""
+        @guardrail()
+        class MyFilter:
+            pass
+
+        assert not hasattr(MyFilter, USE_GUARDRAILS_META)
+
+
+# ---------------------------------------------------------------------------
+# TopicFilter
+# ---------------------------------------------------------------------------
 
 
 class TestTopicFilter:
@@ -129,6 +251,11 @@ class TestTopicFilter:
         guard = TopicFilter(allowed_topics=["cook"])
         decision = await guard.check("cooking is fun", make_ctx())
         assert decision.action == "pass"
+
+
+# ---------------------------------------------------------------------------
+# PIIRedactor
+# ---------------------------------------------------------------------------
 
 
 class TestPIIRedactor:
@@ -180,6 +307,11 @@ class TestPIIRedactor:
         assert decision.violation is not None
 
 
+# ---------------------------------------------------------------------------
+# LengthFilter
+# ---------------------------------------------------------------------------
+
+
 class TestLengthFilter:
     async def test_passes_within_range(self):
         guard = LengthFilter(min_chars=5, max_chars=100)
@@ -222,6 +354,11 @@ class TestLengthFilter:
         assert decision.guardrail_name == "LengthFilter"
 
 
+# ---------------------------------------------------------------------------
+# PromptInjectionFilter
+# ---------------------------------------------------------------------------
+
+
 class TestPromptInjectionFilter:
     async def test_blocks_ignore_instructions(self):
         guard = PromptInjectionFilter()
@@ -259,6 +396,11 @@ class TestPromptInjectionFilter:
         guard = PromptInjectionFilter()
         decision = await guard.check("safe text here", make_ctx())
         assert decision.guardrail_name == "PromptInjectionFilter"
+
+
+# ---------------------------------------------------------------------------
+# LLMGuardrail
+# ---------------------------------------------------------------------------
 
 
 class TestLLMGuardrail:

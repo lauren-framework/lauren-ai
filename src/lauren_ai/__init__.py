@@ -21,14 +21,14 @@ Quick start::
             )
             return {"message": completion.content}
 
-    # Agent with tools
+    # Agent with tools — @agent() outermost, @use_tools() below it
     @tool()
     async def get_weather(city: str) -> dict:
         \"\"\"Get weather for a city. Args: city: City name.\"\"\"
         return {"city": city, "temperature": 22}
 
-    @use_tools(get_weather)
     @agent(model="claude-opus-4-6", system="You are a helpful assistant.")
+    @use_tools(get_weather)
     class WeatherAgent: ...
 
 See the documentation at https://lauren-ai.readthedocs.io for full details.
@@ -164,9 +164,14 @@ __all__ = [
     "RateLimiter",
     "RateLimitExhaustedError",
     # Guardrails (Section 41)
+    # @guardrail() — class decorator, makes a guardrail DI-injectable
     "guardrail",
-    "GuardrailMeta",
-    "GUARDRAIL_META",
+    "GuardrailClassMeta",
+    "GUARDRAIL_CLASS_META",
+    # @use_guardrails() — agent decorator, attaches guardrail instances to @agent()
+    "use_guardrails",
+    "UseGuardrailsMeta",
+    "USE_GUARDRAILS_META",
     "GuardrailDecision",
     "GuardrailContext",
     "GuardrailViolated",
@@ -275,10 +280,11 @@ from lauren_ai._extractors import Agent, Embed, StreamCompletion
 # Guardrails (Section 41)
 # ---------------------------------------------------------------------------
 from lauren_ai._guardrails import (
-    GUARDRAIL_META,
+    GUARDRAIL_CLASS_META,
+    USE_GUARDRAILS_META,
+    GuardrailClassMeta,
     GuardrailContext,
     GuardrailDecision,
-    GuardrailMeta,
     GuardrailViolated,
     InputGuardrail,
     LengthFilter,
@@ -287,7 +293,9 @@ from lauren_ai._guardrails import (
     PIIRedactor,
     PromptInjectionFilter,
     TopicFilter,
+    UseGuardrailsMeta,
     guardrail,
+    use_guardrails,
 )
 
 # ---------------------------------------------------------------------------

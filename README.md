@@ -55,6 +55,7 @@ async def get_weather(city: str) -> dict:
     return {"city": city, "temperature_c": 18, "condition": "cloudy"}
 
 
+# @agent() is outermost; @use_tools() is below it (applied first)
 @agent(model="claude-opus-4-6", system="You are a helpful travel assistant.")
 @use_tools(get_weather)
 class TravelAgent: ...

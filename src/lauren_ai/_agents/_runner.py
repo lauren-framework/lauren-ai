@@ -93,6 +93,7 @@ class AgentRunner:
         conversation_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         request: Any | None = None,
+        execution_context: Any | None = None,
         run_id: str | None = None,
     ) -> AgentResponse:
         """Run an ``@agent()``-decorated instance through the agentic loop.
@@ -115,6 +116,10 @@ class AgentRunner:
         :type metadata: dict[str, Any] | None
         :param request: Originating HTTP request, if any.
         :type request: Any | None
+        :param execution_context: The lauren ``ExecutionContext`` (route
+            metadata, handler class/func, authenticated user via
+            ``request.state``) when invoked from a route handler.
+        :type execution_context: Any | None
         :param run_id: Optional explicit run identifier.  A random hex string
             is generated when ``None``.
         :type run_id: str | None
@@ -146,6 +151,7 @@ class AgentRunner:
             turn=0,
             metadata=dict(metadata or {}),
             request=request,
+            execution_context=execution_context,
             signals=self._signals,
         )
 
@@ -695,6 +701,7 @@ class AgentRunner:
             tool_use_id=tool_call.tool_use_id,
             turn=ctx.turn,
             request=ctx.request,
+            execution_context=ctx.execution_context,
             state={},
         )
 

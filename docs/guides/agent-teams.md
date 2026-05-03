@@ -7,8 +7,7 @@ workers can build on each other's results.
 ## Quick start
 
 ```python
-from lauren_ai import agent
-from lauren_ai._teams import team, TeamRunner
+from lauren_ai import agent, team, TeamRunner
 
 @agent(model="claude-haiku-4-5", system="You are a web researcher.")
 class ResearchAgent:
@@ -54,12 +53,12 @@ or multi-angle analysis.
 ## Running a team
 
 ```python
-from lauren_ai._teams import TeamRunner
+from lauren_ai import TeamRunner
 
 runner = TeamRunner(
     team_cls=ContentTeam,
-    llm=llm_service,    # LLMService instance
-    agent_runner=None,  # pass AgentRunner for nested agent execution
+    llm=llm_service,            # LLMService instance
+    agent_runner=agent_runner,  # shared AgentRunner for nested agent execution
 )
 
 result = await runner.run("Write a short guide on asyncio.")
@@ -137,8 +136,6 @@ class TeamResult:
     final_answer: str
     worker_outputs: dict[str, str]   # keyed by worker parameter name
     rounds: int
-    total_input_tokens: int
-    total_output_tokens: int
 ```
 
 ## Configuration reference

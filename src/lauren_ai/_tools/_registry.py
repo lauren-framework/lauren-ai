@@ -11,6 +11,7 @@ __all__ = [
     "ToolRegistry",
 ]
 
+import inspect
 import logging
 from typing import Any
 
@@ -60,6 +61,21 @@ class ToolRegistry:
         :raises ValueError: When a tool with the same name is already
             registered (collision detection).
         """
+        # Enforce non-inheritance: a subclass that only inherits TOOL_META without
+        # re-applying @tool() must be rejected with MetadataInheritanceError,
+        # mirroring the framework's strict-inheritance rule for @controller et al.
+        _cls = tool_or_cls if inspect.isclass(tool_or_cls) else (type(instance) if instance is not None else None)
+        if _cls is not None and TOOL_META not in _cls.__dict__:
+            _base = next((b for b in _cls.__mro__[1:] if TOOL_META in b.__dict__), None)
+            if _base is not None:
+                from lauren.exceptions import MetadataInheritanceError  # noqa: PLC0415
+
+                raise MetadataInheritanceError(
+                    f"{_cls.__name__} inherits @tool() metadata from {_base.__name__} "
+                    f"but is not itself decorated with @tool(). Subclasses of "
+                    f"@tool()-decorated classes must re-apply @tool() to be usable as tools."
+                )
+
         meta: ToolMeta | None = getattr(tool_or_cls, TOOL_META, None)
         if meta is None:
             # Maybe the instance carries the meta (class-form resolved by DI)
