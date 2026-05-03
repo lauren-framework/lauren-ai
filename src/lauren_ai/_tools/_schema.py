@@ -340,9 +340,10 @@ def generate_tool_schema(
     For **class-form** tools the ``run()`` method is inspected for parameters;
     the class docstring provides the description.
 
-    Parameters named ``ctx`` with a ``ToolContext`` annotation are excluded
-    from the schema (they are injected at runtime and must not be exposed to
-    the model).  Parameters with a leading underscore are also excluded.
+    Parameters annotated as ``ToolContext`` (or ``ToolContext | None``) are
+    excluded from the schema regardless of their name — they are injected at
+    runtime and must not be exposed to the model.  Parameters with a leading
+    underscore are also excluded.
 
     :param func_or_class: A ``@tool()``-decorated function or class.
     :type func_or_class: Any
@@ -422,11 +423,11 @@ def generate_tool_schema(
             # Resolve annotation (PEP 563 safe: prefer get_type_hints result)
             ann = _hints.get(param_name, param.annotation)
 
-            # Skip ctx: ToolContext / ctx: ToolContext | None
-            if param_name == "ctx":
-                ann_str = str(ann)
-                if ann is ToolContext or "ToolContext" in ann_str:
-                    continue
+            # Skip any parameter annotated as ToolContext / ToolContext | None,
+            # regardless of the parameter name.
+            ann_str = str(ann)
+            if ann is ToolContext or "ToolContext" in ann_str:
+                continue
 
             prop_schema = type_to_json_schema(ann)
 

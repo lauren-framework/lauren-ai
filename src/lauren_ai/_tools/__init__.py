@@ -306,17 +306,17 @@ def _build_meta(
         except Exception:
             _hints = {}
         for param_name, param in sig.parameters.items():
-            if param_name == "ctx":
-                ann = _hints.get(param_name, param.annotation)
-                # Accept bare ToolContext or Optional[ToolContext]
-                if ann is ToolContext:
-                    reads_context = True
-                    break
-                # Handle Optional / X | None via string check for forward refs
-                ann_str = str(ann)
-                if "ToolContext" in ann_str:
-                    reads_context = True
-                    break
+            ann = _hints.get(param_name, param.annotation)
+            # Accept bare ToolContext or Optional[ToolContext] / ToolContext | None,
+            # regardless of the parameter name.
+            if ann is ToolContext:
+                reads_context = True
+                break
+            # Handle Optional / X | None via string check for forward refs
+            ann_str = str(ann)
+            if "ToolContext" in ann_str:
+                reads_context = True
+                break
     except (ValueError, TypeError):
         pass
 

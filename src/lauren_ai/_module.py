@@ -605,9 +605,12 @@ class AgentModule:
                 inject=list(_class_tools),
                 scope=Scope.SINGLETON,
             )
-            # Add class-form tools as DI providers (auto-injectable from @tool())
+            # Add class-form tools as DI providers and exports so sibling
+            # modules (e.g. a DelegationWiring singleton in the consumer
+            # module) can inject the resolved tool instances.
             for cls_tool in _class_tools:
                 providers.append(cls_tool)
+                exports.append(cls_tool)
         else:
             # No class-form tools — build the registry eagerly (simpler path).
             _eager_registry = ToolRegistry()

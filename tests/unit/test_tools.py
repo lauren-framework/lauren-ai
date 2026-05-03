@@ -73,6 +73,40 @@ class TestToolDecorator:
         input_schema = meta.parameters["input_schema"]
         assert "ctx" not in input_schema.get("properties", {})
 
+    def test_context_param_any_name_excluded_from_schema(self):
+        """ToolContext param is excluded regardless of its name."""
+
+        @tool()
+        async def func(query: str, context: ToolContext | None = None) -> str:
+            """Search something.
+
+            Args:
+                query: The query string.
+            """
+            return query
+
+        meta = getattr(func, TOOL_META)
+        input_schema = meta.parameters["input_schema"]
+        assert "context" not in input_schema.get("properties", {})
+        assert meta.reads_context is True
+
+    def test_context_param_bare_annotation_any_name(self):
+        """Bare ToolContext annotation (not Optional) with a non-default name."""
+
+        @tool()
+        async def func(task: str, agent_ctx: ToolContext = None) -> str:
+            """Do a task.
+
+            Args:
+                task: The task description.
+            """
+            return task
+
+        meta = getattr(func, TOOL_META)
+        input_schema = meta.parameters["input_schema"]
+        assert "agent_ctx" not in input_schema.get("properties", {})
+        assert meta.reads_context is True
+
     def test_required_vs_optional(self):
         @tool()
         async def func(required: str, optional: int = 5) -> str:
