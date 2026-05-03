@@ -1,27 +1,35 @@
 """End-to-end tests — realistic end-user journey through the lauren-ai public API.
 
-These tests simulate what a developer building an AI-powered application would
-write.  Every test drives the full stack from public-API imports through
-``LaurenFactory.create()`` to ``AgentRunner.run()`` / ``AgentTestClient``,
-using a ``MockTransport`` in place of a real LLM provider.
+These tests model how a developer building an AI-powered web application would
+wire up agents: via ``@controller`` classes that inject ``AgentRunner`` (and
+agent instances) through the normal Lauren DI system, then driven by
+``lauren.testing.TestClient`` over real HTTP.
+
+No test ever calls ``app.container.resolve()`` — that is not part of the
+end-user API surface.
 
 Scenarios covered:
-- Minimal agent: no tools, one-shot question-answer
-- Function-form tools: single and multi-turn tool calls
-- Class-form tools with DI: injectable dependencies are resolved and called
-- Agent lifecycle hooks: ``on_start`` / ``on_finish`` receive the correct context
-- Signal observability: ``SignalBus`` events fired during a run
-- Agent metadata: metadata dict flows from ``run()`` into ``AgentContext``
-- Multiple agents in one module: each gets its own tool set
-- ``AgentTestClient``: synchronous and async test-client wrappers
+
+- Minimal chat endpoint: no tools, one-shot question → JSON response
+- Function-form tools: single and multi-turn tool calls through an HTTP handler
+- Class-form tools with DI: injectable tool dependencies resolved end-to-end
+- Agent lifecycle hooks: ``on_start`` / ``on_finish`` side-effects visible in response
+- Signal observability: ``SignalBus`` events accumulated during an HTTP request
+- Multiple agents: separate endpoints backed by separate agent classes
+- ``max_turns`` override: bounded agent stops and returns correct ``stop_reason``
+- SSE streaming: ``run_stream()`` frames as ``text/event-stream`` via ``EventStream``
 """
 
 from __future__ import annotations
 
-import pytest
-from lauren import LaurenFactory, Scope, injectable, module
+import json
+from collections.abc import AsyncIterator
 
-# Public API ─ what a real user imports
+import pytest
+from lauren import Json, LaurenFactory, Scope, controller, get, injectable, module, post
+from lauren.sse import EventStream, ServerSentEvent
+from lauren.testing import TestClient
+
 from lauren_ai import (
     AgentContext,
     AgentModule,
@@ -36,8 +44,8 @@ from lauren_ai import (
     tool,
     use_tools,
 )
-from lauren_ai._transport import Completion
-from lauren_ai.testing import AgentTestClient
+from lauren_ai._transport import Completion, CompletionChunk, ToolCallDelta
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -56,53 +64,114 @@ def _completion(content: str, *, id: str = "c1") -> Completion:
     )
 
 
+def _chunks(*parts: str, stop_reason: str = "end_turn") -> list[CompletionChunk]:
+    """Build a list of CompletionChunk objects from text parts."""
+    chunks = [CompletionChunk(delta=p) for p in parts]
+    chunks.append(
+        CompletionChunk(
+            delta="",
+            stop_reason=stop_reason,
+            usage=TokenUsage(input_tokens=20, output_tokens=len(parts)),
+        )
+    )
+    return chunks
+
+
+def _parse_sse(body: bytes) -> list[dict]:
+    """Parse a buffered SSE body into a list of ``{event, data}`` dicts."""
+    events: list[dict] = []
+    current: dict = {}
+    for raw_line in body.decode().splitlines():
+        line = raw_line.strip()
+        if not line:
+            if current:
+                events.append(current)
+                current = {}
+        elif line.startswith("event:"):
+            current["event"] = line[6:].strip()
+        elif line.startswith("data:"):
+            current["data"] = line[5:].strip()
+    if current:
+        events.append(current)
+    return events
+
+
 # ---------------------------------------------------------------------------
-# 1. Minimal agent — no tools, no DI, one-shot answer
+# Request/response schemas
 # ---------------------------------------------------------------------------
 
 
-class TestMinimalAgent:
-    """Simplest possible usage: declare an agent, run it, get a response."""
+class ChatRequest:
+    """Simple chat request body (parsed manually to avoid Pydantic dependency)."""
 
-    @pytest.mark.asyncio
-    async def test_one_shot_answer(self):
-        cfg, mock = LLMConfig.for_testing()
-        mock.queue_response(_completion("The answer is 42."))
+
+# ---------------------------------------------------------------------------
+# 1. Minimal chat endpoint — no tools, one-shot answer
+# ---------------------------------------------------------------------------
+
+
+class TestMinimalChatEndpoint:
+    """Simplest possible wiring: agent + runner injected into a controller."""
+
+    def test_one_shot_answer(self):
+        """POST /chat/ returns the agent's content and stop_reason."""
 
         @agent(model="mock-model", system="You are a helpful assistant.")
         class SimpleAssistant: ...
 
+        @controller("/chat")
+        class ChatController:
+            def __init__(self, runner: AgentRunner, ai: SimpleAssistant) -> None:
+                self._runner = runner
+                self._ai = ai
+
+            @post("/")
+            async def chat(self, body: Json[dict]) -> dict:
+                response = await self._runner.run(self._ai, body["message"])
+                return {
+                    "content": response.content,
+                    "stop_reason": response.stop_reason,
+                    "turns": response.turns,
+                }
+
+        cfg, mock = LLMConfig.for_testing()
+        mock.queue_response(_completion("The answer is 42."))
+
         LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
         AIModule = AgentModule.for_root(agents=[SimpleAssistant], imports=LLMProvider)
 
-        @module(imports=[LLMProvider, AIModule])
+        @module(imports=[LLMProvider, AIModule], controllers=[ChatController])
         class AppModule: ...
 
         app = LaurenFactory.create(AppModule)
-        runner = await app.container.resolve(AgentRunner)
-        response = await runner.run(SimpleAssistant(), "What is the answer?")
+        r = TestClient(app).post("/chat/", json={"message": "What is the answer?"})
 
-        assert response.content == "The answer is 42."
-        assert response.stop_reason == "end_turn"
-        assert response.turns == 1
-        assert len(response.tool_calls_made) == 0
+        assert r.status_code == 200
+        data = r.json()
+        assert data["content"] == "The answer is 42."
+        assert data["stop_reason"] == "end_turn"
+        assert data["turns"] == 1
 
-    def test_sync_client_one_shot(self):
-        """AgentTestClient.run() wraps the async runner for convenience."""
-        cfg, mock = LLMConfig.for_testing()
-        mock.queue_response(_completion("Hello from sync!"))
+    def test_token_usage_returned(self):
+        """Handler can return token counts from the AgentResponse."""
 
         @agent(model="mock-model")
-        class EchoAgent: ...
+        class TokenAgent: ...
 
-        client = AgentTestClient(EchoAgent(), mock)
-        response = client.run("Hi!")
+        @controller("/usage")
+        class UsageController:
+            def __init__(self, runner: AgentRunner, ai: TokenAgent) -> None:
+                self._runner = runner
+                self._ai = ai
 
-        assert response.content == "Hello from sync!"
-        assert response.stop_reason == "end_turn"
+            @post("/")
+            async def chat(self, body: Json[dict]) -> dict:
+                response = await self._runner.run(self._ai, body["message"])
+                return {
+                    "input_tokens": response.total_usage.input_tokens,
+                    "output_tokens": response.total_usage.output_tokens,
+                }
 
-    @pytest.mark.asyncio
-    async def test_total_token_usage_reported(self):
         cfg, mock = LLMConfig.for_testing()
         mock.queue_response(
             Completion(
@@ -115,29 +184,25 @@ class TestMinimalAgent:
             )
         )
 
-        @agent(model="mock-model")
-        class TokenAgent: ...
-
         LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
         AIModule = AgentModule.for_root(agents=[TokenAgent], imports=LLMProvider)
 
-        @module(imports=[LLMProvider, AIModule])
+        @module(imports=[LLMProvider, AIModule], controllers=[UsageController])
         class AppModule: ...
 
         app = LaurenFactory.create(AppModule)
-        runner = await app.container.resolve(AgentRunner)
-        response = await runner.run(TokenAgent(), "Count tokens.")
+        r = TestClient(app).post("/usage/", json={"message": "Count tokens."})
 
-        assert response.total_usage.input_tokens == 100
-        assert response.total_usage.output_tokens == 50
+        assert r.status_code == 200
+        data = r.json()
+        assert data["input_tokens"] == 100
+        assert data["output_tokens"] == 50
 
 
 # ---------------------------------------------------------------------------
 # 2. Function-form tools
 # ---------------------------------------------------------------------------
 
-
-# Tools defined at module level (idiomatic for function-form tools)
 
 @tool()
 async def get_weather(city: str) -> dict:
@@ -169,113 +234,82 @@ class TravelAgent: ...
 
 
 class TestFunctionFormTools:
-    """Agents that use function-form @tool() decorators."""
+    """HTTP endpoint backed by an agent with function-form @tool() decorators."""
 
-    @pytest.mark.asyncio
-    async def test_single_tool_call(self):
+    def _make_app(self, mock):
+        @controller("/travel")
+        class TravelController:
+            def __init__(self, runner: AgentRunner, ai: TravelAgent) -> None:
+                self._runner = runner
+                self._ai = ai
+
+            @post("/chat")
+            async def chat(self, body: Json[dict]) -> dict:
+                response = await self._runner.run(self._ai, body["message"])
+                return {
+                    "content": response.content,
+                    "turns": response.turns,
+                    "tool_calls": [tc.name for tc in response.tool_calls_made],
+                }
+
+        cfg, _ = LLMConfig.for_testing()
+        LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
+        AIModule = AgentModule.for_root(
+            agents=[TravelAgent],
+            tools=[get_weather, convert_currency],
+            imports=LLMProvider,
+        )
+
+        @module(imports=[LLMProvider, AIModule], controllers=[TravelController])
+        class AppModule: ...
+
+        return LaurenFactory.create(AppModule)
+
+    def test_single_tool_call(self):
         """Agent makes one tool call then gives a final answer."""
-        cfg, mock = LLMConfig.for_testing()
-
+        _, mock = LLMConfig.for_testing()
         mock.queue_tool_use("get_weather", {"city": "Paris"})
         mock.queue_response(_completion("Paris is sunny at 22°C.", id="c2"))
 
-        LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
-        AIModule = AgentModule.for_root(
-            agents=[TravelAgent],
-            tools=[get_weather, convert_currency],
-            imports=LLMProvider,
-        )
+        app = self._make_app(mock)
+        r = TestClient(app).post("/travel/chat", json={"message": "Weather in Paris?"})
 
-        @module(imports=[LLMProvider, AIModule])
-        class AppModule: ...
+        assert r.status_code == 200
+        data = r.json()
+        assert data["turns"] == 2
+        assert data["tool_calls"] == ["get_weather"]
 
-        app = LaurenFactory.create(AppModule)
-        runner = await app.container.resolve(AgentRunner)
-        response = await runner.run(TravelAgent(), "What's the weather in Paris?")
-
-        assert response.stop_reason == "end_turn"
-        assert response.turns == 2
-        assert len(response.tool_calls_made) == 1
-        assert response.tool_calls_made[0].name == "get_weather"
-        assert response.tool_calls_made[0].input == {"city": "Paris"}
-
-    @pytest.mark.asyncio
-    async def test_multi_turn_two_tools(self):
-        """Agent calls two different tools in separate turns, then finishes."""
-        cfg, mock = LLMConfig.for_testing()
-
+    def test_multi_turn_two_tools(self):
+        """Agent calls two tools in separate turns then finishes."""
+        _, mock = LLMConfig.for_testing()
         mock.queue_tool_use("get_weather", {"city": "New York"})
         mock.queue_tool_use("convert_currency", {"amount": 100.0, "from_ccy": "USD", "to_ccy": "EUR"})
-        mock.queue_response(_completion("In New York it's sunny. €92 for your $100.", id="c3"))
+        mock.queue_response(_completion("NYC sunny; €92 for $100.", id="c3"))
 
-        LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
-        AIModule = AgentModule.for_root(
-            agents=[TravelAgent],
-            tools=[get_weather, convert_currency],
-            imports=LLMProvider,
+        app = self._make_app(mock)
+        r = TestClient(app).post(
+            "/travel/chat", json={"message": "NYC weather and 100 USD to EUR?"}
         )
 
-        @module(imports=[LLMProvider, AIModule])
-        class AppModule: ...
+        assert r.status_code == 200
+        data = r.json()
+        assert data["turns"] == 3
+        assert set(data["tool_calls"]) == {"get_weather", "convert_currency"}
 
-        app = LaurenFactory.create(AppModule)
-        runner = await app.container.resolve(AgentRunner)
-        response = await runner.run(
-            TravelAgent(),
-            "What's the weather in New York and how much is $100 in euros?",
-        )
-
-        assert response.turns == 3
-        tool_names = [tc.name for tc in response.tool_calls_made]
-        assert "get_weather" in tool_names
-        assert "convert_currency" in tool_names
-
-    @pytest.mark.asyncio
-    async def test_tool_result_reaches_model(self):
-        """The tool's return value is included in the subsequent model call."""
-        cfg, mock = LLMConfig.for_testing()
-
+    def test_tool_result_forwarded_to_model(self):
+        """The second mock call contains the tool result from the first turn."""
+        _, mock = LLMConfig.for_testing()
         mock.queue_tool_use("get_weather", {"city": "Rome"})
         mock.queue_response(_completion("Rome: sunny, 22°C.", id="c2"))
 
-        LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
-        AIModule = AgentModule.for_root(
-            agents=[TravelAgent],
-            tools=[get_weather],
-            imports=LLMProvider,
-        )
+        app = self._make_app(mock)
+        TestClient(app).post("/travel/chat", json={"message": "Rome weather?"})
 
-        @module(imports=[LLMProvider, AIModule])
-        class AppModule: ...
-
-        app = LaurenFactory.create(AppModule)
-        runner = await app.container.resolve(AgentRunner)
-        await runner.run(TravelAgent(), "Rome weather?")
-
-        # The second model call must include the tool result in its messages
         assert len(mock.calls) == 2
-        second_call_messages = mock.calls[1].messages
-        tool_result_found = any(
-            getattr(m, "role", None) == "tool"
-            or (isinstance(m, dict) and m.get("role") == "tool")
-            or "tool_results" in str(m)
-            or "22" in str(m)  # temp from the tool return value
-            for m in second_call_messages
+        second_messages = mock.calls[1].messages
+        assert any("22" in str(m) or "tool_results" in str(m) for m in second_messages), (
+            "Tool result not forwarded to second model call"
         )
-        assert tool_result_found, "Tool result not forwarded to second model call"
-
-    def test_agent_test_client_with_tool(self):
-        """AgentTestClient.run() handles a one-tool flow synchronously."""
-        cfg, mock = LLMConfig.for_testing()
-
-        mock.queue_tool_use("get_weather", {"city": "Tokyo"})
-        mock.queue_response(_completion("Tokyo: 28°C, humid.", id="c2"))
-
-        client = AgentTestClient(TravelAgent(), mock)
-        response = client.run("Tokyo weather?")
-
-        assert response.turns == 2
-        assert response.tool_calls_made[0].name == "get_weather"
 
 
 # ---------------------------------------------------------------------------
@@ -284,11 +318,10 @@ class TestFunctionFormTools:
 
 
 class TestClassFormToolsWithDI:
-    """Class-form @tool() classes receive their constructor deps from the DI container."""
+    """Class-form @tool() classes receive constructor deps from the DI container."""
 
-    @pytest.mark.asyncio
-    async def test_class_tool_dep_injected_and_called(self):
-        """The injected dep is called during the agent run and drives the tool result."""
+    def test_class_tool_dep_injected_and_called(self):
+        """The injected dep is called during the HTTP request and drives the tool result."""
 
         call_log: list[str] = []
 
@@ -316,43 +349,56 @@ class TestClassFormToolsWithDI:
         @use_tools(CheckOrderTool)
         class SupportAgent: ...
 
+        @controller("/support")
+        class SupportController:
+            def __init__(self, runner: AgentRunner, ai: SupportAgent) -> None:
+                self._runner = runner
+                self._ai = ai
+
+            @post("/chat")
+            async def chat(self, body: Json[dict]) -> dict:
+                response = await self._runner.run(self._ai, body["message"])
+                return {"content": response.content, "tool_calls": len(response.tool_calls_made)}
+
         @module(providers=[OrderDatabase], exports=[OrderDatabase])
         class DataModule: ...
 
         cfg, mock = LLMConfig.for_testing()
+        mock.queue_tool_use("check_order_tool", {"order_id": "ORD-42"})
+        mock.queue_response(_completion("Order ORD-42 has been shipped.", id="c2"))
+
         LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
         AIModule = AgentModule.for_root(
             agents=[SupportAgent],
             imports=[LLMProvider, DataModule],
         )
 
-        @module(imports=[LLMProvider, AIModule])
+        @module(imports=[LLMProvider, AIModule, DataModule], controllers=[SupportController])
         class AppModule: ...
 
-        mock.queue_tool_use("check_order_tool", {"order_id": "ORD-42"})
-        mock.queue_response(_completion("Order ORD-42 has been shipped.", id="c2"))
-
         app = LaurenFactory.create(AppModule)
-        runner = await app.container.resolve(AgentRunner)
-        response = await runner.run(SupportAgent(), "Where is my order ORD-42?")
+        r = TestClient(app).post("/support/chat", json={"message": "Where is ORD-42?"})
 
-        assert response.stop_reason == "end_turn"
-        assert len(response.tool_calls_made) == 1
-        # The dep was actually called with the arg the agent passed
+        assert r.status_code == 200
+        data = r.json()
+        assert data["tool_calls"] == 1
         assert call_log == ["ORD-42"]
 
-    @pytest.mark.asyncio
-    async def test_two_class_tools_with_different_deps(self):
-        """Two class-form tools each receive their own distinct dep."""
+    def test_two_class_tools_with_different_deps(self):
+        """Two class-form tools each receive their own distinct injectable dep."""
+
+        results: list[str] = []
 
         @injectable(scope=Scope.SINGLETON)
         class ProductCatalog:
             def describe(self, pid: str) -> str:
+                results.append(f"catalog:{pid}")
                 return f"Product {pid}: high quality"
 
         @injectable(scope=Scope.SINGLETON)
         class PricingEngine:
             def quote(self, pid: str) -> float:
+                results.append(f"pricing:{pid}")
                 return 29.99
 
         @tool()
@@ -387,48 +433,43 @@ class TestClassFormToolsWithDI:
         @use_tools(DescribeTool, PriceTool)
         class ShopAgent: ...
 
-        @module(
-            providers=[ProductCatalog, PricingEngine],
-            exports=[ProductCatalog, PricingEngine],
-        )
+        @controller("/shop")
+        class ShopController:
+            def __init__(self, runner: AgentRunner, ai: ShopAgent) -> None:
+                self._runner = runner
+                self._ai = ai
+
+            @post("/chat")
+            async def chat(self, body: Json[dict]) -> dict:
+                response = await self._runner.run(self._ai, body["message"])
+                return {"tool_calls": [tc.name for tc in response.tool_calls_made]}
+
+        @module(providers=[ProductCatalog, PricingEngine], exports=[ProductCatalog, PricingEngine])
         class ShopModule: ...
 
         cfg, mock = LLMConfig.for_testing()
+        mock.queue_tool_use("describe_tool", {"product_id": "P1"})
+        mock.queue_tool_use("price_tool", {"product_id": "P1"})
+        mock.queue_response(_completion("P1: high quality, $29.99.", id="c3"))
+
         LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
         AIModule = AgentModule.for_root(
             agents=[ShopAgent],
             imports=[LLMProvider, ShopModule],
         )
 
-        @module(imports=[LLMProvider, AIModule])
+        @module(imports=[LLMProvider, AIModule, ShopModule], controllers=[ShopController])
         class AppModule: ...
 
         app = LaurenFactory.create(AppModule)
-        describe_tool = await app.container.resolve(DescribeTool)
-        price_tool = await app.container.resolve(PriceTool)
+        r = TestClient(app).post("/shop/chat", json={"message": "Describe and price P1."})
 
-        assert isinstance(describe_tool._catalog, ProductCatalog)
-        assert isinstance(price_tool._pricing, PricingEngine)
-        # Each tool has its own dep type
-        assert not hasattr(describe_tool, "_pricing")
-        assert not hasattr(price_tool, "_catalog")
-
-    @pytest.mark.asyncio
-    async def test_class_tool_with_scope_request_override(self):
-        """@tool() on top of @injectable(scope=REQUEST) keeps REQUEST scope."""
-        from lauren import injectable as _injectable
-
-        @_injectable(scope=Scope.REQUEST)
-        @tool()
-        class RequestScopedTool:
-            """A per-request tool. Args: x: Input."""
-
-            async def run(self, x: str) -> str:
-                return x
-
-        from lauren._di import INJECTABLE_META
-        meta = getattr(RequestScopedTool, INJECTABLE_META)
-        assert meta.scope == Scope.REQUEST
+        assert r.status_code == 200
+        data = r.json()
+        assert set(data["tool_calls"]) == {"describe_tool", "price_tool"}
+        # Both deps were actually called
+        assert "catalog:P1" in results
+        assert "pricing:P1" in results
 
 
 # ---------------------------------------------------------------------------
@@ -437,16 +478,32 @@ class TestClassFormToolsWithDI:
 
 
 class TestAgentLifecycleHooks:
-    """on_start and on_finish hooks fire with correct AgentContext / AgentResponse."""
+    """on_start and on_finish hooks fire with the correct context during an HTTP request."""
 
-    @pytest.mark.asyncio
-    async def test_on_start_receives_agent_context(self):
-        captured_ctx: list[AgentContext] = []
+    def test_on_start_metadata_visible_in_response(self):
+        """Metadata passed to runner.run() is captured in on_start and returned."""
+
+        captured: dict = {}
 
         @agent(model="mock-model")
         class HookAgent:
             async def on_start(self, ctx: AgentContext) -> None:
-                captured_ctx.append(ctx)
+                captured.update(ctx.metadata)
+
+        @controller("/hook")
+        class HookController:
+            def __init__(self, runner: AgentRunner, ai: HookAgent) -> None:
+                self._runner = runner
+                self._ai = ai
+
+            @post("/chat")
+            async def chat(self, body: Json[dict]) -> dict:
+                await self._runner.run(
+                    self._ai,
+                    body["message"],
+                    metadata={"user_id": body.get("user_id", "anon")},
+                )
+                return {"captured_user_id": captured.get("user_id")}
 
         cfg, mock = LLMConfig.for_testing()
         mock.queue_response(_completion("Hi!"))
@@ -454,27 +511,35 @@ class TestAgentLifecycleHooks:
         LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
         AIModule = AgentModule.for_root(agents=[HookAgent], imports=LLMProvider)
 
-        @module(imports=[LLMProvider, AIModule])
+        @module(imports=[LLMProvider, AIModule], controllers=[HookController])
         class AppModule: ...
 
         app = LaurenFactory.create(AppModule)
-        runner = await app.container.resolve(AgentRunner)
-        await runner.run(HookAgent(), "Hello", metadata={"user_id": "u-99"})
+        r = TestClient(app).post("/hook/chat", json={"message": "Hello", "user_id": "u-99"})
 
-        assert len(captured_ctx) == 1
-        ctx = captured_ctx[0]
-        assert ctx.metadata["user_id"] == "u-99"
-        assert ctx.turn == 0
-        assert ctx.agent_class is HookAgent
+        assert r.status_code == 200
+        assert r.json()["captured_user_id"] == "u-99"
 
-    @pytest.mark.asyncio
-    async def test_on_finish_receives_response(self):
-        captured_resp: list[AgentResponse] = []
+    def test_on_finish_receives_final_response(self):
+        """on_finish is called with the completed AgentResponse."""
+
+        finish_log: list[str] = []
 
         @agent(model="mock-model")
         class FinishAgent:
             async def on_finish(self, response: AgentResponse, ctx: AgentContext) -> None:
-                captured_resp.append(response)
+                finish_log.append(response.content)
+
+        @controller("/finish")
+        class FinishController:
+            def __init__(self, runner: AgentRunner, ai: FinishAgent) -> None:
+                self._runner = runner
+                self._ai = ai
+
+            @post("/chat")
+            async def chat(self, body: Json[dict]) -> dict:
+                response = await self._runner.run(self._ai, body["message"])
+                return {"content": response.content}
 
         cfg, mock = LLMConfig.for_testing()
         mock.queue_response(_completion("Goodbye!"))
@@ -482,46 +547,15 @@ class TestAgentLifecycleHooks:
         LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
         AIModule = AgentModule.for_root(agents=[FinishAgent], imports=LLMProvider)
 
-        @module(imports=[LLMProvider, AIModule])
+        @module(imports=[LLMProvider, AIModule], controllers=[FinishController])
         class AppModule: ...
 
         app = LaurenFactory.create(AppModule)
-        runner = await app.container.resolve(AgentRunner)
-        await runner.run(FinishAgent(), "Bye.")
+        r = TestClient(app).post("/finish/chat", json={"message": "Bye."})
 
-        assert len(captured_resp) == 1
-        assert captured_resp[0].content == "Goodbye!"
-        assert captured_resp[0].stop_reason == "end_turn"
-
-    @pytest.mark.asyncio
-    async def test_metadata_flows_into_on_start(self):
-        """Metadata passed to runner.run() is available in the AgentContext."""
-        received: dict = {}
-
-        @agent(model="mock-model")
-        class MetaAgent:
-            async def on_start(self, ctx: AgentContext) -> None:
-                received.update(ctx.metadata)
-
-        cfg, mock = LLMConfig.for_testing()
-        mock.queue_response(_completion("OK."))
-
-        LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
-        AIModule = AgentModule.for_root(agents=[MetaAgent], imports=LLMProvider)
-
-        @module(imports=[LLMProvider, AIModule])
-        class AppModule: ...
-
-        app = LaurenFactory.create(AppModule)
-        runner = await app.container.resolve(AgentRunner)
-        await runner.run(
-            MetaAgent(),
-            "Test.",
-            metadata={"tenant": "acme", "plan": "pro"},
-        )
-
-        assert received["tenant"] == "acme"
-        assert received["plan"] == "pro"
+        assert r.status_code == 200
+        assert r.json()["content"] == "Goodbye!"
+        assert finish_log == ["Goodbye!"]
 
 
 # ---------------------------------------------------------------------------
@@ -530,50 +564,17 @@ class TestAgentLifecycleHooks:
 
 
 class TestSignalObservability:
-    """SignalBus events are emitted during agent runs."""
+    """SignalBus events are emitted during agent runs triggered by HTTP requests."""
 
-    @pytest.mark.asyncio
-    async def test_model_call_complete_fired(self):
-        """ModelCallComplete is emitted once for a no-tool agent run."""
+    def test_model_call_complete_fired_per_turn(self):
+        """One ModelCallComplete per LLM call; tool call = extra turn → 2 events."""
+
         bus = SignalBus()
-        events: list[ModelCallComplete] = []
+        event_models: list[str] = []
 
         @bus.on(ModelCallComplete)
         async def capture(event: ModelCallComplete) -> None:
-            events.append(event)
-
-        @agent(model="mock-model")
-        class ObservedAgent: ...
-
-        cfg, mock = LLMConfig.for_testing()
-        mock.queue_response(_completion("Hello!"))
-
-        LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
-        AIModule = AgentModule.for_root(
-            agents=[ObservedAgent],
-            imports=LLMProvider,
-            signals=bus,
-        )
-
-        @module(imports=[LLMProvider, AIModule])
-        class AppModule: ...
-
-        app = LaurenFactory.create(AppModule)
-        runner = await app.container.resolve(AgentRunner)
-        await runner.run(ObservedAgent(), "Hi.")
-
-        assert len(events) == 1
-        assert events[0].model == "mock-model"
-
-    @pytest.mark.asyncio
-    async def test_model_call_complete_fired_per_turn(self):
-        """One ModelCallComplete event per LLM call (tool call = extra turn)."""
-        bus = SignalBus()
-        model_events: list[ModelCallComplete] = []
-
-        @bus.on(ModelCallComplete)
-        async def capture(event: ModelCallComplete) -> None:
-            model_events.append(event)
+            event_models.append(event.model)
 
         @tool()
         async def ping(x: str) -> str:
@@ -583,6 +584,17 @@ class TestSignalObservability:
         @agent(model="mock-model")
         @use_tools(ping)
         class PingAgent: ...
+
+        @controller("/signal")
+        class SignalController:
+            def __init__(self, runner: AgentRunner, ai: PingAgent) -> None:
+                self._runner = runner
+                self._ai = ai
+
+            @post("/chat")
+            async def chat(self, body: Json[dict]) -> dict:
+                response = await self._runner.run(self._ai, body["message"])
+                return {"turns": response.turns}
 
         cfg, mock = LLMConfig.for_testing()
         mock.queue_tool_use("ping", {"x": "test"})
@@ -596,28 +608,28 @@ class TestSignalObservability:
             signals=bus,
         )
 
-        @module(imports=[LLMProvider, AIModule])
+        @module(imports=[LLMProvider, AIModule], controllers=[SignalController])
         class AppModule: ...
 
         app = LaurenFactory.create(AppModule)
-        runner = await app.container.resolve(AgentRunner)
-        await runner.run(PingAgent(), "Ping please.")
+        r = TestClient(app).post("/signal/chat", json={"message": "Ping please."})
 
-        # Tool call = one extra turn = two total model calls
-        assert len(model_events) == 2
+        assert r.status_code == 200
+        assert r.json()["turns"] == 2
+        assert len(event_models) == 2
+        assert all(m == "mock-model" for m in event_models)
 
 
 # ---------------------------------------------------------------------------
-# 6. Multiple agents in one module
+# 6. Multiple agents — separate endpoints
 # ---------------------------------------------------------------------------
 
 
 class TestMultipleAgentsInOneModule:
-    """Multiple @agent() classes can share one AgentModule.for_root() call."""
+    """Multiple @agent() classes share one AgentModule, each with its own endpoint."""
 
-    @pytest.mark.asyncio
-    async def test_two_agents_resolved_independently(self):
-        """Two agents are both resolvable and run independently via the same runner."""
+    def test_two_agents_on_separate_endpoints(self):
+        """Each endpoint invokes its own agent; responses are independent."""
 
         @tool()
         async def summarize(text: str) -> str:
@@ -637,6 +649,28 @@ class TestMultipleAgentsInOneModule:
         @use_tools(translate)
         class TranslateAgent: ...
 
+        @controller("/ai")
+        class MultiController:
+            def __init__(
+                self,
+                runner: AgentRunner,
+                summary: SummaryAgent,
+                translate_ai: TranslateAgent,
+            ) -> None:
+                self._runner = runner
+                self._summary = summary
+                self._translate = translate_ai
+
+            @post("/summarize")
+            async def do_summarize(self, body: Json[dict]) -> dict:
+                r = await self._runner.run(self._summary, body["message"])
+                return {"content": r.content}
+
+            @post("/translate")
+            async def do_translate(self, body: Json[dict]) -> dict:
+                r = await self._runner.run(self._translate, body["message"])
+                return {"content": r.content}
+
         cfg, mock = LLMConfig.for_testing()
         LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
         AIModule = AgentModule.for_root(
@@ -645,43 +679,21 @@ class TestMultipleAgentsInOneModule:
             imports=LLMProvider,
         )
 
-        @module(imports=[LLMProvider, AIModule])
+        @module(imports=[LLMProvider, AIModule], controllers=[MultiController])
         class AppModule: ...
 
         app = LaurenFactory.create(AppModule)
-        runner = await app.container.resolve(AgentRunner)
-        summary_inst = await app.container.resolve(SummaryAgent)
-        translate_inst = await app.container.resolve(TranslateAgent)
+        client = TestClient(app)
 
-        # Run SummaryAgent
         mock.queue_response(_completion("Here is the summary."))
-        r1 = await runner.run(summary_inst, "Summarize this.")
-        assert r1.content == "Here is the summary."
+        r1 = client.post("/ai/summarize", json={"message": "Summarize this."})
+        assert r1.status_code == 200
+        assert r1.json()["content"] == "Here is the summary."
 
-        # Run TranslateAgent
         mock.queue_response(_completion("Here is the translation."))
-        r2 = await runner.run(translate_inst, "Translate this.")
-        assert r2.content == "Here is the translation."
-
-    @pytest.mark.asyncio
-    async def test_agents_are_singletons(self):
-        """Resolving the same agent class twice returns the same instance."""
-
-        @agent(model="mock-model")
-        class SingletonAgent: ...
-
-        cfg, mock = LLMConfig.for_testing()
-        LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
-        AIModule = AgentModule.for_root(agents=[SingletonAgent], imports=LLMProvider)
-
-        @module(imports=[LLMProvider, AIModule])
-        class AppModule: ...
-
-        app = LaurenFactory.create(AppModule)
-        inst_a = await app.container.resolve(SingletonAgent)
-        inst_b = await app.container.resolve(SingletonAgent)
-
-        assert inst_a is inst_b
+        r2 = client.post("/ai/translate", json={"message": "Translate this."})
+        assert r2.status_code == 200
+        assert r2.json()["content"] == "Here is the translation."
 
 
 # ---------------------------------------------------------------------------
@@ -690,11 +702,10 @@ class TestMultipleAgentsInOneModule:
 
 
 class TestAgentConfigOverrides:
-    """Per-agent AgentConfig settings take effect at run time."""
+    """Per-agent settings passed to @agent() take effect during HTTP-driven runs."""
 
-    @pytest.mark.asyncio
-    async def test_max_turns_stops_loop(self):
-        """An agent configured with max_turns=1 stops after one turn (no tool call looping)."""
+    def test_max_turns_stops_loop(self):
+        """An agent with max_turns=1 stops after one turn; stop_reason is returned."""
 
         @tool()
         async def endless_tool(x: str) -> str:
@@ -705,8 +716,19 @@ class TestAgentConfigOverrides:
         @use_tools(endless_tool)
         class BoundedAgent: ...
 
+        @controller("/bounded")
+        class BoundedController:
+            def __init__(self, runner: AgentRunner, ai: BoundedAgent) -> None:
+                self._runner = runner
+                self._ai = ai
+
+            @post("/chat")
+            async def chat(self, body: Json[dict]) -> dict:
+                response = await self._runner.run(self._ai, body["message"])
+                return {"stop_reason": response.stop_reason}
+
         cfg, mock = LLMConfig.for_testing()
-        # Queue only a tool-use completion — the runner should stop after max_turns
+        # Only one tool-use completion queued; with max_turns=1 the loop stops before calling the model again
         mock.queue_tool_use("endless_tool", {"x": "loop"})
 
         LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
@@ -716,11 +738,164 @@ class TestAgentConfigOverrides:
             imports=LLMProvider,
         )
 
-        @module(imports=[LLMProvider, AIModule])
+        @module(imports=[LLMProvider, AIModule], controllers=[BoundedController])
         class AppModule: ...
 
         app = LaurenFactory.create(AppModule)
-        runner = await app.container.resolve(AgentRunner)
-        response = await runner.run(BoundedAgent(), "Go forever.")
+        r = TestClient(app).post("/bounded/chat", json={"message": "Go forever."})
 
-        assert response.stop_reason == "max_turns"
+        assert r.status_code == 200
+        assert r.json()["stop_reason"] == "max_turns"
+
+
+# ---------------------------------------------------------------------------
+# 8. SSE streaming — run_stream() framed as text/event-stream
+# ---------------------------------------------------------------------------
+
+
+def _get_header(headers, name: str) -> str | None:
+    """Look up a header value from the TestResponse headers list of tuples."""
+    return next((v for k, v in headers if k.lower() == name.lower()), None)
+
+
+class TestSSEStreaming:
+    """Controllers that call run_stream() and yield chunks as SSE events."""
+
+    def test_stream_chunks_arrive_as_sse_events(self):
+        """Each text chunk from run_stream() is framed as an SSE ``delta`` event."""
+
+        @agent(model="mock-model", system="You are a streaming assistant.")
+        class StreamAgent: ...
+
+        @controller("/stream")
+        class StreamController:
+            def __init__(self, runner: AgentRunner, ai: StreamAgent) -> None:
+                self._runner = runner
+                self._ai = ai
+
+            @get("/chat")
+            async def stream_chat(self) -> EventStream:
+                async def gen() -> AsyncIterator[ServerSentEvent]:
+                    stream = await self._runner.run_stream(self._ai, "Hello!")
+                    async for chunk in stream:
+                        if chunk.delta:
+                            yield ServerSentEvent(event="delta", data=chunk.delta)
+                        if chunk.stop_reason:
+                            yield ServerSentEvent(event="done", data=chunk.stop_reason)
+
+                return EventStream(gen())
+
+        cfg, mock = LLMConfig.for_testing()
+        mock.queue_stream(_chunks("Hello", " World", "!"))
+
+        LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
+        AIModule = AgentModule.for_root(agents=[StreamAgent], imports=LLMProvider)
+
+        @module(imports=[LLMProvider, AIModule], controllers=[StreamController])
+        class AppModule: ...
+
+        app = LaurenFactory.create(AppModule)
+        r = TestClient(app).get("/stream/chat")
+
+        assert r.status_code == 200
+        assert "text/event-stream" in (_get_header(r.headers, "content-type") or "")
+
+        events = _parse_sse(r.body)
+        delta_events = [e for e in events if e.get("event") == "delta"]
+        done_events = [e for e in events if e.get("event") == "done"]
+
+        assert len(delta_events) == 3
+        assert len(done_events) == 1
+        assert done_events[0]["data"] == "end_turn"
+
+    def test_sse_stream_with_class_tool_and_di(self):
+        """Class-based tool with DI executes silently; final answer streams as SSE."""
+
+        called_with: list[str] = []
+
+        @injectable(scope=Scope.SINGLETON)
+        class SearchIndex:
+            def lookup(self, q: str) -> str:
+                called_with.append(q)
+                return f"result:{q}"
+
+        @tool()
+        class LookupTool:
+            """Look up a query in the search index.
+
+            Args:
+                q: The search query.
+            """
+
+            def __init__(self, index: SearchIndex) -> None:
+                self._index = index
+
+            async def run(self, q: str) -> str:
+                return self._index.lookup(q)
+
+        @agent(model="mock-model")
+        @use_tools(LookupTool)
+        class SearchAgent: ...
+
+        @controller("/search-stream")
+        class SearchStreamController:
+            def __init__(self, runner: AgentRunner, ai: SearchAgent) -> None:
+                self._runner = runner
+                self._ai = ai
+
+            @get("/chat")
+            async def stream_chat(self) -> EventStream:
+                async def gen() -> AsyncIterator[ServerSentEvent]:
+                    stream = await self._runner.run_stream(self._ai, "Search for x.")
+                    async for chunk in stream:
+                        if chunk.delta:
+                            yield ServerSentEvent(event="delta", data=chunk.delta)
+                        if chunk.stop_reason == "end_turn":
+                            yield ServerSentEvent(event="done", data="end_turn")
+
+                return EventStream(gen())
+
+        cfg, mock = LLMConfig.for_testing()
+        # Turn 1: streaming tool-use chunks so _stream_loop can accumulate and execute
+        mock.queue_stream([
+            CompletionChunk(
+                tool_call_delta=ToolCallDelta(
+                    tool_use_id="tc1", name="lookup_tool", input_delta='{"q":"x"}'
+                )
+            ),
+            CompletionChunk(
+                delta="",
+                stop_reason="tool_use",
+                usage=TokenUsage(input_tokens=10, output_tokens=5),
+            ),
+        ])
+        # Turn 2: streaming final answer
+        mock.queue_stream(_chunks("Found: result:x"))
+
+        LLMProvider = LLMModule.for_root(cfg, transport_override=mock)
+
+        @module(providers=[SearchIndex], exports=[SearchIndex])
+        class IndexModule: ...
+
+        AIModule = AgentModule.for_root(
+            agents=[SearchAgent],
+            imports=[LLMProvider, IndexModule],
+        )
+
+        @module(imports=[LLMProvider, AIModule, IndexModule], controllers=[SearchStreamController])
+        class AppModule: ...
+
+        app = LaurenFactory.create(AppModule)
+        r = TestClient(app).get("/search-stream/chat")
+
+        assert r.status_code == 200
+        events = _parse_sse(r.body)
+        delta_events = [e for e in events if e.get("event") == "delta"]
+        done_events = [e for e in events if e.get("event") == "done"]
+
+        # The tool was called with the correct argument via DI
+        assert called_with == ["x"]
+        # The final streamed answer arrived as delta SSE events
+        assert any("Found" in e.get("data", "") for e in delta_events)
+        assert len(done_events) == 1
+        assert done_events[0]["data"] == "end_turn"
