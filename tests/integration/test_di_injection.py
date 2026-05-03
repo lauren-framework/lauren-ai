@@ -22,7 +22,6 @@ from lauren.testing import TestClient
 from lauren_ai import AgentModule, AgentRunner, LLMConfig, LLMModule, agent, tool, use_tools
 from lauren_ai._transport import Completion, TokenUsage
 
-
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------

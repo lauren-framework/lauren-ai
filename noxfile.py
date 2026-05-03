@@ -85,6 +85,18 @@ def tests(session: nox.Session) -> None:
     session.run(
         "pytest",
         TESTS,
+        "-q",
+        *session.posargs,
+    )
+    
+
+@nox.session(name="coverage", python=DEFAULT_PYTHON)
+def coverage(session: nox.Session) -> None:
+    """Run all non-benchmark, non-eval tests with coverage."""
+    _install_dev(session)
+    session.run(
+        "pytest",
+        TESTS,
         "--cov=lauren_ai",
         "--cov-report=term-missing",
         "--cov-report=xml",

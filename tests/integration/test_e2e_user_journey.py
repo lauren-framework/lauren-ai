@@ -22,10 +22,8 @@ Scenarios covered:
 
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncIterator
 
-import pytest
 from lauren import Json, LaurenFactory, Scope, controller, get, injectable, module, post
 from lauren.sse import EventStream, ServerSentEvent
 from lauren.testing import TestClient
@@ -45,7 +43,6 @@ from lauren_ai import (
     use_tools,
 )
 from lauren_ai._transport import Completion, CompletionChunk, ToolCallDelta
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
