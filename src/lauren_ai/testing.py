@@ -22,8 +22,8 @@ Example::
         class TestModule: ...
 
         app = LaurenFactory.create(TestModule)
-        agent = app.container.resolve_sync(TravelAgent)
-        runner = app.container.resolve_sync(AgentRunner)
+        agent = await app.container.resolve(TravelAgent)
+        runner = await app.container.resolve(AgentRunner)
         return AgentTestClient(agent, mock, runner=runner)
 """
 
