@@ -52,7 +52,9 @@ async def search_database(query: str, limit: int = 10) -> list:
 
 ## Class-form tool (stateful)
 
-Use a class when the tool needs injected dependencies or state:
+Use a class when the tool needs injected dependencies or state.
+**Class-form tools must define a `run()` method** — `@tool()` looks for `run`;
+a `__call__` is silently ignored and the decorator will raise `ValueError`.
 
 ```python
 from lauren_ai import tool, ToolContext
@@ -71,7 +73,7 @@ class EmailTool:
         self._host = smtp_host
         self._port = smtp_port
 
-    async def __call__(
+    async def run(
         self,
         to: str,
         subject: str,

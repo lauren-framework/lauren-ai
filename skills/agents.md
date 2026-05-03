@@ -11,8 +11,8 @@ from __future__ import annotations
 from lauren_ai import agent, use_tools
 from .tools import my_tool
 
-@use_tools(my_tool)
 @agent(model="openai/gpt-4o-mini", system="You are a helpful assistant.")
+@use_tools(my_tool)
 class MyAgent: ...
 ```
 
