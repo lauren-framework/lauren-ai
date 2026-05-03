@@ -12,7 +12,6 @@ any agent via ``@use_tools()``::
 Available skills
 ----------------
 
-* :class:`WebSearchTool` — search the web (stub; override ``search()`` with a real API).
 * :class:`HttpFetchTool` — fetch a URL via HTTP and return the body text.
 * :class:`CodeExecutionTool` — execute Python code snippets in a sandbox.
 * :class:`DelegateToAgentTool` — hand off to another registered agent.
@@ -24,44 +23,10 @@ from typing import Any, Optional
 from lauren_ai._tools import ToolContext, tool
 
 __all__ = [
-    "WebSearchTool",
     "HttpFetchTool",
     "CodeExecutionTool",
     "DelegateToAgentTool",
 ]
-
-
-# ---------------------------------------------------------------------------
-# WebSearchTool
-# ---------------------------------------------------------------------------
-
-
-@tool()
-async def WebSearchTool(  # noqa: N802
-    query: str,
-    max_results: int = 5,
-    ctx: ToolContext | None = None,
-) -> list:
-    """Search the web for information about *query*.
-
-    Args:
-        query: The search query string.
-        max_results: Maximum number of results to return (1-20).
-
-    Returns a list of results, each with ``title``, ``url``, and ``snippet``.
-    """
-    # Stub implementation — override with a real search API (e.g. SerpAPI,
-    # Brave Search, Tavily) in production.
-    return [
-        {
-            "title": f"Search result for: {query}",
-            "url": "https://example.com/result-1",
-            "snippet": (
-                "This is a placeholder search result. "
-                "Configure a real search backend to get actual results."
-            ),
-        }
-    ]
 
 
 # ---------------------------------------------------------------------------
