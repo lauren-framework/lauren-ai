@@ -15,8 +15,8 @@ Tests cover:
 from __future__ import annotations
 
 import pytest
-
 from lauren import LaurenFactory, Scope, injectable, module
+
 from lauren_ai._agents import agent, use_tools
 from lauren_ai._agents._runner import AgentRunner
 from lauren_ai._config import LLMConfig
@@ -32,7 +32,6 @@ from lauren_ai._module import AgentModule, LLMModule
 from lauren_ai._tools import tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import AgentTestClient
-
 
 # ---------------------------------------------------------------------------
 # Helpers
