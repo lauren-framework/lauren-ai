@@ -7,7 +7,7 @@ First-party AI/LLM companion to the [Lauren web framework](https://github.com/la
 - **Provider-agnostic transport** — Anthropic, OpenAI, Ollama, LiteLLM, and `MockTransport` for zero-network-call tests
 - **`@tool()` decorator** — function-form and class-form (DI-injected), auto-generates JSON Schema from annotations + docstrings
 - **`@agent()` decorator** — autonomous agentic loop with `use_tools()`, lifecycle hooks, and budget guards
-- **Three memory tiers** — `ShortTermMemory` (sliding window), `MemoryStore` protocol (vector-backed), `ConversationStore` (persist history across requests)
+- **Four memory tiers** — `ShortTermMemory` (sliding window per run), `ConversationStore` (persist history across requests), `UserMemoryStore` + `@remember()` (per-user long-term facts), `InMemoryVectorStore` (RAG)
 - **Typed extractors** — `Agent[T]`, `Completion[T]`, `Embed[T]`, `StreamCompletion[T]` as handler parameters
 - **Module factories** — `LLMModule.for_root()` and `AgentModule.for_root()` feel like `LoggingModule.configure()`
 - **Knowledge Base & Agentic RAG** — `KnowledgeBase` with document loaders, hybrid BM25+vector retrieval, and `kb.as_tool()`
@@ -41,7 +41,7 @@ pip install "lauren-ai[all]"
 import os
 from lauren import controller, post, module, LaurenFactory
 from lauren.types import Json
-from lauren_ai import agent, use_tools, tool, Agent, LLMModule, AgentModule, LLMConfig
+from lauren_ai import agent, use_tools, tool, Agent, LLMModule, AgentModule, LLMConfig, InMemoryConversationStore
 from pydantic import BaseModel
 
 
@@ -79,7 +79,11 @@ class TravelController:
 LLMProviderModule = LLMModule.for_root(
     LLMConfig.for_anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 )
-AIModule = AgentModule.for_root(agents=[TravelAgent], tools=[get_weather])
+AIModule = AgentModule.for_root(
+    agents=[TravelAgent],
+    tools=[get_weather],
+    conversation_store=InMemoryConversationStore(),  # history persists across requests
+)
 
 
 @module(controllers=[TravelController], imports=[LLMProviderModule, AIModule])

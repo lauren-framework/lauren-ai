@@ -1,6 +1,6 @@
 # Memory
 
-`lauren-ai` has three memory tiers:
+`lauren-ai` has four memory tiers:
 
 | Tier | Class | Scope | Purpose |
 |---|---|---|---|
@@ -43,21 +43,42 @@ class MyAgent: ...
 
 ## ConversationStore
 
-`ConversationStore` is a protocol for persisting message histories across
-multiple `run()` calls within the same session.  Pass a `conversation_id` to
-`AgentRunner.run()` to enable history loading:
+`ConversationStore` persists full message history across multiple `run()` calls
+within a session.  Pass a store to `AgentModule.for_root()`, then supply a
+`conversation_id` on every `run()` call:
 
 ```python
-response = await runner.run(
-    agent,
-    "Continue our conversation.",
-    conversation_id="session-42",
+from lauren_ai import InMemoryConversationStore, AgentModule
+
+store = InMemoryConversationStore()
+
+AIModule = AgentModule.for_root(
+    agents=[MyAgent],
+    conversation_store=store,   # wired to AgentRunner automatically
+    imports=LLMProvider,
 )
 ```
 
-The built-in `InMemoryConversationStore` is wired automatically.  For
-production, implement the protocol backed by Redis, a database, or another
-store and pass it to `AgentModule.for_root(conversation_store=...)`.
+When `runner.run()` receives a `conversation_id`, the runner automatically:
+1. **Loads** the prior history from the store and seeds `ShortTermMemory`.
+2. **Saves** the updated history back to the store after the run.
+
+```python
+# Turn 1 — agent sees no prior history
+resp1 = await runner.run(agent, "My name is Alice.", conversation_id="sess-1")
+
+# Turn 2 — agent sees the Turn 1 exchange
+resp2 = await runner.run(agent, "What is my name?", conversation_id="sess-1")
+# resp2.content → "Your name is Alice."
+```
+
+Without `conversation_store` the `conversation_id` is accepted but ignored —
+each call starts with an empty `ShortTermMemory`.  Different IDs are completely
+isolated from each other.
+
+For production, implement the `ConversationStore` protocol backed by Redis,
+PostgreSQL, or any other store and pass that instance to
+`AgentModule.for_root(conversation_store=...)` instead.
 
 ---
 

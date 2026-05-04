@@ -385,6 +385,7 @@ runner = AgentRunner(
     config=llm_config,           # LLMConfig
     signals=signal_bus,          # Optional SignalBus
     cache_backend=None,          # Optional cache backend for tool results
+    conversation_store=store,    # Optional ConversationStore — enables history persistence
 )
 
 # Run an agent
@@ -437,6 +438,24 @@ await store.save("conv-1", messages)
 loaded = await store.load("conv-1")  # [] if missing
 await store.delete("conv-1")
 ```
+
+When `AgentRunner` is configured with a `conversation_store` and `runner.run()`
+is called with a `conversation_id`, the runner automatically loads the prior
+history before adding the new user message and saves the updated history after
+the run completes.  Wire it through `AgentModule.for_root()`:
+
+```python
+AIModule = AgentModule.for_root(
+    agents=[MyAgent],
+    conversation_store=InMemoryConversationStore(),
+    imports=LLMProvider,
+)
+# Then in your controller:
+resp = await runner.run(agent, "Hello", conversation_id="sess-1")
+```
+
+Without a `conversation_store` the `conversation_id` parameter is accepted but
+unused — each call starts with an empty `ShortTermMemory`.
 
 ### `InMemoryVectorStore`
 

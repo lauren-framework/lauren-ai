@@ -1,6 +1,6 @@
 # Memory Reference
 
-`lauren-ai` has a three-tier memory architecture:
+`lauren-ai` has a four-tier memory architecture:
 
 | Tier | Class | Scope | Purpose |
 |------|-------|-------|---------|
@@ -72,6 +72,43 @@ from lauren_ai import ConversationStore
 ### `InMemoryConversationStore`
 
 In-process implementation of `ConversationStore`. Suitable for development and testing. State is lost on restart.
+
+#### Wiring to `AgentRunner`
+
+Pass the store to `AgentModule.for_root()` — it is captured and injected into
+`AgentRunner` automatically:
+
+```python
+from lauren_ai import InMemoryConversationStore, AgentModule
+
+store = InMemoryConversationStore()
+AIModule = AgentModule.for_root(
+    agents=[MyAgent],
+    conversation_store=store,
+    imports=LLMProvider,
+)
+```
+
+Then pass `conversation_id` to `runner.run()` to activate history persistence:
+
+```python
+# Turn 1
+await runner.run(agent, "My name is Alice.", conversation_id="sess-1")
+# Turn 2 — agent sees the full prior exchange
+resp = await runner.run(agent, "What is my name?", conversation_id="sess-1")
+```
+
+Without `conversation_store` configured, `conversation_id` is accepted but has
+no effect — each run starts with an empty `ShortTermMemory`.
+
+#### Additional methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `list_conversations` | `async () -> list[str]` | Return sorted list of all stored conversation IDs. |
+| `clear` | `async () -> None` | Remove all stored conversations. |
+
+Supports `len()` (`__len__`) and `in` (`__contains__`).
 
 ---
 

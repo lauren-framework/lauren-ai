@@ -278,13 +278,20 @@ async def my_operation(input: str) -> str:
 ## `AgentRunner` methods
 
 ```python
-runner = AgentRunner(transport=..., registry=..., config=..., signals=..., cache_backend=...)
+runner = AgentRunner(
+    transport=...,
+    registry=...,
+    config=...,
+    signals=...,           # Optional SignalBus
+    cache_backend=...,     # Optional tool-result cache
+    conversation_store=...,# Optional ConversationStore — enables history persistence
+)
 
 # Blocking run — returns AgentResponse
 response: AgentResponse = await runner.run(
     agent_instance,            # @agent()-decorated instance
     "User message",
-    conversation_id="sess-1",  # Optional session identifier
+    conversation_id="sess-1",  # Optional — loads prior history, saves after run
     metadata={"user_id": "u1"},
     run_id="run-abc",          # Optional — random hex if omitted
 )
@@ -378,6 +385,36 @@ controllers and services.
 ---
 
 ## Memory cookbook
+
+### Conversation history across requests
+
+Pass `conversation_store` to `AgentModule.for_root()` (preferred) or directly
+to `AgentRunner`.  Then supply a `conversation_id` on each `run()` call — the
+runner loads prior messages before the new turn and saves the updated history
+afterward:
+
+```python
+from lauren_ai import InMemoryConversationStore, AgentModule
+
+store = InMemoryConversationStore()
+
+AIModule = AgentModule.for_root(
+    agents=[MyAgent],
+    conversation_store=store,   # wired to AgentRunner automatically
+    imports=LLMProvider,
+)
+
+# In a controller — each request carries the same session ID:
+resp1 = await runner.run(agent, "My name is Alice.", conversation_id="sess-1")
+resp2 = await runner.run(agent, "What is my name?",  conversation_id="sess-1")
+# resp2 sees the full prior exchange — the agent replies "Alice"
+```
+
+Without `conversation_store` the runner creates a fresh `ShortTermMemory` per
+call; the `conversation_id` is accepted but ignored.  Different IDs are
+completely isolated.
+
+### Long-term user facts
 
 ```python
 from lauren_ai import InMemoryUserMemoryStore, MemoryFact
@@ -576,6 +613,6 @@ Passing the class breaks lifecycle hooks because `on_start` / `on_turn_complete`
 - **Do not** use `@guardrail(input=[...], output=[...])` on agents — that form is for DI-injectable guardrail classes; use `@use_guardrails(input=[...], output=[...])` on agents instead.
 - **Do not** define `__call__` in class-form tools — `@tool()` looks for `run()`.
 - **Do not** register the same tool in `ToolRegistry` twice — it will override silently.
-- **Do not** pass `conversation_id=None` when you want session persistence — always supply one.
-- **Do not** share `ShortTermMemory` across runs — it is created fresh per `AgentRunner.run()` call.
+- **Do not** pass `conversation_id=None` when you want session persistence — always supply one, and ensure `conversation_store` was passed to `AgentModule.for_root()` or `AgentRunner.__init__`.
+- **Do not** share `ShortTermMemory` across runs — it is created fresh per `AgentRunner.run()` call (prior history is loaded from `ConversationStore` when available).
 - **Do not** pass agent **classes** to `runner.run()` — always pass a DI-resolved **instance**. Passing a class bypasses DI and breaks lifecycle hooks (raises `TypeError: on_start() missing 1 required positional argument: 'ctx'`).

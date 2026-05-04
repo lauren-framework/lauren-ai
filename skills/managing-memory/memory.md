@@ -39,23 +39,33 @@ class MyAgent:
 ## Tier 2 — Conversation store (`ConversationStore`)
 
 Persists full conversation history across multiple agent runs within a session.
+The preferred way to wire it is via `AgentModule.for_root()`:
 
 ```python
-from lauren_ai import InMemoryConversationStore, ConversationStore
+from lauren_ai import InMemoryConversationStore, AgentModule
 
-# In-memory (non-persistent)
-store: ConversationStore = InMemoryConversationStore()
+store = InMemoryConversationStore()
 
-await store.append(conversation_id="sess-1", messages=[
-    Message(role="user", content="Hi"),
-    Message(role="assistant", content="Hello!"),
-])
-
-history = await store.get(conversation_id="sess-1")
-# list[Message]
+AIModule = AgentModule.for_root(
+    agents=[MyAgent],
+    conversation_store=store,   # wired to AgentRunner automatically
+    imports=LLMProvider,
+)
 ```
 
-Pass the store to `AgentRunner`:
+When `runner.run()` receives a `conversation_id`, the runner automatically
+loads prior messages before the new turn and saves the updated history after:
+
+```python
+# Turn 1 — no prior history
+resp1 = await runner.run(agent, "My name is Alice.", conversation_id="sess-1")
+
+# Turn 2 — full prior exchange is injected into ShortTermMemory
+resp2 = await runner.run(agent, "What is my name?", conversation_id="sess-1")
+# resp2.content → "Your name is Alice."
+```
+
+You can also construct `AgentRunner` directly if you need finer control:
 
 ```python
 from lauren_ai import AgentRunner, LLMConfig
@@ -66,9 +76,14 @@ runner = AgentRunner(
     config=cfg,
     conversation_store=store,
 )
+```
 
-# All calls with the same conversation_id share history
-result = await runner.run(MyAgent(), "What did I say before?", conversation_id="sess-1")
+Direct store manipulation uses `save` / `load` / `delete`:
+
+```python
+await store.save("sess-1", messages)        # overwrite full history
+history = await store.load("sess-1")        # [] if not found
+await store.delete("sess-1")               # remove conversation
 ```
 
 ### Custom persistent store
@@ -77,9 +92,9 @@ Implement the `ConversationStore` protocol:
 
 ```python
 class RedisConversationStore(ConversationStore):
-    async def get(self, conversation_id: str) -> list[Message]: ...
-    async def append(self, conversation_id: str, messages: list[Message]) -> None: ...
-    async def clear(self, conversation_id: str) -> None: ...
+    async def load(self, conversation_id: str) -> list[Message]: ...
+    async def save(self, conversation_id: str, messages: list[Message]) -> None: ...
+    async def delete(self, conversation_id: str) -> None: ...
 ```
 
 ---

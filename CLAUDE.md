@@ -258,7 +258,7 @@ dict tool result — no exception involved.
 
 ---
 
-## Memory — 3-tier architecture
+## Memory — 4-tier architecture
 
 | Tier | Class | Scope | Purpose |
 |------|-------|-------|---------|
@@ -270,6 +270,33 @@ dict tool result — no exception involved.
 `@remember()` must be placed between `@agent()` and `@guardrail()`.  It attaches
 `RememberMeta` (with `store_token`, `extract`, `inject`, `top_k`).  The runner
 reads this metadata to inject memory context and extract new facts after each turn.
+
+### Conversation memory — automatic load/save
+
+When `AgentRunner` has a `conversation_store` configured **and** `runner.run()`
+is called with a `conversation_id`, the runner automatically:
+
+1. **Loads** prior messages from the store and seeds `ShortTermMemory` before
+   adding the new user message.
+2. **Saves** the full updated history back to the store after `on_finish`.
+
+Wire it via `AgentModule.for_root()`:
+
+```python
+from lauren_ai import InMemoryConversationStore
+
+store = InMemoryConversationStore()
+
+AgentModule.for_root(
+    agents=[MyAgent],
+    conversation_store=store,   # ← wired to AgentRunner automatically
+    imports=LLMProvider,
+)
+```
+
+Without a `conversation_store` the runner creates a fresh `ShortTermMemory` on
+every call and the `conversation_id` is accepted but unused.  Without a
+`conversation_id` the store is never touched even if one is configured.
 
 ---
 

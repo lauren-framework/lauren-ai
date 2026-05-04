@@ -69,19 +69,32 @@ tools, guardrails, or memory configuration.
 ## Tier 2: Conversation history across runs
 
 Use `ConversationStore` to persist full message history across multiple agent
-runs within a session:
+runs within a session.  Wire it through `AgentModule.for_root()`:
 
 ```python
-from lauren_ai import InMemoryConversationStore, AgentRunner, LLMConfig
+from lauren_ai import InMemoryConversationStore, AgentModule
 
 store = InMemoryConversationStore()
-cfg = LLMConfig(provider="anthropic", model="claude-opus-4-6")
-runner = AgentRunner(transport=..., config=cfg, conversation_store=store)
 
-# Each call with the same conversation_id shares history
-result1 = await runner.run(MyAgent(), "My name is Alice.", conversation_id="sess-1")
-result2 = await runner.run(MyAgent(), "What is my name?", conversation_id="sess-1")
+AIModule = AgentModule.for_root(
+    agents=[MyAgent],
+    conversation_store=store,   # wired to AgentRunner automatically
+    imports=LLMProvider,
+)
 ```
+
+Then pass a `conversation_id` on each `run()` call — the runner loads prior
+history before the new message and saves afterward:
+
+```python
+# Turn 1
+result1 = await runner.run(agent, "My name is Alice.", conversation_id="sess-1")
+# Turn 2 — agent sees the full prior exchange
+result2 = await runner.run(agent, "What is my name?", conversation_id="sess-1")
+# result2.content → "Your name is Alice."
+```
+
+Without `conversation_store`, `conversation_id` is accepted but ignored.
 
 ---
 
