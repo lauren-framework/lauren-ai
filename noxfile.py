@@ -273,9 +273,50 @@ def prek(session: nox.Session) -> None:
 
 @nox.session(name="clean", python=DEFAULT_PYTHON)
 def clean(session: nox.Session) -> None:
-    """Remove build artifacts."""
+    """Remove build artifacts and common junk files recursively."""
     import shutil
+    from pathlib import Path
 
-    for path in ["dist", "build", ".coverage", "htmlcov", ".mypy_cache", ".ruff_cache"]:
-        shutil.rmtree(path, ignore_errors=True)
-    session.log("Cleaned build artifacts.")
+    ROOT = Path.cwd()
+
+    # Directories to remove entirely
+    DIR_TARGETS = {
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".nox",
+        ".tox",
+        "dist",
+        "build",
+        "htmlcov",
+        ".eggs",
+        "*.egg-info",
+        "node_modules",   # if present anywhere
+        ".cache",
+        "tmp",
+    }
+
+    # File patterns to remove
+    FILE_TARGETS = {
+        "*.pyc",
+        "*.pyo",
+        "*.log",
+        "*.tmp",
+        "*.swp",
+        ".coverage",
+    }
+
+    # Remove directories
+    for pattern in DIR_TARGETS:
+        for path in ROOT.rglob(pattern):
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+
+    # Remove files
+    for pattern in FILE_TARGETS:
+        for path in ROOT.rglob(pattern):
+            if path.is_file():
+                path.unlink(missing_ok=True)
+
+    session.log("Aggressively cleaned project junk.")
