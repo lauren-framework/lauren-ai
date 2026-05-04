@@ -181,3 +181,133 @@ class TestAgentRunnerBasic:
         # Should NOT raise — policy is "return_error" by default
         response = await runner.run(instance, "Use the tool")
         assert response.stop_reason == "end_turn"
+
+
+# ---------------------------------------------------------------------------
+# Conversation memory persistence
+# ---------------------------------------------------------------------------
+
+from lauren_ai._memory._stores import InMemoryConversationStore  # noqa: E402
+
+
+def _compl(content: str, *, n: int = 1) -> Completion:
+    return Completion(
+        id=f"c{n}", model="mock", content=content,
+        tool_calls=[], stop_reason="end_turn",
+        usage=TokenUsage(input_tokens=10, output_tokens=5),
+    )
+
+
+def make_runner_with_store(mock: MockTransport, store: InMemoryConversationStore) -> AgentRunner:
+    registry = ToolRegistry()
+    config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
+    return AgentRunner(transport=mock, registry=registry, config=config, conversation_store=store)
+
+
+@agent(model="mock-model")
+class _MemAgent:
+    """Minimal agent for conversation-memory tests."""
+
+
+class TestAgentRunnerConversationMemory:
+    """AgentRunner loads and saves conversation history via ConversationStore."""
+
+    @pytest.mark.asyncio
+    async def test_first_run_saves_history(self, mock):
+        """After the first run the exchange is persisted in the store."""
+        store = InMemoryConversationStore()
+        runner = make_runner_with_store(mock, store)
+        mock.queue_response(_compl("Hello there!", n=1))
+
+        await runner.run(_MemAgent(), "Hi", conversation_id="s1")
+
+        saved = await store.load("s1")
+        assert len(saved) == 2
+        assert saved[0] == {"role": "user", "content": "Hi"}
+        assert saved[1]["role"] == "assistant"
+        assert saved[1]["content"] == "Hello there!"
+
+    @pytest.mark.asyncio
+    async def test_second_run_sees_prior_messages(self, mock):
+        """The transport receives the full prior exchange on the second call."""
+        store = InMemoryConversationStore()
+        runner = make_runner_with_store(mock, store)
+
+        # Turn 1
+        mock.queue_response(_compl("I'm fine, thanks.", n=1))
+        await runner.run(_MemAgent(), "How are you?", conversation_id="s2")
+
+        # Turn 2 — capture what the transport receives
+        sent: list = []
+        original = mock.complete
+
+        async def spy(messages, **kw):
+            sent.extend(messages)
+            return await original(messages, **kw)
+
+        mock.complete = spy
+        mock.queue_response(_compl("You asked how I was.", n=2))
+        await runner.run(_MemAgent(), "What did I ask?", conversation_id="s2")
+
+        # Messages seen by the LLM: [prior user, prior assistant, new user]
+        assert len(sent) == 3
+        assert sent[0]["content"] == "How are you?"
+        assert sent[1]["content"] == "I'm fine, thanks."
+        assert sent[2]["content"] == "What did I ask?"
+
+    @pytest.mark.asyncio
+    async def test_no_conversation_id_does_not_write_store(self, mock):
+        """Without a conversation_id the store is never touched."""
+        store = InMemoryConversationStore()
+        runner = make_runner_with_store(mock, store)
+        mock.queue_response(_compl("OK", n=1))
+
+        await runner.run(_MemAgent(), "Hello")  # no conversation_id
+
+        assert len(store) == 0
+
+    @pytest.mark.asyncio
+    async def test_no_store_runs_normally(self, mock):
+        """Runner without a store behaves exactly as before — no regression."""
+        runner = make_runner(mock)  # no conversation_store
+        mock.queue_response(_compl("Fine", n=1))
+
+        resp = await runner.run(_MemAgent(), "Hey", conversation_id="irrelevant")
+
+        assert resp.content == "Fine"
+
+    @pytest.mark.asyncio
+    async def test_different_conversation_ids_are_isolated(self, mock):
+        """Separate conversation IDs never share message history."""
+        store = InMemoryConversationStore()
+        runner = make_runner_with_store(mock, store)
+        inst = _MemAgent()
+
+        mock.queue_response(_compl("Alice answer", n=1))
+        await runner.run(inst, "Alice question", conversation_id="alice")
+
+        mock.queue_response(_compl("Bob answer", n=2))
+        await runner.run(inst, "Bob question", conversation_id="bob")
+
+        alice = await store.load("alice")
+        bob = await store.load("bob")
+
+        assert all("Bob" not in str(m) for m in alice)
+        assert all("Alice" not in str(m) for m in bob)
+
+    @pytest.mark.asyncio
+    async def test_history_accumulates_across_runs(self, mock):
+        """Each run appends one user + one assistant entry to the stored history."""
+        store = InMemoryConversationStore()
+        runner = make_runner_with_store(mock, store)
+        inst = _MemAgent()
+        conv_id = "multi"
+
+        for i in range(4):
+            mock.queue_response(_compl(f"Reply {i}", n=i))
+            await runner.run(inst, f"Msg {i}", conversation_id=conv_id)
+
+        history = await store.load(conv_id)
+        assert len(history) == 8  # 4 user + 4 assistant
+        user_contents = [m["content"] for m in history if m["role"] == "user"]
+        assert user_contents == ["Msg 0", "Msg 1", "Msg 2", "Msg 3"]

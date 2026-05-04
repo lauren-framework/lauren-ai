@@ -68,11 +68,13 @@ class AgentRunner:
         config: LLMConfig,
         signals: Any | None = None,
         cache_backend: CacheBackend | None = None,
+        conversation_store: Any | None = None,
     ) -> None:
         self._transport = transport
         self._registry = registry
         self._config = config
         self._signals = signals
+        self._conversation_store = conversation_store
         self._executor = ToolExecutor(
             registry=registry,
             cache_backend=cache_backend,
@@ -137,8 +139,13 @@ class AgentRunner:
         agent_run_id = run_id or uuid.uuid4().hex
         agent_id = uuid.uuid4().hex
 
-        # Short-term memory for this run
+        # Short-term memory for this run — seeded with prior history when a
+        # conversation_store is configured and a conversation_id is provided.
         memory = ShortTermMemory(max_tokens=effective_config.memory_window_tokens)
+        if conversation_id and self._conversation_store is not None:
+            prior = await self._conversation_store.load(conversation_id)
+            if prior:
+                memory.restore(prior)
         memory.add_user(message)
 
         # Agent context
@@ -298,6 +305,8 @@ class AgentRunner:
                 reasoning_traces=delegated_response.reasoning_traces,
             )
             await self._call_hook(agent, "on_finish", response, ctx)
+            if conversation_id and self._conversation_store is not None:
+                await self._conversation_store.save(conversation_id, memory.snapshot())
             await self._emit(
                 "AgentRunComplete",
                 agent_id=agent_run_id,
@@ -334,6 +343,10 @@ class AgentRunner:
 
         # Lifecycle hook: on_finish
         await self._call_hook(agent, "on_finish", response, ctx)
+
+        # Persist conversation history for the next turn
+        if conversation_id and self._conversation_store is not None:
+            await self._conversation_store.save(conversation_id, memory.snapshot())
 
         # Signal: AgentRunComplete
         await self._emit(

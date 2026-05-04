@@ -521,6 +521,7 @@ class AgentModule:
 
         _captured_tool_cache = tool_cache
         _captured_signals = signals
+        _captured_conversation_store = conversation_store
 
         # ── Categorize tools into function-form and class-form ──────────────
         #
@@ -652,6 +653,7 @@ class AgentModule:
                     config=cfg,
                     signals=_captured_signals,
                     cache_backend=_captured_tool_cache,
+                    conversation_store=_captured_conversation_store,
                 ),
                 inject=[_Transport, ToolRegistry, LLMConfig],
                 scope=Scope.SINGLETON,
