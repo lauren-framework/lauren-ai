@@ -12,8 +12,7 @@ import pytest
 from lauren_ai._agents import agent, use_tools
 from lauren_ai._agents._runner import AgentRunner
 from lauren_ai._config import LLMConfig
-from lauren_ai._tools import tool
-from lauren_ai._tools._registry import ToolRegistry
+from lauren_ai._tools import TOOL_META, tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
 
@@ -22,13 +21,21 @@ from lauren_ai._transport._mock import MockTransport
 # ---------------------------------------------------------------------------
 
 
+def _make_tool_map(*tool_funcs) -> dict:
+    tools = {}
+    for t in tool_funcs:
+        m = getattr(t, TOOL_META)
+        tools[m.name] = (t, m)
+    return tools
+
+
 def make_runner(
     mock: MockTransport,
-    registry: ToolRegistry | None = None,
+    tools: dict | None = None,
 ) -> AgentRunner:
-    registry = registry or ToolRegistry()
+    tools = tools if tools is not None else {}
     config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, registry=registry, config=config)
+    return AgentRunner(transport=mock, tools=tools, config=config)
 
 
 def text_completion(content: str, *, id: str = "c1") -> Completion:
@@ -116,9 +123,8 @@ class TestSingleToolFlow:
     async def test_weather_tool_call_and_final_answer(self):
         """Agent calls get_weather once, then gives a final text answer."""
         mock = MockTransport()
-        registry = ToolRegistry()
-        registry.register(get_weather)
-        runner = make_runner(mock, registry)
+        tools = _make_tool_map(get_weather)
+        runner = make_runner(mock, tools)
 
         mock.queue_tool_use("get_weather", {"city": "London"})
         mock.queue_response(text_completion("The weather in London is sunny at 22°C.", id="c2"))
@@ -137,9 +143,8 @@ class TestSingleToolFlow:
     async def test_mock_transport_recorded_two_calls(self):
         """MockTransport records one call per model invocation."""
         mock = MockTransport()
-        registry = ToolRegistry()
-        registry.register(get_weather)
-        runner = make_runner(mock, registry)
+        tools = _make_tool_map(get_weather)
+        runner = make_runner(mock, tools)
 
         mock.queue_tool_use("get_weather", {"city": "Paris"})
         mock.queue_response(text_completion("Paris is sunny.", id="c2"))
@@ -154,9 +159,8 @@ class TestSingleToolFlow:
     async def test_tool_use_id_is_tracked(self):
         """The tool_use_id on the ToolCall matches what MockTransport generated."""
         mock = MockTransport()
-        registry = ToolRegistry()
-        registry.register(get_weather)
-        runner = make_runner(mock, registry)
+        tools = _make_tool_map(get_weather)
+        runner = make_runner(mock, tools)
 
         mock.queue_tool_use("get_weather", {"city": "Tokyo"}, tool_use_id="tool-abc-123")
         mock.queue_response(text_completion("Tokyo weather: 22C.", id="c2"))
@@ -170,9 +174,8 @@ class TestSingleToolFlow:
     async def test_token_usage_accumulated_across_turns(self):
         """Total usage sums across both model calls."""
         mock = MockTransport()
-        registry = ToolRegistry()
-        registry.register(get_weather)
-        runner = make_runner(mock, registry)
+        tools = _make_tool_map(get_weather)
+        runner = make_runner(mock, tools)
 
         mock.queue_tool_use("get_weather", {"city": "Berlin"})
         mock.queue_response(
@@ -205,10 +208,8 @@ class TestMultiTurnToolFlow:
     async def test_two_sequential_tool_calls_then_end(self):
         """Agent calls two different tools in separate turns before finishing."""
         mock = MockTransport()
-        registry = ToolRegistry()
-        registry.register(get_weather)
-        registry.register(get_forecast)
-        runner = make_runner(mock, registry)
+        tools = _make_tool_map(get_weather, get_forecast)
+        runner = make_runner(mock, tools)
 
         mock.queue_tool_use("get_weather", {"city": "Madrid"})
         mock.queue_tool_use("get_forecast", {"city": "Madrid", "days": 3})
@@ -228,9 +229,8 @@ class TestMultiTurnToolFlow:
     async def test_same_tool_called_twice(self):
         """Agent calls the same tool in consecutive turns."""
         mock = MockTransport()
-        registry = ToolRegistry()
-        registry.register(get_weather)
-        runner = make_runner(mock, registry)
+        tools = _make_tool_map(get_weather)
+        runner = make_runner(mock, tools)
 
         mock.queue_tool_use("get_weather", {"city": "Rome"})
         mock.queue_tool_use("get_weather", {"city": "Milan"})
@@ -253,9 +253,8 @@ class TestToolErrorHandling:
     async def test_tool_error_policy_return_error_by_default(self):
         """By default (return_error policy), tool exceptions do not propagate."""
         mock = MockTransport()
-        registry = ToolRegistry()
-        registry.register(always_fails)
-        runner = make_runner(mock, registry)
+        tools = _make_tool_map(always_fails)
+        runner = make_runner(mock, tools)
 
         mock.queue_tool_use("always_fails", {"query": "boom"})
         mock.queue_response(text_completion("Sorry, the tool failed.", id="c2"))
@@ -274,10 +273,9 @@ class TestToolErrorHandling:
         # Import it from the executor module directly.
 
         mock = MockTransport()
-        registry = ToolRegistry()
-        registry.register(always_fails)
+        tools = _make_tool_map(always_fails)
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, registry=registry, config=config)
+        runner = AgentRunner(transport=mock, tools=tools, config=config)
 
         @agent(model="mock-model", tool_error_policy="raise")
         @use_tools(always_fails)
@@ -294,10 +292,9 @@ class TestToolErrorHandling:
     async def test_tool_error_policy_skip(self):
         """With tool_error_policy='skip', the loop continues silently after a tool error."""
         mock = MockTransport()
-        registry = ToolRegistry()
-        registry.register(always_fails)
+        tools = _make_tool_map(always_fails)
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, registry=registry, config=config)
+        runner = AgentRunner(transport=mock, tools=tools, config=config)
 
         @agent(model="mock-model", tool_error_policy="skip")
         @use_tools(always_fails)

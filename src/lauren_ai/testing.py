@@ -162,27 +162,25 @@ class AgentTestClient:
         from lauren_ai._agents import AGENT_META  # noqa: PLC0415
         from lauren_ai._agents._runner import AgentRunner  # noqa: PLC0415
         from lauren_ai._config import LLMConfig  # noqa: PLC0415
-        from lauren_ai._tools._registry import ToolRegistry  # noqa: PLC0415
+        from lauren_ai._tools import TOOL_META, _add_to_tool_map  # noqa: PLC0415
 
         agent_cls = type(self._agent)
         meta = getattr(agent_cls, AGENT_META, None)
 
-        registry = ToolRegistry()
+        tools: dict = {}
         if meta is not None:
-            from lauren_ai._tools import TOOL_META  # noqa: PLC0415
-
             for tool_ref in meta.tool_classes:
                 if tool_ref is None:
                     continue
                 if getattr(tool_ref, TOOL_META, None) is not None:
                     try:
-                        registry.register(tool_ref)
-                    except Exception:
+                        _add_to_tool_map(tools, tool_ref)
+                    except Exception:  # noqa: BLE001
                         pass
 
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         return AgentRunner(
             transport=mock_transport,
-            registry=registry,
+            tools=tools,
             config=config,
         )

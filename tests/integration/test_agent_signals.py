@@ -21,8 +21,7 @@ from lauren_ai._signals import (
     ToolCallComplete,
     ToolCallStarted,
 )
-from lauren_ai._tools import tool
-from lauren_ai._tools._registry import ToolRegistry
+from lauren_ai._tools import TOOL_META, tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
 
@@ -31,14 +30,22 @@ from lauren_ai._transport._mock import MockTransport
 # ---------------------------------------------------------------------------
 
 
+def _make_tool_map(*tool_funcs) -> dict:
+    tools = {}
+    for t in tool_funcs:
+        m = getattr(t, TOOL_META)
+        tools[m.name] = (t, m)
+    return tools
+
+
 def make_runner_with_signals(
     mock: MockTransport,
     bus: SignalBus,
-    registry: ToolRegistry | None = None,
+    tools: dict | None = None,
 ) -> AgentRunner:
-    registry = registry or ToolRegistry()
+    tools = tools if tools is not None else {}
     config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, registry=registry, config=config, signals=bus)
+    return AgentRunner(transport=mock, tools=tools, config=config, signals=bus)
 
 
 def text_completion(content: str, *, id: str = "c1") -> Completion:
@@ -192,9 +199,8 @@ class TestModelCallCompleteSignal:
         """ModelCallComplete fires once per model call (two calls = two events)."""
         bus = SignalBus()
         mock = MockTransport()
-        registry = ToolRegistry()
-        registry.register(echo_tool)
-        runner = make_runner_with_signals(mock, bus, registry)
+        tools = _make_tool_map(echo_tool)
+        runner = make_runner_with_signals(mock, bus, tools)
 
         received: list[ModelCallComplete] = []
 
@@ -242,9 +248,8 @@ class TestToolCallSignals:
         """ToolCallStarted is emitted with the tool name and input before execution."""
         bus = SignalBus()
         mock = MockTransport()
-        registry = ToolRegistry()
-        registry.register(echo_tool)
-        runner = make_runner_with_signals(mock, bus, registry)
+        tools = _make_tool_map(echo_tool)
+        runner = make_runner_with_signals(mock, bus, tools)
 
         started: list[ToolCallStarted] = []
 
@@ -268,9 +273,8 @@ class TestToolCallSignals:
         """ToolCallComplete is emitted after successful tool execution."""
         bus = SignalBus()
         mock = MockTransport()
-        registry = ToolRegistry()
-        registry.register(echo_tool)
-        runner = make_runner_with_signals(mock, bus, registry)
+        tools = _make_tool_map(echo_tool)
+        runner = make_runner_with_signals(mock, bus, tools)
 
         completed: list[ToolCallComplete] = []
 
@@ -301,11 +305,10 @@ class TestToolCallSignals:
 
         bus = SignalBus()
         mock = MockTransport()
-        registry = ToolRegistry()
-        registry.register(boom_tool)
+        tools = _make_tool_map(boom_tool)
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         runner = AgentRunner(
-            transport=mock, registry=registry, config=config, signals=bus
+            transport=mock, tools=tools, config=config, signals=bus
         )
 
         @agent(model="mock-model")
@@ -453,9 +456,8 @@ class TestSignalOrdering:
         """
         bus = SignalBus()
         mock = MockTransport()
-        registry = ToolRegistry()
-        registry.register(echo_tool)
-        runner = make_runner_with_signals(mock, bus, registry)
+        tools = _make_tool_map(echo_tool)
+        runner = make_runner_with_signals(mock, bus, tools)
 
         signal_order: list[str] = []
 
@@ -504,7 +506,7 @@ class TestSignalOrdering:
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         runner = AgentRunner(
             transport=mock,
-            registry=ToolRegistry(),
+            tools={},
             config=config,
             signals=None,  # explicitly no bus
         )

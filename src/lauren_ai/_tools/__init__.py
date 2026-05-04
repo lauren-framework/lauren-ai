@@ -246,6 +246,68 @@ TOOL_META: str = "__lauren_ai_tool__"
 
 
 # ---------------------------------------------------------------------------
+# Tool map helper
+# ---------------------------------------------------------------------------
+
+def _add_to_tool_map(
+    tool_map: dict,
+    tool_or_cls: Any,
+    *,
+    instance: Any | None = None,
+) -> None:
+    """Add a ``@tool()``-decorated function or class to a *tool_map* dict.
+
+    *tool_map* maps ``name → (callable_or_instance, ToolMeta)``.
+    Contains all validation formerly in ``ToolRegistry.register()``:
+
+    - ``MetadataInheritanceError`` for subclasses that inherit ``TOOL_META``
+      without re-applying ``@tool()``.
+    - ``ValueError`` when the object has no ``TOOL_META``.
+    - ``ValueError`` on name collision.
+
+    :param tool_map: Mutable dict to add the tool into.
+    :param tool_or_cls: A ``@tool()``-decorated function or class.
+    :param instance: Pre-resolved instance for class-form tools.
+    :raises MetadataInheritanceError: When a subclass inherits ``TOOL_META``
+        without re-applying ``@tool()``.
+    :raises ValueError: When the object has no ``TOOL_META`` or a name
+        collision is detected.
+    """
+    _cls = tool_or_cls if inspect.isclass(tool_or_cls) else (type(instance) if instance is not None else None)
+    if _cls is not None and TOOL_META not in _cls.__dict__:
+        _base = next((b for b in _cls.__mro__[1:] if TOOL_META in b.__dict__), None)
+        if _base is not None:
+            from lauren.exceptions import MetadataInheritanceError  # noqa: PLC0415
+
+            raise MetadataInheritanceError(
+                f"{_cls.__name__} inherits @tool() metadata from {_base.__name__} "
+                f"but is not itself decorated with @tool(). Subclasses of "
+                f"@tool()-decorated classes must re-apply @tool() to be usable as tools."
+            )
+
+    meta: ToolMeta | None = getattr(tool_or_cls, TOOL_META, None)
+    if meta is None:
+        if instance is not None:
+            meta = getattr(type(instance), TOOL_META, None) or getattr(instance, TOOL_META, None)
+        if meta is None:
+            raise ValueError(
+                f"Object {tool_or_cls!r} does not have a {TOOL_META!r} attribute. "
+                "Only objects decorated with @tool() can be registered."
+            )
+
+    name = meta.name
+    if name in tool_map:
+        existing_meta = tool_map[name][1]
+        raise ValueError(
+            f"Tool name collision: '{name}' is already in the tool map "
+            f"(existing={existing_meta!r}, new={meta!r}). "
+            "Each tool must have a unique name."
+        )
+
+    tool_map[name] = (instance if instance is not None else tool_or_cls, meta)
+
+
+# ---------------------------------------------------------------------------
 # @tool() decorator
 # ---------------------------------------------------------------------------
 

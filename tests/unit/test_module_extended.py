@@ -395,8 +395,7 @@ class TestAgentModule:
             """Simple."""
 
         cls = AgentModule.for_root(agents=[SimpleAgent])
-        from lauren_ai._tools._registry import ToolRegistry
-        assert isinstance(cls.registry_instance, ToolRegistry)
+        assert isinstance(cls.tools_instance, dict)
 
     def test_for_root_agent_classes_stored(self):
         from lauren_ai._agents import agent
@@ -485,45 +484,29 @@ class TestAgentModule:
         assert cls is not None
 
     def test_for_root_tool_register_exception_logs(self, caplog):
-        """If registry.register raises, it should log a warning and continue."""
+        """If _add_to_tool_map raises (e.g. name collision), it should log a warning and continue."""
         import logging
 
         from lauren_ai._agents import agent
-        from lauren_ai._tools import TOOL_META, ToolMeta
+        from lauren_ai._tools import tool
 
-        # Create a fake tool that will fail to register
-        class BrokenTool:
-            pass
+        @tool()
+        async def collision_tool(x: str) -> str:
+            """A tool. Args: x: Input."""
+            return x
 
-        fake_meta = ToolMeta(
-            name="broken_tool",
-            description="",
-            parameters={},
-            is_async=False,
-            reads_context=False,
-        )
-        setattr(BrokenTool, TOOL_META, fake_meta)
+        @tool(name="collision_tool")
+        async def collision_tool2(x: str) -> str:
+            """A tool. Args: x: Input."""
+            return x
 
         @agent()
         class AgentX:
             """A."""
 
-        # Monkeypatch the ToolRegistry.register to raise
-        from lauren_ai._tools._registry import ToolRegistry
-        original_register = ToolRegistry.register
-
-        def raising_register(self, item):
-            if getattr(getattr(item, TOOL_META, None), "name", "") == "broken_tool":
-                raise RuntimeError("simulate registration failure")
-            return original_register(self, item)
-
-        ToolRegistry.register = raising_register
-        try:
-            with caplog.at_level(logging.WARNING, logger="lauren_ai._module"):
-                cls = AgentModule.for_root(agents=[AgentX], tools=[BrokenTool])
-            assert cls is not None
-        finally:
-            ToolRegistry.register = original_register
+        with caplog.at_level(logging.WARNING, logger="lauren_ai._module"):
+            cls = AgentModule.for_root(agents=[AgentX], tools=[collision_tool, collision_tool2])
+        assert cls is not None
 
     def test_for_root_with_memory_and_conversation(self):
         from lauren_ai._agents import agent
@@ -556,3 +539,35 @@ class TestAgentModule:
         cache = InMemoryCacheBackend()
         cls = AgentModule.for_root(agents=[AgentZ], tool_cache=cache)
         assert cls is not None
+
+    def test_for_root_runner_class_exported_under_subclass_token(self):
+        """runner_class= causes the module to export the subclass, not AgentRunner."""
+        from lauren_ai._agents import agent
+        from lauren_ai._agents._runner import AgentRunner
+
+        class MyCustomRunner(AgentRunner):
+            """Marker subclass used as a distinct DI token."""
+
+        @agent()
+        class AgentForCustomRunner:
+            """Agent."""
+
+        cls = AgentModule.for_root(
+            agents=[AgentForCustomRunner],
+            runner_class=MyCustomRunner,
+        )
+        # The module's exports should contain MyCustomRunner, not AgentRunner.
+        assert MyCustomRunner in cls.__lauren_module__.exports
+        assert AgentRunner not in cls.__lauren_module__.exports
+
+    def test_for_root_runner_class_default_is_agent_runner(self):
+        """Without runner_class= the module exports the base AgentRunner."""
+        from lauren_ai._agents import agent
+        from lauren_ai._agents._runner import AgentRunner
+
+        @agent()
+        class AgentForDefaultRunner:
+            """Agent."""
+
+        cls = AgentModule.for_root(agents=[AgentForDefaultRunner])
+        assert AgentRunner in cls.__lauren_module__.exports

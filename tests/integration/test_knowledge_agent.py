@@ -14,7 +14,7 @@ from lauren_ai._agents._runner import AgentRunner
 from lauren_ai._config import LLMConfig
 from lauren_ai._knowledge import FixedSizeChunker, KnowledgeBase, TextLoader
 from lauren_ai._memory._vector import InMemoryVectorStore
-from lauren_ai._tools._registry import ToolRegistry
+from lauren_ai._tools import TOOL_META, _add_to_tool_map
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
 
@@ -23,13 +23,20 @@ from lauren_ai._transport._mock import MockTransport
 # ---------------------------------------------------------------------------
 
 
+def _make_tool_map(*tool_funcs) -> dict:
+    tools = {}
+    for t in tool_funcs:
+        _add_to_tool_map(tools, t)
+    return tools
+
+
 def make_runner(
     mock: MockTransport,
-    registry: ToolRegistry | None = None,
+    tools: dict | None = None,
 ) -> AgentRunner:
-    registry = registry or ToolRegistry()
+    tools = tools if tools is not None else {}
     config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, registry=registry, config=config)
+    return AgentRunner(transport=mock, tools=tools, config=config)
 
 
 def text_completion(content: str, *, id: str = "c1") -> Completion:
@@ -147,7 +154,6 @@ class TestKnowledgeBaseAsTool:
     @pytest.mark.asyncio
     async def test_as_tool_returns_tool_decorated_function(self):
         """as_tool() returns a function decorated with @tool()."""
-        from lauren_ai._tools import TOOL_META
 
         store = InMemoryVectorStore()
         kb = KnowledgeBase(store=store)
@@ -158,7 +164,6 @@ class TestKnowledgeBaseAsTool:
     @pytest.mark.asyncio
     async def test_as_tool_default_name(self):
         """as_tool() default name is 'search_knowledge_base'."""
-        from lauren_ai._tools import TOOL_META
 
         store = InMemoryVectorStore()
         kb = KnowledgeBase(store=store)
@@ -170,7 +175,6 @@ class TestKnowledgeBaseAsTool:
     @pytest.mark.asyncio
     async def test_as_tool_custom_name(self):
         """as_tool(name=...) sets the tool name."""
-        from lauren_ai._tools import TOOL_META
 
         store = InMemoryVectorStore()
         kb = KnowledgeBase(store=store)
@@ -181,15 +185,15 @@ class TestKnowledgeBaseAsTool:
 
     @pytest.mark.asyncio
     async def test_as_tool_can_be_registered(self):
-        """The tool returned by as_tool() can be registered in a ToolRegistry."""
+        """The tool returned by as_tool() can be added to a tool map without raising."""
         store = InMemoryVectorStore()
         kb = KnowledgeBase(store=store)
         kb_tool = kb.as_tool(name="kb_search_unique")
 
-        registry = ToolRegistry()
-        registry.register(kb_tool)  # should not raise
+        tools = {}
+        _add_to_tool_map(tools, kb_tool)  # should not raise
 
-        assert "kb_search_unique" in registry
+        assert "kb_search_unique" in tools
 
     @pytest.mark.asyncio
     async def test_as_tool_executes_search(self):
@@ -228,11 +232,9 @@ class TestKnowledgeAgentIntegration:
 
         kb_tool = kb.as_tool(name="search_lauren_docs")
 
-        registry = ToolRegistry()
-        registry.register(kb_tool)
-
+        tools = _make_tool_map(kb_tool)
         mock = MockTransport()
-        runner = make_runner(mock, registry)
+        runner = make_runner(mock, tools)
 
         @agent(model="mock-model", system="You are a documentation assistant.")
         @use_tools(kb_tool)
@@ -277,11 +279,9 @@ class TestKnowledgeAgentIntegration:
 
         kb_tool = kb.as_tool(name="empty_kb_search")
 
-        registry = ToolRegistry()
-        registry.register(kb_tool)
-
+        tools = _make_tool_map(kb_tool)
         mock = MockTransport()
-        runner = make_runner(mock, registry)
+        runner = make_runner(mock, tools)
 
         @agent(model="mock-model", system="You are a documentation assistant.")
         @use_tools(kb_tool)
@@ -314,12 +314,9 @@ class TestKnowledgeAgentIntegration:
         kb_tool_a = kb_a.as_tool(name="search_cats")
         kb_tool_b = kb_b.as_tool(name="search_dogs")
 
-        registry = ToolRegistry()
-        registry.register(kb_tool_a)
-        registry.register(kb_tool_b)
-
+        tools = _make_tool_map(kb_tool_a, kb_tool_b)
         mock = MockTransport()
-        runner = make_runner(mock, registry)
+        runner = make_runner(mock, tools)
 
         @agent(model="mock-model")
         @use_tools(kb_tool_a, kb_tool_b)

@@ -44,14 +44,17 @@ markdown_extensions:
       alternate_style: true
   - tables
   - attr_list
+  - md_in_html
 
 nav:
   - Home: index.md
   - Getting Started:
+    - Overview: getting-started/index.md
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quick-start.md
     - First Agent: getting-started/first-agent.md
   - Guides:
+    - Overview: guides/index.md
     - LLM Calls: guides/llm-calls.md
     - Tools: guides/tools.md
     - Agents: guides/agents.md
@@ -74,6 +77,7 @@ nav:
     - Evaluation: guides/evaluation.md
     - Extended Thinking: guides/extended-thinking.md
   - Reference:
+    - Overview: reference/index.md
     - Transport: reference/transport.md
     - Config: reference/config.md
     - Tools: reference/tools.md

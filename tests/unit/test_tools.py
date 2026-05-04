@@ -4,8 +4,7 @@ from __future__ import annotations
 import pytest
 
 from lauren_ai._agents import AgentContext
-from lauren_ai._tools import TOOL_META, ToolContext, ToolResult, tool
-from lauren_ai._tools._registry import ToolRegistry
+from lauren_ai._tools import TOOL_META, ToolContext, ToolResult, _add_to_tool_map, tool
 from lauren_ai._tools._schema import type_to_json_schema
 
 
@@ -246,9 +245,8 @@ class TestToolInheritance:
         class Sub(Base):
             pass
 
-        registry = ToolRegistry()
         with pytest.raises(MetadataInheritanceError, match="Sub"):
-            registry.register(Sub)
+            _add_to_tool_map({}, Sub)
 
     def test_subclass_with_tool_decorator_ok(self):
         @tool()
@@ -271,19 +269,17 @@ class TestToolInheritance:
             async def run(self, x: str) -> str:
                 return x
 
-        registry = ToolRegistry()
-        registry.register(SubOk)  # must not raise
-        assert "sub_ok_tool" in registry
+        tools = {}
+        _add_to_tool_map(tools, SubOk)  # must not raise
+        assert "sub_ok_tool" in tools
 
     def test_non_subclass_unaffected(self):
         """Registering an object with no TOOL_META raises ValueError, not MetadataInheritanceError."""
-        registry = ToolRegistry()
-
         class NoMeta:
             pass
 
         with pytest.raises(ValueError, match="does not have"):
-            registry.register(NoMeta)
+            _add_to_tool_map({}, NoMeta)
 
 
 class TestContextParamName:
@@ -344,9 +340,9 @@ class TestContextParamName:
             received.append(agent_ctx)
             return task
 
-        registry = ToolRegistry()
-        registry.register(receives_agent_ctx)
-        executor = ToolExecutor(registry=registry)
+        tools = {}
+        _add_to_tool_map(tools, receives_agent_ctx)
+        executor = ToolExecutor(tools=tools)
 
         dummy_ctx = ToolContext(
             agent_context=None,
@@ -397,7 +393,6 @@ class TestExecutionContext:
         from lauren_ai._agents import agent
         from lauren_ai._agents._runner import AgentRunner
         from lauren_ai._config import LLMConfig
-        from lauren_ai._tools._registry import ToolRegistry
         from lauren_ai._transport import Completion, TokenUsage
 
         @agent(model="mock-model")
@@ -420,7 +415,7 @@ class TestExecutionContext:
 
         runner = AgentRunner(
             transport=mock_transport,
-            registry=ToolRegistry(),
+            tools={},
             config=LLMConfig(provider="anthropic", model="mock-model"),
         )
 
@@ -442,7 +437,6 @@ class TestExecutionContext:
         from lauren_ai._agents import agent
         from lauren_ai._agents._runner import AgentRunner
         from lauren_ai._config import LLMConfig
-        from lauren_ai._tools._registry import ToolRegistry
         from lauren_ai._transport import Completion, TokenUsage
         from lauren_ai._transport import ToolCall as TransportToolCall
 
@@ -483,12 +477,12 @@ class TestExecutionContext:
         mock_transport = MagicMock()
         mock_transport.complete = AsyncMock(side_effect=[call1, call2])
 
-        registry = ToolRegistry()
-        registry.register(spy_tool)
+        spy_tools = {}
+        _add_to_tool_map(spy_tools, spy_tool)
 
         runner = AgentRunner(
             transport=mock_transport,
-            registry=registry,
+            tools=spy_tools,
             config=LLMConfig(provider="anthropic", model="mock-model"),
         )
 

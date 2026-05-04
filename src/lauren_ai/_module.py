@@ -477,6 +477,7 @@ class AgentModule:
         config: AgentConfig | None = None,
         tool_cache: Any | None = None,
         knowledge: list[Any] | None = None,
+        runner_class: type | None = None,
     ) -> type:
         """Create a ``@module`` providing the agent runner and all agent instances.
 
@@ -509,6 +510,14 @@ class AgentModule:
         :param knowledge: Knowledge base instances to pre-load into long-term
             memory.
         :type knowledge: list[Any] | None
+        :param runner_class: Optional :class:`~lauren_ai._agents._runner.AgentRunner`
+            subclass to use as the DI token and constructor.  When ``None``
+            (the default) the base :class:`~lauren_ai._agents._runner.AgentRunner`
+            class is used.  Pass a subclass to produce a distinct DI token —
+            useful for breaking circular dependencies when two agents are wired
+            in the same application and one agent's delegation tool needs the
+            other agent's runner.
+        :type runner_class: type | None
         :return: A ``@module``-decorated class.
         :rtype: type
         """
@@ -516,23 +525,13 @@ class AgentModule:
 
         from lauren_ai._agents import USE_TOOLS_META  # noqa: PLC0415
         from lauren_ai._agents._runner import AgentRunner  # noqa: PLC0415
-        from lauren_ai._tools import TOOL_META  # noqa: PLC0415
-        from lauren_ai._tools._registry import ToolRegistry  # noqa: PLC0415
+        from lauren_ai._tools import TOOL_META, _add_to_tool_map  # noqa: PLC0415
+
+        _runner_cls: type = runner_class if runner_class is not None else AgentRunner
 
         _captured_tool_cache = tool_cache
         _captured_signals = signals
         _captured_conversation_store = conversation_store
-
-        # ── Categorize tools into function-form and class-form ──────────────
-        #
-        # Function-form tools (plain functions decorated with @tool()) are
-        # registered into the ToolRegistry immediately — no DI needed.
-        #
-        # Class-form tools (classes decorated with @tool()) are auto-marked
-        # @injectable(scope=SINGLETON) by @tool() and are added as DI
-        # providers.  The ToolRegistry is built lazily via use_factory so the
-        # DI container can inject fully-resolved tool instances (with their
-        # own constructor dependencies) into the registry.
 
         _fn_tools: list[Any] = []
         _class_tools: list[type] = []
@@ -563,73 +562,33 @@ class AgentModule:
             for tool_item in getattr(agent_cls, USE_TOOLS_META, ()):
                 _categorize(tool_item)
 
+        # ── Initialise eager-tools sentinel and effective scope ───────────────
+
+        _eager_tools: dict | None = None
+
+        # Effective scope: propagate narrowest class-tool scope upward so the
+        # AgentRunner is never longer-lived than the tools it holds.
+        _effective_scope = Scope.SINGLETON
+        for _ct in _class_tools:
+            _ct_meta = getattr(_ct, "__lauren_injectable__", None)
+            _ct_scope = getattr(_ct_meta, "scope", Scope.SINGLETON) if _ct_meta else Scope.SINGLETON
+            if _ct_scope < _effective_scope:
+                _effective_scope = _ct_scope
+
         # ── Build providers / exports lists ──────────────────────────────────
 
         providers: list[Any] = []
-        exports: list[Any] = [ToolRegistry]
+        exports: list[Any] = []
 
-        # _eager_registry is set when no class-form tools are present (the
-        # registry is built immediately and exposed via use_value).  When
-        # class-form tools exist this stays None (registry is built lazily by DI).
-        _eager_registry: ToolRegistry | None = None
+        # Add class-form tools as DI providers only — they are module-internal
+        # and resolved by the AgentRunner factory.  Exporting them would cause
+        # ModuleExportViolation when two AgentModule instances share an import
+        # chain (e.g. a CRM module importing a Transfer module).
+        for cls_tool in _class_tools:
+            providers.append(cls_tool)
 
-        if _class_tools:
-            # Class-form tools need DI resolution.  Build the ToolRegistry via
-            # a factory that receives the DI-resolved instances positionally.
-            _captured_fn_tools = list(_fn_tools)
-
-            def _build_registry(*class_instances: Any) -> ToolRegistry:
-                r = ToolRegistry()
-                for fn_tool in _captured_fn_tools:
-                    try:
-                        r.register(fn_tool)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning(
-                            "lauren_ai.AgentModule: could not register fn tool %r: %s",
-                            fn_tool,
-                            exc,
-                        )
-                for instance in class_instances:
-                    try:
-                        r.register(type(instance), instance=instance)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning(
-                            "lauren_ai.AgentModule: could not register class tool instance %r: %s",
-                            instance,
-                            exc,
-                        )
-                return r
-
-            _registry_provider = use_factory(
-                provide=ToolRegistry,
-                factory=_build_registry,
-                inject=list(_class_tools),
-                scope=Scope.SINGLETON,
-            )
-            # Add class-form tools as DI providers and exports so sibling
-            # modules (e.g. a DelegationWiring singleton in the consumer
-            # module) can inject the resolved tool instances.
-            for cls_tool in _class_tools:
-                providers.append(cls_tool)
-                exports.append(cls_tool)
-        else:
-            # No class-form tools — build the registry eagerly (simpler path).
-            _eager_registry = ToolRegistry()
-            for fn_tool in _fn_tools:
-                try:
-                    _eager_registry.register(fn_tool)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "lauren_ai.AgentModule: could not register fn tool %r: %s",
-                        fn_tool,
-                        exc,
-                    )
-            _registry_provider = use_value(provide=ToolRegistry, value=_eager_registry)
-
-        providers.insert(0, _registry_provider)
-
-        # Register all agent classes as providers (they are already
-        # @injectable(scope=Scope.SINGLETON) from @agent())
+        # Register all agent classes as providers and exports so parent modules
+        # can inject the resolved agent singleton (e.g. for runner.run(agent, …)).
         for agent_cls in agents:
             providers.append(agent_cls)
             exports.append(agent_cls)
@@ -645,21 +604,88 @@ class AgentModule:
         try:
             from lauren_ai._transport import Transport as _Transport  # noqa: PLC0415
 
-            _runner_provider = use_factory(
-                provide=AgentRunner,
-                factory=lambda transport, reg, cfg: AgentRunner(
-                    transport=transport,
-                    registry=reg,
-                    config=cfg,
-                    signals=_captured_signals,
-                    cache_backend=_captured_tool_cache,
-                    conversation_store=_captured_conversation_store,
-                ),
-                inject=[_Transport, ToolRegistry, LLMConfig],
-                scope=Scope.SINGLETON,
-            )
+            if _class_tools:
+                # Class-form tools need DI resolution.  The runner factory
+                # receives the DI-resolved instances positionally:
+                #   args = (transport, *class_instances, config)
+                _num_class_tools = len(_class_tools)
+                _captured_fn_tools = list(_fn_tools)
+                _captured_signals_ref = _captured_signals
+                _captured_tool_cache_ref = _captured_tool_cache
+                _captured_conv_store_ref = _captured_conversation_store
+
+                def _build_runner_with_classes(*args: Any) -> AgentRunner:
+                    transport = args[0]
+                    class_instances = args[1:1 + _num_class_tools]
+                    cfg = args[1 + _num_class_tools]
+                    tools: dict = {}
+                    for fn_tool in _captured_fn_tools:
+                        try:
+                            _add_to_tool_map(tools, fn_tool)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "lauren_ai.AgentModule: could not add fn tool %r: %s",
+                                fn_tool,
+                                exc,
+                            )
+                    for instance in class_instances:
+                        try:
+                            _add_to_tool_map(tools, type(instance), instance=instance)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "lauren_ai.AgentModule: could not add class tool instance %r: %s",
+                                instance,
+                                exc,
+                            )
+                    return _runner_cls(
+                        transport=transport,
+                        tools=tools,
+                        config=cfg,
+                        signals=_captured_signals_ref,
+                        cache_backend=_captured_tool_cache_ref,
+                        conversation_store=_captured_conv_store_ref,
+                    )
+
+                _runner_provider = use_factory(
+                    provide=_runner_cls,
+                    factory=_build_runner_with_classes,
+                    inject=[_Transport, *_class_tools, LLMConfig],
+                    scope=_effective_scope,
+                )
+            else:
+                # No class-form tools — build the tools dict eagerly.
+                _eager_tools = {}
+                for fn_tool in _fn_tools:
+                    try:
+                        _add_to_tool_map(_eager_tools, fn_tool)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "lauren_ai.AgentModule: could not add fn tool %r: %s",
+                            fn_tool,
+                            exc,
+                        )
+                _captured_eager_tools = _eager_tools
+                _captured_signals_ref = _captured_signals
+                _captured_tool_cache_ref = _captured_tool_cache
+                _captured_conv_store_ref = _captured_conversation_store
+                _captured_runner_cls = _runner_cls
+
+                _runner_provider = use_factory(
+                    provide=_runner_cls,
+                    factory=lambda transport, cfg: _captured_runner_cls(
+                        transport=transport,
+                        tools=_captured_eager_tools,
+                        config=cfg,
+                        signals=_captured_signals_ref,
+                        cache_backend=_captured_tool_cache_ref,
+                        conversation_store=_captured_conv_store_ref,
+                    ),
+                    inject=[_Transport, LLMConfig],
+                    scope=_effective_scope,
+                )
+
             providers.append(_runner_provider)
-            exports.append(AgentRunner)
+            exports.append(_runner_cls)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "lauren_ai.AgentModule: could not build AgentRunner use_factory "
@@ -680,10 +706,10 @@ class AgentModule:
         class _AgentModule:
             """Auto-generated agent provider module."""
 
-            # Exposes the pre-built registry when only function-form tools are
-            # used (eager path).  None when class-form tools are present and
-            # the registry is built lazily by DI.
-            registry_instance: ToolRegistry | None = _eager_registry
+            # Exposes the pre-built tools dict when only function-form tools
+            # are used (eager path).  None when class-form tools are present
+            # (the dict is built inside the AgentRunner factory).
+            tools_instance: dict | None = _eager_tools
             agent_classes: list[type] = list(agents)
 
         _AgentModule.__name__ = "AgentModule"

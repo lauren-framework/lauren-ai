@@ -6,17 +6,23 @@ import pytest
 from lauren_ai._agents import AgentResponse, agent, use_tools
 from lauren_ai._agents._runner import AgentRunner
 from lauren_ai._config import LLMConfig
-from lauren_ai._tools import tool
-from lauren_ai._tools._registry import ToolRegistry
+from lauren_ai._tools import TOOL_META, tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
 
 
-def make_runner(mock: MockTransport, max_turns: int = 10) -> tuple[AgentRunner, type]:
+def _make_tool_map(*tool_funcs) -> dict:
+    tools = {}
+    for t in tool_funcs:
+        m = getattr(t, TOOL_META)
+        tools[m.name] = (t, m)
+    return tools
+
+
+def make_runner(mock: MockTransport, max_turns: int = 10) -> AgentRunner:
     """Build a runner + simple agent class for testing."""
-    registry = ToolRegistry()
     config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, registry=registry, config=config)
+    runner = AgentRunner(transport=mock, tools={}, config=config)
     return runner
 
 
@@ -55,10 +61,9 @@ class TestAgentRunnerBasic:
             """Get the current time."""
             return "12:00 PM UTC"
 
-        registry = ToolRegistry()
-        registry.register(get_time)
+        tools = _make_tool_map(get_time)
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, registry=registry, config=config)
+        runner = AgentRunner(transport=mock, tools=tools, config=config)
 
         # Turn 1: model calls the tool
         mock.queue_tool_use("get_time", {})
@@ -93,9 +98,8 @@ class TestAgentRunnerBasic:
         class StuckAgent:
             pass
 
-        registry = ToolRegistry()
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, registry=registry, config=config)
+        runner = AgentRunner(transport=mock, tools={}, config=config)
 
         instance = StuckAgent()
         response = await runner.run(instance, "Do something")
@@ -157,10 +161,9 @@ class TestAgentRunnerBasic:
             """A tool that always fails."""
             raise RuntimeError("Tool exploded!")
 
-        registry = ToolRegistry()
-        registry.register(failing_tool)
+        tools = _make_tool_map(failing_tool)
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, registry=registry, config=config)
+        runner = AgentRunner(transport=mock, tools=tools, config=config)
 
         mock.queue_tool_use("failing_tool", {})
         mock.queue_response(
@@ -199,9 +202,8 @@ def _compl(content: str, *, n: int = 1) -> Completion:
 
 
 def make_runner_with_store(mock: MockTransport, store: InMemoryConversationStore) -> AgentRunner:
-    registry = ToolRegistry()
     config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, registry=registry, config=config, conversation_store=store)
+    return AgentRunner(transport=mock, tools={}, config=config, conversation_store=store)
 
 
 @agent(model="mock-model")

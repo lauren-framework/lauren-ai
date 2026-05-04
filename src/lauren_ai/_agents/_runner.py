@@ -32,9 +32,8 @@ from lauren_ai._exceptions import (
     DelegateToAgent,
 )
 from lauren_ai._memory import ShortTermMemory
-from lauren_ai._tools import ToolContext, ToolResult
+from lauren_ai._tools import TOOL_META, ToolContext, ToolMeta, ToolResult
 from lauren_ai._tools._executor import CacheBackend, ToolExecutor
-from lauren_ai._tools._registry import ToolRegistry
 from lauren_ai._transport import Completion, CompletionChunk, TokenUsage, ToolCall
 
 logger = logging.getLogger(__name__)
@@ -51,8 +50,9 @@ class AgentRunner:
 
     :param transport: Provider-agnostic LLM transport.
     :type transport: Any
-    :param registry: Populated tool registry.
-    :type registry: ToolRegistry
+    :param tools: Mapping of tool name to ``(callable_or_instance, ToolMeta)``.
+        Built by ``AgentModule.for_root()`` or ``AgentTestClient``.
+    :type tools: dict[str, tuple[Any, ToolMeta]]
     :param config: Application-level LLM configuration (model, max_tokens, etc.).
     :type config: LLMConfig
     :param signals: Optional signal bus for emitting lifecycle events.
@@ -64,19 +64,19 @@ class AgentRunner:
     def __init__(
         self,
         transport: Any,
-        registry: ToolRegistry,
+        tools: dict[str, tuple[Any, ToolMeta]],
         config: LLMConfig,
         signals: Any | None = None,
         cache_backend: CacheBackend | None = None,
         conversation_store: Any | None = None,
     ) -> None:
         self._transport = transport
-        self._registry = registry
+        self._tools = tools
         self._config = config
         self._signals = signals
         self._conversation_store = conversation_store
         self._executor = ToolExecutor(
-            registry=registry,
+            tools=tools,
             cache_backend=cache_backend,
             signals=signals,
         )
@@ -646,14 +646,20 @@ class AgentRunner:
         """
         if not meta.tool_classes:
             return []
-        tool_names: list[str] = []
+        schemas: list[Any] = []
         for tool_item in meta.tool_classes:
-            from lauren_ai._tools import TOOL_META  # noqa: PLC0415
-
-            tool_meta = getattr(tool_item, TOOL_META, None)
-            if tool_meta is not None:
-                tool_names.append(tool_meta.name)
-        return self._registry.get_schemas(tool_names)
+            tool_meta: ToolMeta | None = getattr(tool_item, TOOL_META, None)
+            if tool_meta is None:
+                continue
+            entry = self._tools.get(tool_meta.name)
+            if entry is None:
+                logger.warning(
+                    "lauren_ai.AgentRunner: tool '%s' not found in tool map — skipping",
+                    tool_meta.name,
+                )
+                continue
+            schemas.append(tool_meta.parameters)
+        return schemas
 
     async def _execute_tools(
         self,

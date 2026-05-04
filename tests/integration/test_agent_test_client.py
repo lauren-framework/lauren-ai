@@ -354,24 +354,15 @@ class TestAgentTestClientBuildRunnerEdgeCases:
         finally:
             setattr(EdgeAgent, AGENT_META, original_meta)
 
-    def test_tool_registration_failure_is_swallowed(self):
-        """A tool that raises during registration is silently ignored (lines 180-181)."""
-        from unittest.mock import patch
-
+    def test_build_runner_tolerates_no_tool_meta(self):
+        """AgentTestClient builds a runner even when agent has no tools."""
         from lauren_ai._agents._runner import AgentRunner
 
-        @agent(model="mock-model", system="Broken tools agent.")
-        @use_tools(double_tool)
+        @agent()
         class BrokenToolAgent:
             pass
 
         mock = MockTransport()
         mock.queue_response(simple_completion("OK!"))
-
-        with patch(
-            "lauren_ai._tools._registry.ToolRegistry.register",
-            side_effect=RuntimeError("boom"),
-        ):
-            client = AgentTestClient(BrokenToolAgent(), mock)
-
+        client = AgentTestClient(BrokenToolAgent(), mock)
         assert isinstance(client._runner, AgentRunner)

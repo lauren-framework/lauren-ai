@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from lauren_ai._tools import ToolContext, ToolMeta, tool
+from lauren_ai._tools import TOOL_META, ToolContext, ToolMeta, tool
 from lauren_ai._tools._executor import (
     InMemoryCacheBackend,
     ToolCall,
@@ -11,7 +11,6 @@ from lauren_ai._tools._executor import (
     ToolExecutor,
     ToolPendingApprovalSignal,
 )
-from lauren_ai._tools._registry import ToolRegistry
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -26,10 +25,9 @@ def make_context() -> ToolContext:
     return ToolContext(agent_context=None, tool_use_id="tc1", turn=1)
 
 
-def make_registry_with_tool(func_or_class) -> ToolRegistry:
-    registry = ToolRegistry()
-    registry.register(func_or_class)
-    return registry
+def _make_tool_map(func_or_class) -> dict:
+    meta = getattr(func_or_class, TOOL_META)
+    return {meta.name: (func_or_class, meta)}
 
 
 # ---------------------------------------------------------------------------
@@ -108,8 +106,8 @@ class TestToolExecutor:
             """Greet someone. Args: name: The name."""
             return f"Hello, {name}!"
 
-        registry = make_registry_with_tool(greet)
-        executor = ToolExecutor(registry=registry)
+        tools = _make_tool_map(greet)
+        executor = ToolExecutor(tools=tools)
         ctx = make_context()
         call = make_tool_call("greet", {"name": "Alice"})
 
@@ -124,8 +122,8 @@ class TestToolExecutor:
             """Add two numbers. Args: a: First. b: Second."""
             return a + b
 
-        registry = make_registry_with_tool(sync_add)
-        executor = ToolExecutor(registry=registry)
+        tools = _make_tool_map(sync_add)
+        executor = ToolExecutor(tools=tools)
         ctx = make_context()
         call = make_tool_call("sync_add", {"a": 3, "b": 4})
 
@@ -135,8 +133,7 @@ class TestToolExecutor:
 
     @pytest.mark.asyncio
     async def test_unknown_tool_returns_error(self):
-        registry = ToolRegistry()
-        executor = ToolExecutor(registry=registry)
+        executor = ToolExecutor(tools={})
         ctx = make_context()
         call = make_tool_call("nonexistent_tool", {})
 
@@ -151,8 +148,8 @@ class TestToolExecutor:
             """A failing tool. Args: x: Input."""
             raise ValueError("Something went wrong")
 
-        registry = make_registry_with_tool(failing_tool)
-        executor = ToolExecutor(registry=registry)
+        tools = _make_tool_map(failing_tool)
+        executor = ToolExecutor(tools=tools)
         ctx = make_context()
         call = make_tool_call("failing_tool", {"x": "test"})
 
@@ -168,8 +165,8 @@ class TestToolExecutor:
             """A dangerous tool. Args: action: The action."""
             return action
 
-        registry = make_registry_with_tool(dangerous_tool)
-        executor = ToolExecutor(registry=registry)
+        tools = _make_tool_map(dangerous_tool)
+        executor = ToolExecutor(tools=tools)
         ctx = make_context()
         call = make_tool_call("dangerous_tool", {"action": "delete_all"})
 
@@ -189,9 +186,9 @@ class TestToolExecutor:
             call_count += 1
             return f"Result for {query}"
 
-        registry = make_registry_with_tool(cached_tool)
+        tools = _make_tool_map(cached_tool)
         cache = InMemoryCacheBackend()
-        executor = ToolExecutor(registry=registry, cache_backend=cache)
+        executor = ToolExecutor(tools=tools, cache_backend=cache)
         ctx = make_context()
 
         call1 = make_tool_call("cached_tool", {"query": "test"}, "tc1")
@@ -215,8 +212,8 @@ class TestToolExecutor:
             """A tool. Args: x: Input."""
             return x
 
-        registry = make_registry_with_tool(hooked_tool)
-        executor = ToolExecutor(registry=registry)
+        tools = _make_tool_map(hooked_tool)
+        executor = ToolExecutor(tools=tools)
         ctx = make_context()
         call = make_tool_call("hooked_tool", {"x": "test"})
 
@@ -235,8 +232,8 @@ class TestToolExecutor:
             """A tool. Args: x: Input."""
             return x
 
-        registry = make_registry_with_tool(hooked_tool)
-        executor = ToolExecutor(registry=registry)
+        tools = _make_tool_map(hooked_tool)
+        executor = ToolExecutor(tools=tools)
         ctx = make_context()
         call = make_tool_call("hooked_tool", {"x": "test"})
 
@@ -255,8 +252,8 @@ class TestToolExecutor:
             """A failing tool. Args: x: Input."""
             raise RuntimeError("tool failed")
 
-        registry = make_registry_with_tool(failing_tool)
-        executor = ToolExecutor(registry=registry)
+        tools = _make_tool_map(failing_tool)
+        executor = ToolExecutor(tools=tools)
         ctx = make_context()
         call = make_tool_call("failing_tool", {"x": "test"})
 
@@ -277,8 +274,8 @@ class TestToolExecutor:
             """A tool. Args: x: Input."""
             return x
 
-        registry = make_registry_with_tool(hooked_tool)
-        executor = ToolExecutor(registry=registry)
+        tools = _make_tool_map(hooked_tool)
+        executor = ToolExecutor(tools=tools)
         ctx = make_context()
         call = make_tool_call("hooked_tool", {"x": "test"})
 
@@ -292,8 +289,8 @@ class TestToolExecutor:
             """A tool. Args: key: The key."""
             return {"key": key, "value": 42}
 
-        registry = make_registry_with_tool(dict_tool)
-        executor = ToolExecutor(registry=registry)
+        tools = _make_tool_map(dict_tool)
+        executor = ToolExecutor(tools=tools)
         ctx = make_context()
         call = make_tool_call("dict_tool", {"key": "test"})
 
@@ -311,8 +308,8 @@ class TestToolExecutor:
             received_ctx.append(ctx)
             return x
 
-        registry = make_registry_with_tool(ctx_tool)
-        executor = ToolExecutor(registry=registry)
+        tools = _make_tool_map(ctx_tool)
+        executor = ToolExecutor(tools=tools)
         ctx = make_context()
         call = make_tool_call("ctx_tool", {"x": "hello"})
 
@@ -322,8 +319,7 @@ class TestToolExecutor:
         assert received_ctx[0] is ctx
 
     def test_default_cache_key(self):
-        registry = ToolRegistry()
-        executor = ToolExecutor(registry=registry)
+        executor = ToolExecutor(tools={})
         meta = ToolMeta(
             name="my_tool", description="", parameters={}, is_async=False, reads_context=False
         )
@@ -346,9 +342,9 @@ class TestToolExecutor:
             """Tool. Args: q: Query."""
             return q
 
-        registry = make_registry_with_tool(custom_cached)
+        tools = _make_tool_map(custom_cached)
         cache = InMemoryCacheBackend()
-        executor = ToolExecutor(registry=registry, cache_backend=cache)
+        executor = ToolExecutor(tools=tools, cache_backend=cache)
         ctx = make_context()
 
         call = make_tool_call("custom_cached", {"q": "hello"})
@@ -367,8 +363,8 @@ class TestToolExecutor:
                 """Echo. Args: message: The message."""
                 return message
 
-        registry = make_registry_with_tool(EchoTool)
-        executor = ToolExecutor(registry=registry)
+        tools = _make_tool_map(EchoTool)
+        executor = ToolExecutor(tools=tools)
         ctx = make_context()
         call = make_tool_call("echo_tool", {"message": "hello world"})
 

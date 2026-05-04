@@ -29,7 +29,6 @@ from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from . import ToolContext, ToolMeta, ToolResult
-from ._registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -238,8 +237,9 @@ class ToolExecutor:
     - HITL: raising ``ToolPendingApprovalSignal`` before executing a tool
       whose ``ToolMeta.requires_confirmation`` is ``True``.
 
-    :param registry: The populated ``ToolRegistry``.
-    :type registry: ToolRegistry
+    :param tools: Mapping of tool name to ``(callable_or_instance, ToolMeta)``.
+        Built by ``AgentModule.for_root()`` or ``AgentTestClient``.
+    :type tools: dict[str, tuple[Any, ToolMeta]]
     :param cache_backend: Optional cache backend for result caching.
     :type cache_backend: CacheBackend | None
     :param signals: Optional signal bus for emitting ``ToolCallStarted`` /
@@ -250,11 +250,11 @@ class ToolExecutor:
 
     def __init__(
         self,
-        registry: ToolRegistry,
+        tools: dict[str, tuple[Any, ToolMeta]],
         cache_backend: CacheBackend | None = None,
         signals: Any | None = None,
     ) -> None:
-        self._registry = registry
+        self._tools = tools
         self._cache = cache_backend
         self._signals = signals
 
@@ -285,7 +285,7 @@ class ToolExecutor:
         tool_use_id = tool_call.tool_use_id
         tool_input = tool_call.input or {}
 
-        entry = self._registry.get(name)
+        entry = self._tools.get(name)
         if entry is None:
             logger.warning(
                 "lauren_ai.ToolExecutor: unknown tool '%s' — returning error result",
