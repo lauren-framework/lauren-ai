@@ -22,7 +22,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "lauren>=1.0",
+    "lauren",
     "httpx>=0.27",
     "anyio>=4.0",
     "pydantic>=2.7",
