@@ -1,10 +1,13 @@
 """Agent runner — the main agentic loop execution engine.
 
-:class:`AgentRunner` owns the observe → think → act → observe loop.  One
-``AgentRunner`` exists per application (singleton scope).  It dispatches to
-any registered ``@agent()``-decorated class, manages short-term memory,
-emits lifecycle signals, handles budget checks, and supports multi-agent
-delegation via :class:`~lauren_ai._exceptions.DelegateToAgent`.
+:class:`AgentRunner` is a ``@runtime_checkable`` Protocol that defines the
+injection interface.  :class:`AgentRunnerBase` is the concrete implementation
+that owns the observe → think → act → observe loop.
+
+:class:`AgentModule` generates a unique :class:`AgentRunnerBase` subclass per
+``for_root()`` call and registers it within its module.  Any service or tool
+in that module can inject ``runner: AgentRunner`` to receive the module's
+runner without naming it explicitly.
 
 Streaming mode (``run_stream``) follows the same loop but yields
 :class:`~lauren_ai._transport.CompletionChunk` items from the transport as
@@ -15,6 +18,7 @@ from __future__ import annotations
 
 __all__ = [
     "AgentRunner",
+    "AgentRunnerBase",
 ]
 
 import asyncio
@@ -22,7 +26,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from lauren_ai._agents import AGENT_META, AgentContext, AgentMeta, AgentResponse
 from lauren_ai._config import AgentConfig, LLMConfig
@@ -39,10 +43,51 @@ from lauren_ai._transport import Completion, CompletionChunk, TokenUsage, ToolCa
 logger = logging.getLogger(__name__)
 
 
-class AgentRunner:
-    """Executes ``@agent()``-decorated agents through the agentic loop.
+@runtime_checkable
+class AgentRunner(Protocol):
+    """Structural interface for agent runner implementations.
 
-    One ``AgentRunner`` exists per application.  It resolves agent meta from
+    Declare ``runner: AgentRunner`` in any service or tool and the DI
+    container will inject the module's runner automatically — no concrete
+    class name required.  Each :meth:`~lauren_ai._module.AgentModule.for_root`
+    call generates a unique :class:`AgentRunnerBase` subclass that satisfies
+    this Protocol.
+    """
+
+    async def run(
+        self,
+        agent: Any,
+        message: str,
+        *,
+        conversation_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        request: Any | None = None,
+        execution_context: Any | None = None,
+        run_id: str | None = None,
+    ) -> AgentResponse: ...
+
+    async def run_stream(
+        self,
+        agent: Any,
+        message: str,
+        *,
+        conversation_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        request: Any | None = None,
+        run_id: str | None = None,
+    ) -> AsyncIterator[CompletionChunk]: ...
+
+    async def approve_tool(self, agent_run_id: str, tool_use_id: str) -> None: ...
+
+    async def reject_tool(
+        self, agent_run_id: str, tool_use_id: str, *, reason: str = ""
+    ) -> None: ...
+
+
+class AgentRunnerBase(AgentRunner):
+    """Concrete implementation of the :class:`AgentRunner` Protocol.
+
+    Owns the observe → think → act → observe loop.  Resolves agent meta from
     the decorated class, creates per-run state (:class:`~lauren_ai._agents.AgentContext`
     and :class:`~lauren_ai._memory.ShortTermMemory`), calls the LLM transport,
     dispatches tool calls, and aggregates results into an

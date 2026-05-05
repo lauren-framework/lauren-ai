@@ -160,7 +160,7 @@ class AgentTestClient:
         :rtype: AgentRunner
         """
         from lauren_ai._agents import AGENT_META  # noqa: PLC0415
-        from lauren_ai._agents._runner import AgentRunner  # noqa: PLC0415
+        from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner  # noqa: PLC0415
         from lauren_ai._config import LLMConfig  # noqa: PLC0415
         from lauren_ai._tools import TOOL_META, _add_to_tool_map  # noqa: PLC0415
 

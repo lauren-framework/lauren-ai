@@ -125,6 +125,7 @@ __all__ = [
     "token_usage_response_interceptor",
     # Runner
     "AgentRunner",
+    "AgentRunnerBase",
     # Prompt templates (Section 32)
     "PromptTemplate",
     "ChatPromptTemplate",
@@ -231,7 +232,7 @@ from lauren_ai._agents import (
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
-from lauren_ai._agents._runner import AgentRunner
+from lauren_ai._agents._runner import AgentRunner, AgentRunnerBase
 
 # ---------------------------------------------------------------------------
 # Chains

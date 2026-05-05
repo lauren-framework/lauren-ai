@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from lauren_ai._agents import AgentResponse, agent, use_tools
-from lauren_ai._agents._runner import AgentRunner
+from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
 from lauren_ai._config import LLMConfig
 from lauren_ai._tools import TOOL_META, tool
 from lauren_ai._transport import Completion, TokenUsage

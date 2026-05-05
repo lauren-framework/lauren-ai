@@ -10,7 +10,7 @@ Tests cover:
 import pytest
 
 from lauren_ai._agents import agent, use_tools
-from lauren_ai._agents._runner import AgentRunner
+from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
 from lauren_ai._config import LLMConfig
 from lauren_ai._knowledge import FixedSizeChunker, KnowledgeBase, TextLoader
 from lauren_ai._memory._vector import InMemoryVectorStore

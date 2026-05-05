@@ -391,7 +391,7 @@ class TestExecutionContext:
         from unittest.mock import AsyncMock, MagicMock
 
         from lauren_ai._agents import agent
-        from lauren_ai._agents._runner import AgentRunner
+        from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
         from lauren_ai._config import LLMConfig
         from lauren_ai._transport import Completion, TokenUsage
 
@@ -435,7 +435,7 @@ class TestExecutionContext:
         from unittest.mock import AsyncMock, MagicMock
 
         from lauren_ai._agents import agent
-        from lauren_ai._agents._runner import AgentRunner
+        from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
         from lauren_ai._config import LLMConfig
         from lauren_ai._transport import Completion, TokenUsage
         from lauren_ai._transport import ToolCall as TransportToolCall

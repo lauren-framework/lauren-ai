@@ -478,6 +478,7 @@ class AgentModule:
         tool_cache: Any | None = None,
         knowledge: list[Any] | None = None,
         injects: list[type] | None = None,
+        export_tools: list[type] | None = None,
     ) -> type:
         """Create a ``@module`` providing the agent runner and all agent instances.
 
@@ -523,7 +524,7 @@ class AgentModule:
         import inspect as _inspect  # noqa: PLC0415
 
         from lauren_ai._agents import USE_TOOLS_META  # noqa: PLC0415
-        from lauren_ai._agents._runner import AgentRunner  # noqa: PLC0415
+        from lauren_ai._agents._runner import AgentRunnerBase  # noqa: PLC0415
         from lauren_ai._tools import TOOL_META, _add_to_tool_map  # noqa: PLC0415
 
         _injects: list[type] = list(injects or [])
@@ -532,7 +533,16 @@ class AgentModule:
                 "AgentModule.for_root() 'injects' accepts at most one AgentRunner "
                 f"subclass; got {len(_injects)}: {_injects!r}."
             )
-        _runner_cls: type = _injects[0] if _injects else AgentRunner
+        if _injects:
+            # Advanced path: caller supplied an explicit runner subclass.
+            _runner_cls: type = _injects[0]
+        else:
+            # Default path: generate a unique subclass per for_root() call so
+            # each AgentModule gets its own DI token.  ``runner: AgentRunner``
+            # in a tool or service resolves to this class via the framework's
+            # structural Protocol fallback (own-module scan).
+            _runner_name = "".join(a.__name__ for a in agents) + "Runner"
+            _runner_cls = type(_runner_name, (AgentRunnerBase,), {})
 
         _captured_tool_cache = tool_cache
         _captured_signals = signals
@@ -707,6 +717,18 @@ class AgentModule:
         else:
             _imports = [imports]
 
+        # Register and export delegation tools.  These tools are providers of
+        # THIS module (so they can receive this module's runner via DI) but are
+        # NOT included in the runner's tool map — they are consumed by OTHER
+        # modules' runners.  Caller must NOT include them in `tools=` as well;
+        # doing so creates a circular dependency (runner → tool → runner).
+        _captured_export_tools: list[type] = list(export_tools or [])
+        for _et in _captured_export_tools:
+            if _et not in providers:
+                providers.append(_et)
+            if _et not in exports:
+                exports.append(_et)
+
         @module(imports=_imports, providers=providers, exports=exports)
         class _AgentModule:
             """Auto-generated agent provider module."""
@@ -716,6 +738,10 @@ class AgentModule:
             # (the dict is built inside the AgentRunner factory).
             tools_instance: dict | None = _eager_tools
             agent_classes: list[type] = list(agents)
+            # The concrete runner class generated for this module.  Useful for
+            # introspection; DI injection should use ``runner: AgentRunner``.
+            runner_class: type = _runner_cls
+            exported_tools: list[type] = _captured_export_tools
 
         _AgentModule.__name__ = "".join([agent.__name__ for agent in agents]) + "Module"
         _AgentModule.__qualname__ = "And".join([agent.__name__ for agent in agents]) + "Module"

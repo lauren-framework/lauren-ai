@@ -543,9 +543,9 @@ class TestAgentModule:
     def test_for_root_runner_class_exported_under_subclass_token(self):
         """injects=[MyCustomRunner] causes the module to export the subclass."""
         from lauren_ai._agents import agent
-        from lauren_ai._agents._runner import AgentRunner
+        from lauren_ai._agents._runner import AgentRunner, AgentRunnerBase
 
-        class MyCustomRunner(AgentRunner):
+        class MyCustomRunner(AgentRunnerBase):
             """Marker subclass used as a distinct DI token."""
 
         @agent()
@@ -556,28 +556,34 @@ class TestAgentModule:
             agents=[AgentForCustomRunner],
             injects=[MyCustomRunner],
         )
-        # The module's exports should contain MyCustomRunner, not AgentRunner.
+        # The module's exports should contain MyCustomRunner, not the Protocol.
         assert MyCustomRunner in cls.__lauren_module__.exports
         assert AgentRunner not in cls.__lauren_module__.exports
 
-    def test_for_root_runner_class_default_is_agent_runner(self):
-        """Without runner_class= the module exports the base AgentRunner."""
+    def test_for_root_runner_class_default_exports_dynamic_subclass(self):
+        """Without injects= the module exports a dynamic AgentRunnerBase subclass."""
         from lauren_ai._agents import agent
-        from lauren_ai._agents._runner import AgentRunner
+        from lauren_ai._agents._runner import AgentRunner, AgentRunnerBase
 
         @agent()
         class AgentForDefaultRunner:
             """Agent."""
 
         cls = AgentModule.for_root(agents=[AgentForDefaultRunner])
-        assert AgentRunner in cls.__lauren_module__.exports
+        # A dynamic subclass of AgentRunnerBase is exported, not the Protocol itself.
+        exported = cls.__lauren_module__.exports
+        assert AgentRunner not in exported
+        assert any(
+            isinstance(e, type) and issubclass(e, AgentRunnerBase) and e is not AgentRunnerBase
+            for e in exported
+        )
 
     def test_injects_list_exported_under_subclass_token(self):
-        """injects=[SubClass] exports that subclass, not AgentRunner."""
+        """injects=[SubClass] exports that subclass, not the AgentRunner Protocol."""
         from lauren_ai._agents import agent
-        from lauren_ai._agents._runner import AgentRunner
+        from lauren_ai._agents._runner import AgentRunner, AgentRunnerBase
 
-        class MyRunner(AgentRunner):
+        class MyRunner(AgentRunnerBase):
             """Marker subclass."""
 
         @agent()
@@ -588,40 +594,50 @@ class TestAgentModule:
         assert MyRunner in cls.__lauren_module__.exports
         assert AgentRunner not in cls.__lauren_module__.exports
 
-    def test_injects_empty_list_exports_base_agent_runner(self):
-        """injects=[] (empty list) falls back to base AgentRunner."""
+    def test_injects_empty_list_exports_dynamic_subclass(self):
+        """injects=[] (empty list) auto-generates a dynamic AgentRunnerBase subclass."""
         from lauren_ai._agents import agent
-        from lauren_ai._agents._runner import AgentRunner
+        from lauren_ai._agents._runner import AgentRunner, AgentRunnerBase
 
         @agent()
         class B:
             """B."""
 
         cls = AgentModule.for_root(agents=[B], injects=[])
-        assert AgentRunner in cls.__lauren_module__.exports
+        exported = cls.__lauren_module__.exports
+        assert AgentRunner not in exported
+        assert any(
+            isinstance(e, type) and issubclass(e, AgentRunnerBase) and e is not AgentRunnerBase
+            for e in exported
+        )
 
-    def test_injects_none_exports_base_agent_runner(self):
-        """injects=None (default) exports base AgentRunner."""
+    def test_injects_none_exports_dynamic_subclass(self):
+        """injects=None (default) auto-generates a dynamic AgentRunnerBase subclass."""
         from lauren_ai._agents import agent
-        from lauren_ai._agents._runner import AgentRunner
+        from lauren_ai._agents._runner import AgentRunner, AgentRunnerBase
 
         @agent()
         class C:
             """C."""
 
         cls = AgentModule.for_root(agents=[C])
-        assert AgentRunner in cls.__lauren_module__.exports
+        exported = cls.__lauren_module__.exports
+        assert AgentRunner not in exported
+        assert any(
+            isinstance(e, type) and issubclass(e, AgentRunnerBase) and e is not AgentRunnerBase
+            for e in exported
+        )
 
     def test_injects_multiple_elements_raises(self):
         """injects=[A, B] (more than 1 element) → AgentConfigError."""
         from lauren_ai._agents import agent
-        from lauren_ai._agents._runner import AgentRunner
+        from lauren_ai._agents._runner import AgentRunnerBase
         from lauren_ai._exceptions import AgentConfigError
 
-        class RA(AgentRunner):
+        class RA(AgentRunnerBase):
             """RA."""
 
-        class RB(AgentRunner):
+        class RB(AgentRunnerBase):
             """RB."""
 
         @agent()
