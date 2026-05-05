@@ -512,11 +512,26 @@ class AgentModule:
             memory.
         :type knowledge: list[Any] | None
         :param injects: Optional list containing at most one
-            :class:`~lauren_ai._agents._runner.AgentRunner` subclass.  When
-            provided, that subclass is used as both the DI token and the
-            concrete runner constructor — useful for breaking circular
-            dependencies.  An empty list or ``None`` uses the base
-            :class:`~lauren_ai._agents._runner.AgentRunner`.
+            :class:`~lauren_ai._agents._runner.AgentRunnerBase` subclass.
+
+            **Default (``None`` or ``[]``):** a unique ``AgentRunnerBase``
+            subclass is auto-generated per ``for_root()`` call and registered
+            as the module's runner token.  Providers inside this module can
+            inject it with ``runner: AgentRunner`` — the DI container resolves
+            it via structural Protocol scan.
+
+            **Explicit subclass:** pass a named ``AgentRunnerBase`` subclass
+            (decorated with ``@injectable(scope=Scope.SINGLETON)``) when this
+            module coexists with other ``AgentModule`` instances in the same
+            import scope **and** a controller or service needs to inject two or
+            more runners simultaneously.  The named class becomes the
+            unambiguous DI token; consumers annotate the parameter with the
+            concrete type (e.g. ``runner: TransferAgentRunner``).
+
+            Every ``AgentModule.for_root()`` call MUST have its own dedicated
+            runner — either the auto-generated one (default) or a user-supplied
+            subclass (``injects=[MyRunner]``).  Sharing a runner across modules
+            is not supported.
         :type injects: list[type] | None
         :return: A ``@module``-decorated class.
         :rtype: type

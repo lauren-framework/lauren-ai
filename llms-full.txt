@@ -370,23 +370,29 @@ class MyAgent:
 # await .as_stream() — AsyncIterator[str] yielding content as a single item
 ```
 
-### `AgentRunner`
+### `AgentRunner` (Protocol) / `AgentRunnerBase` (concrete)
+
+`AgentRunner` is a `@runtime_checkable Protocol` — the structural interface for all
+runner implementations. `AgentRunnerBase` is the concrete class that implements it.
+
+In production, runners are created and injected by `AgentModule.for_root()`.
+For testing, instantiate `AgentRunnerBase` directly:
 
 ```python
-from lauren_ai import AgentRunner
-from lauren_ai._tools._registry import ToolRegistry
+from lauren_ai import AgentRunner, AgentRunnerBase
 
-registry = ToolRegistry()
-registry.register(get_weather)
-
-runner = AgentRunner(
+# Testing: instantiate the concrete class
+runner = AgentRunnerBase(
     transport=transport,         # Transport instance
-    registry=registry,           # Populated ToolRegistry
+    tools={},                    # dict[str, ToolEntry] — usually {} for tests
     config=llm_config,           # LLMConfig
     signals=signal_bus,          # Optional SignalBus
     cache_backend=None,          # Optional cache backend for tool results
     conversation_store=store,    # Optional ConversationStore — enables history persistence
 )
+
+isinstance(runner, AgentRunner)     # True — Protocol is @runtime_checkable
+isinstance(runner, AgentRunnerBase) # True
 
 # Run an agent
 response = await runner.run(
@@ -582,8 +588,13 @@ class AppModule: ...
 
 ### `AgentModule`
 
+**Rule: every `AgentModule.for_root()` call MUST have its own dedicated runner.**
+Each call auto-generates a unique `AgentRunnerBase` subclass as the module's runner
+token. Inject it with `runner: AgentRunner` in any provider that belongs to the same
+module — the DI container resolves it via structural Protocol scan.
+
 ```python
-from lauren_ai import AgentModule
+from lauren_ai import AgentModule, AgentRunner
 
 AgentProvider = AgentModule.for_root(
     agents=[WeatherAgent, SupportAgent],
@@ -594,13 +605,58 @@ AgentProvider = AgentModule.for_root(
 
 @module(imports=[LLMProvider, AgentProvider])
 class AppModule: ...
+
+# Providers inside AgentProvider's scope inject the runner with no ceremony:
+@injectable()
+class ChatService:
+    runner: AgentRunner   # → the auto-generated runner for this module
 ```
 
 `AgentModule.for_root()` registers:
 - All `@agent()` classes as `Scope.SINGLETON` DI providers
-- Function-form tools directly in `ToolRegistry`
-- Class-form tools as DI providers **and exports** them (so sibling modules can inject them)
-- `AgentRunner` via `use_factory` (injecting Transport + ToolRegistry + LLMConfig)
+- Function-form tools directly in the runner's tool map
+- Class-form tools as DI providers (own-module only — not re-exported by default)
+- A unique `AgentRunnerBase` subclass via `use_factory` (injecting Transport + LLMConfig)
+
+#### Multi-module runner disambiguation (advanced)
+
+When a controller or service sits in a scope that **imports two or more
+AgentModules**, `runner: AgentRunner` is ambiguous — both runners are visible and
+the DI container raises `ProtocolAmbiguityError`. Each module MUST define a
+dedicated named runner class and pass it via `injects=[MyRunner]`:
+
+```python
+from lauren import injectable, Scope
+from lauren_ai import AgentRunnerBase
+
+@injectable(scope=Scope.SINGLETON)
+class TransferAgentRunner(AgentRunnerBase):
+    """Distinct DI token for the Transfer module's runner."""
+
+@injectable(scope=Scope.SINGLETON)
+class CRMAgentRunner(AgentRunnerBase):
+    """Distinct DI token for the CRM module's runner."""
+
+TransferMod = AgentModule.for_root(
+    agents=[TransferAgent], tools=[...],
+    injects=[TransferAgentRunner],   # explicit runner token
+    imports=[LLMProvider],
+)
+CRMMod = AgentModule.for_root(
+    agents=[CRMAgent], tools=[DelegateToBankingTransfer],
+    injects=[CRMAgentRunner],        # explicit runner token
+    imports=[LLMProvider, TransferMod],
+)
+
+# Controller that needs both runners uses concrete types — no ambiguity:
+class ChatController:
+    def __init__(self, runner: CRMAgentRunner, transfer_runner: TransferAgentRunner): ...
+```
+
+`isinstance(crm_runner, AgentRunner)` and `isinstance(transfer_runner, AgentRunner)`
+both remain `True` — the named classes are concrete DI tokens only; `AgentRunner`
+is still the shared Protocol interface. You can always define your own runner
+subclass to get a stable, named token for multi-module wiring.
 
 ### `LLMService`
 
@@ -1237,146 +1293,131 @@ decision = GuardrailDecision(
 
 ---
 
-## Section 42 — Delegation Pattern (DI-friendly class-form tools)
+## Section 42 — Delegation Pattern (cross-module tool routing)
 
-The recommended way to give an orchestrator agent access to specialist sub-agents
-without a circular DI dependency. Class-form `@tool()` classes are registered as DI
-providers; a `DelegationWiring` singleton wires the shared `AgentRunner` into them
-at startup.
+The recommended way to give an orchestrator agent access to a specialist sub-agent
+via a class-form `@tool()`. The key rule: **the delegation tool must be declared as
+a provider of the TARGET module** (the module whose runner it should call), then
+exported via `export_tools=` so the calling module can include it in its tool map.
 
-### How the cycle is broken
+### How the wiring works
 
-`delegation_tools.py` uses `from __future__ import annotations` (PEP 563). The
-constructor annotation `runner: AgentRunner | None = None` becomes the lazy string
-`"AgentRunner | None"` at registration time. Lauren's DI evaluates that string to
-the union type `AgentRunner | None`, which has no registered provider token →
-`MissingProviderError` → default `None` is used → no cycle edge formed.
-`DelegationWiring` (a singleton in the parent module) receives the fully-built
-`AgentRunner` and sets `_runner` on each delegation tool before the first request.
+A delegation tool is a class-form `@tool()` that holds a reference to the target
+module's runner. Because it is a provider of the **target** module:
 
-### Step 1 — delegation tools file (with `from __future__ import annotations`)
+- `runner: AgentRunner` in its constructor resolves to the target module's runner
+  via structural Protocol scan (no ambiguity — only one runner is in scope).
+- The target module exports it via `export_tools=[DelegateTool]`, making it visible
+  to importing modules without polluting the target agent's own tool map.
+- The calling module lists it in `tools=[..., DelegateTool]` so the orchestrator
+  agent's runner has it in its tool map.
+
+No `DelegationWiring` singleton, no `runner: AgentRunner | None = None` workaround.
+
+### Step 1 — define the delegation tool and the named runner token
 
 ```python
-# delegation_tools.py  — MUST have from __future__ import annotations
-from __future__ import annotations
-
-import logging
-from lauren import Scope, injectable
-from lauren_ai import tool
-from lauren_ai._agents._runner import AgentRunner
-
-from .research_agent import ResearchAgent
-from .code_agent import CodeAssistantAgent
-
-logger = logging.getLogger(__name__)
-
-
-@tool()
-class DelegateToResearcher:
-    """Delegate a research or web-fetching task to the ResearchAgent.
-
-    Args:
-        task: A clear description of the research task including any URLs.
-    """
-
-    def __init__(self, research: ResearchAgent, runner: AgentRunner | None = None) -> None:
-        self._research = research
-        # runner defaults to None — union annotation has no DI provider.
-        # DelegationWiring sets this at startup.
-        self._runner = runner
-
-    async def run(self, task: str) -> dict:
-        if self._runner is None:
-            return {"error": "AgentRunner not yet wired.", "content": ""}
-        response = await self._runner.run(self._research, task)
-        return {"content": response.content, "turns": response.turns,
-                "stop_reason": response.stop_reason}
-
-
-@tool()
-class DelegateToCodeAssistant:
-    """Delegate a code execution or maths task to the CodeAssistantAgent.
-
-    Args:
-        task: A clear description of the coding or calculation task.
-    """
-
-    def __init__(self, code: CodeAssistantAgent, runner: AgentRunner | None = None) -> None:
-        self._code = code
-        self._runner = runner  # Same cycle-break as DelegateToResearcher
-
-    async def run(self, task: str) -> dict:
-        if self._runner is None:
-            return {"error": "AgentRunner not yet wired.", "content": ""}
-        response = await self._runner.run(self._code, task)
-        return {"content": response.content, "turns": response.turns,
-                "stop_reason": response.stop_reason}
-
+# delegation.py — do NOT add `from __future__ import annotations`
+# (@tool() uses inspect.signature() at decoration time)
+from lauren import injectable, Scope
+from lauren_ai import AgentRunner, AgentRunnerBase, ToolContext, tool
+from .specialist_agent import SpecialistAgent
 
 @injectable(scope=Scope.SINGLETON)
-class DelegationWiring:
-    """Wires AgentRunner into delegation tools after the DI graph is built.
+class SpecialistAgentRunner(AgentRunnerBase):
+    """Named DI token for the Specialist module's runner.
 
-    Dependency order:
-    1. ResearchAgent, CodeAssistantAgent  (no deps)
-    2. DelegateToResearcher, DelegateToCodeAssistant  (runner=None via cycle-break)
-    3. ToolRegistry  (built from the tool singletons above)
-    4. AgentRunner  (Transport + ToolRegistry + LLMConfig)
-    5. DelegationWiring  (receives AgentRunner + both tools, sets _runner)
+    Required when a controller or service in an outer scope needs to inject
+    both the Specialist runner and the Orchestrator runner simultaneously.
+    ``runner: AgentRunner`` alone would be ambiguous in that scope.
     """
 
-    def __init__(
-        self,
-        runner: AgentRunner,
-        delegate_researcher: DelegateToResearcher,
-        delegate_code: DelegateToCodeAssistant,
-    ) -> None:
-        delegate_researcher._runner = runner
-        delegate_code._runner = runner
-        logger.debug("DelegationWiring: AgentRunner wired into delegation tools")
+@tool()
+class DelegateToSpecialist:
+    """Delegate a task to the SpecialistAgent.
+
+    Args:
+        task: Full description of what the Specialist Agent should do.
+    """
+
+    def __init__(self, agent: SpecialistAgent, runner: SpecialistAgentRunner) -> None:
+        self._agent = agent
+        self._runner = runner  # injected from Specialist module scope — no ambiguity
+
+    async def run(self, ctx: ToolContext, task: str) -> dict:
+        response = await self._runner.run(
+            self._agent, task,
+            execution_context=ctx.execution_context,
+        )
+        return {"result": response.content, "stop_reason": response.stop_reason}
 ```
 
-### Step 2 — orchestrator agent uses delegation tools
+### Step 2 — specialist module exports the delegation tool
 
 ```python
-# orchestrator_agent.py — can use from __future__ import annotations (class-form tool)
-from lauren_ai import agent, use_guardrails, use_tools, PromptInjectionFilter, LengthFilter
-from .delegation_tools import DelegateToResearcher, DelegateToCodeAssistant
-
-@agent(model="claude-opus-4-6", system="Route requests to the right specialist.")
-@use_guardrails(
-    input=[PromptInjectionFilter()],
-    output=[LengthFilter(max_chars=8000)],
-)
-@use_tools(DelegateToResearcher, DelegateToCodeAssistant)
-class OrchestratorAgent: ...
-```
-
-### Step 3 — wire at startup via AgentModule + parent module
-
-```python
-# ai_module.py
-from lauren import module
+# specialist_module.py
 from lauren_ai import AgentModule, LLMModule, LLMConfig
-from .delegation_tools import DelegateToResearcher, DelegateToCodeAssistant, DelegationWiring
-from .research_agent import ResearchAgent
-from .code_agent import CodeAssistantAgent
-from .orchestrator_agent import OrchestratorAgent
+from .specialist_agent import SpecialistAgent
+from .delegation import DelegateToSpecialist, SpecialistAgentRunner
 
 LLMProvider = LLMModule.for_root(LLMConfig.for_anthropic())
 
-AgentProvider = AgentModule.for_root(
-    agents=[OrchestratorAgent, ResearchAgent, CodeAssistantAgent],
-    tools=[DelegateToResearcher, DelegateToCodeAssistant],  # class-form tools
-    imports=LLMProvider,
+# DelegateToSpecialist is in export_tools (NOT tools=) — it is a provider of this
+# module (receives the specialist runner via DI) but is NOT part of the specialist
+# agent's own tool map.  Putting it in tools= would create a circular dependency:
+#   SpecialistRunner → DelegateToSpecialist → SpecialistRunner
+SpecialistMod = AgentModule.for_root(
+    agents=[SpecialistAgent],
+    tools=[SpecialistTool1, SpecialistTool2],
+    imports=[LLMProvider],
+    injects=[SpecialistAgentRunner],        # explicit runner token
+    export_tools=[DelegateToSpecialist],    # pre-wired with specialist runner, exported
+)
+```
+
+### Step 3 — orchestrator module consumes the delegation tool
+
+```python
+# orchestrator_module.py
+from lauren import module
+from lauren_ai import AgentModule, AgentRunner
+from .orchestrator_agent import OrchestratorAgent
+from .delegation import DelegateToSpecialist, SpecialistAgentRunner
+from .specialist_module import SpecialistMod
+
+@injectable(scope=Scope.SINGLETON)
+class OrchestratorAgentRunner(AgentRunnerBase):
+    """Named DI token for the Orchestrator module's runner."""
+
+OrchestratorMod = AgentModule.for_root(
+    agents=[OrchestratorAgent],
+    # DelegateToSpecialist imported from SpecialistMod — already wired with
+    # SpecialistAgentRunner.  The orchestrator runner now has it as a tool.
+    tools=[DelegateToSpecialist],
+    imports=[LLMProvider, SpecialistMod],
+    injects=[OrchestratorAgentRunner],
 )
 
-@module(
-    imports=[LLMProvider, AgentProvider],
-    providers=[DelegationWiring],   # ← lifecycle scheduler instantiates at startup
-)
-class AIModule: ...
+# A controller in the outer module can inject both runners unambiguously:
+class AppController:
+    def __init__(
+        self,
+        runner: OrchestratorAgentRunner,
+        specialist_runner: SpecialistAgentRunner,
+    ) -> None: ...
 ```
+
+### Architectural rule
+
+> Delegation tools that call another module's runner must be declared in the
+> **target** module's `export_tools=` (not `tools=`). The calling module picks
+> them up via the import chain. `runner: AgentRunner` in the delegation tool
+> resolves to the target runner because the tool's `owning_module` is the target
+> module — only one `AgentRunner` implementation is in scope there.
+>
+> When a controller needs two distinct runners it MUST use named runner classes
+> (`injects=[MyRunner]`) — `runner: AgentRunner` is ambiguous in any scope that
+> can see more than one `AgentRunnerBase` subclass.
 
 ### `AgentRunner.run()` accurate signature
 
@@ -1389,7 +1430,10 @@ Passing the class itself bypasses DI and raises `TypeError` on lifecycle hooks:
 # WRONG — passes the class, not an instance; breaks on_start / on_finish hooks
 response = await runner.run(MyAgent, "message")
 
-# CORRECT — inject the agent via constructor DI, then pass the instance
+# CORRECT — inject the agent via constructor DI, then pass the instance.
+# runner: AgentRunner resolves to this module's runner via structural Protocol scan
+# (unambiguous when only one AgentModule is in scope; use a named runner subclass
+# when two or more AgentModules are visible — see Multi-module runner disambiguation).
 class MyController:
     def __init__(self, runner: AgentRunner, agent: MyAgent) -> None:
         self._runner = runner

@@ -111,12 +111,17 @@ class WeatherAgent: ...
 - Mandatory ordering: `@agent` → `@remember` → `@use_guardrails` → `@use_tools`
 - Agents are singletons in the DI container by default
 
-### AgentRunner — running agents
+### AgentRunner (Protocol) / AgentRunnerBase (concrete)
+
+`AgentRunner` is a `@runtime_checkable Protocol`. The concrete implementation is
+`AgentRunnerBase`. In production, runners are created by `AgentModule.for_root()`.
+For testing, instantiate `AgentRunnerBase` directly:
 
 ```python
-from lauren_ai import AgentRunner
+from lauren_ai import AgentRunner, AgentRunnerBase
 
-runner = AgentRunner(transport=transport, registry=registry, config=llm_config)
+runner = AgentRunnerBase(transport=transport, tools={}, config=llm_config)
+isinstance(runner, AgentRunner)  # True
 
 response = await runner.run(
     agent_instance,              # @agent()-decorated class instance
@@ -133,6 +138,13 @@ print(response.total_usage)   # TokenUsage — cumulative tokens
 print(response.tool_calls_made)  # list[ToolCall]
 print(response.reasoning_traces) # list[str] — extended thinking traces (Anthropic)
 ```
+
+**Rule: every `AgentModule` MUST have its own runner.**
+Each `AgentModule.for_root()` call auto-generates a unique `AgentRunnerBase`
+subclass. Inject with `runner: AgentRunner` in own-module providers (structural
+Protocol scan resolves unambiguously). When two AgentModules are in the same import
+scope, define explicit named runner subclasses and use `injects=[MyRunner]` —
+see `llms-full.txt` § AgentModule for the full disambiguation pattern.
 
 ### @use_guardrails() — attach guardrail instances to an agent
 
@@ -270,99 +282,60 @@ print(result.rounds)
 Stream events via `runner.run_stream(...)`:
 `TeamWorkerStarted`, `TeamWorkerFinished`, `TeamCoordinatorDecision`, `TeamFinalAnswer`.
 
-### Delegation pattern — DI-friendly class-form tools
+### Delegation pattern — cross-module tool routing
 
-**Pattern A — `AgentRunner | None` + wiring singleton** (simple):
-
-Use `from __future__ import annotations` **in the delegation tool file** and declare
-`runner: AgentRunner | None = None` as a constructor parameter. The DI container
-sees the union type `AgentRunner | None`, finds no registered provider, skips
-injection (leaving `None`), and the circular dependency is broken. A
-`DelegationWiring` singleton then wires the real runner in before the first request.
-
-```python
-# delegation_tools.py  ← HAS from __future__ import annotations
-from __future__ import annotations
-
-from lauren import Scope, injectable
-from lauren_ai import tool
-from lauren_ai._agents._runner import AgentRunner
-
-@tool()
-class DelegateToResearcher:
-    """Delegate a research task to the ResearchAgent.
-
-    Args:
-        task: Description of the research task.
-    """
-    def __init__(self, research: ResearchAgent, runner: AgentRunner | None = None) -> None:
-        self._research = research
-        self._runner = runner  # None until DelegationWiring fires
-
-    async def run(self, task: str) -> dict:
-        if self._runner is None:
-            return {"error": "Not wired yet", "content": ""}
-        response = await self._runner.run(self._research, task)
-        return {"content": response.content, "turns": response.turns}
-
-
-@injectable(scope=Scope.SINGLETON)
-class DelegationWiring:
-    """Wires AgentRunner into delegation tools after DI graph is built."""
-    def __init__(
-        self,
-        runner: AgentRunner,
-        delegate_researcher: DelegateToResearcher,
-    ) -> None:
-        delegate_researcher._runner = runner
-```
-
-Register `DelegationWiring` in the parent `@module`'s `providers=[...]` list so
-Lauren's lifecycle scheduler instantiates it eagerly at startup.
-
-**Pattern B — `AgentRunner` subclass as a distinct DI token** (production-grade):
-
-When two coordinators need to share a single `AgentRunner` but one also runs the
-other's sub-agent (creating a cycle), define a thin subclass so the DI container
-treats it as a separate token:
+Declare the delegation tool as a provider of the **target** module using
+`export_tools=[DelegateTool]`. The tool's `runner: AgentRunner` resolves to the
+target runner (only one runner is in scope in the target module). The calling module
+imports the pre-wired tool and lists it in its own `tools=[...]`.
 
 ```python
 from lauren import injectable, Scope
-from lauren_ai import AgentRunner
+from lauren_ai import AgentRunnerBase, AgentRunner, tool, ToolContext
 
+# Named runner token — required when a controller needs BOTH runners simultaneously
 @injectable(scope=Scope.SINGLETON)
-class TransferAgentRunner(AgentRunner):
-    """Distinct DI token — same logic as AgentRunner, separate binding."""
+class SpecialistAgentRunner(AgentRunnerBase):
+    """Distinct DI token for the Specialist module's runner."""
 
-# In the delegation tool:
 @tool()
-class DelegateToBankingTransfer:
-    """Hand off a transfer request to BankingTransferAgent.
+class DelegateToSpecialist:
+    """Delegate a task to the SpecialistAgent.
 
     Args:
-        transfer_request: Natural-language transfer instruction.
+        task: Full description of the task.
     """
-    def __init__(
-        self,
-        transfer_agent: BankingTransferAgent,
-        transfer_runner: TransferAgentRunner,
-    ) -> None:
-        self._agent = transfer_agent
-        self._runner = transfer_runner
+    def __init__(self, agent: SpecialistAgent, runner: SpecialistAgentRunner) -> None:
+        self._agent = agent
+        self._runner = runner   # injected from Specialist module scope
 
-    async def run(self, transfer_request: str, ctx: ToolContext | None = None) -> dict:
-        response = await self._runner.run(
-            self._agent,
-            transfer_request,
-            execution_context=ctx.execution_context if ctx else None,
-        )
-        return {"content": response.content, "turns": response.turns}
+    async def run(self, ctx: ToolContext, task: str) -> dict:
+        response = await self._runner.run(self._agent, task,
+                                          execution_context=ctx.execution_context)
+        return {"result": response.content}
+
+# Target module: owns and exports the delegation tool
+SpecialistMod = AgentModule.for_root(
+    agents=[SpecialistAgent],
+    tools=[SpecialistTool1],
+    imports=[LLMProvider],
+    injects=[SpecialistAgentRunner],
+    export_tools=[DelegateToSpecialist],   # ← pre-wired, exported
+)
+
+# Calling module: consumes the pre-wired tool
+OrchestratorMod = AgentModule.for_root(
+    agents=[OrchestratorAgent],
+    tools=[DelegateToSpecialist],          # ← imported from SpecialistMod
+    imports=[LLMProvider, SpecialistMod],
+    injects=[OrchestratorAgentRunner],
+)
 ```
 
-The `CRMAgent` receives `AgentRunner`; `BankingTransferAgent`'s delegation tool
-receives `TransferAgentRunner`. The DI graph sees two distinct types with no cycle.
-`execution_context` is forwarded intact so `TransferFundsTool` can still read the
-authenticated identity from `ctx.execution_context.request.state`.
+**Rule:** put delegation tools in `export_tools=`, NOT in `tools=` of the target
+module. `tools=` wires a tool into the target agent's own tool map — that creates
+a cycle (runner → tool → runner). `export_tools=` registers the tool as a provider
+(so DI can inject the runner) and exports it for the calling module.
 
 ### @traced() — tracing & observability
 
