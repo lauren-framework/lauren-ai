@@ -717,6 +717,6 @@ class AgentModule:
             tools_instance: dict | None = _eager_tools
             agent_classes: list[type] = list(agents)
 
-        _AgentModule.__name__ = "AgentModule"
-        _AgentModule.__qualname__ = "AgentModule"
+        _AgentModule.__name__ = "".join([agent.__name__ for agent in agents]) + "Module"
+        _AgentModule.__qualname__ = "And".join([agent.__name__ for agent in agents]) + "Module"
         return _AgentModule

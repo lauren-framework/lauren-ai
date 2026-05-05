@@ -85,6 +85,11 @@ class SimpleSignalAgent:
     pass
 
 
+@agent(name="Named CRM Agent", model="mock-model", system="Named agent for signal tests.")
+class NamedCRMAgent:
+    pass
+
+
 # ---------------------------------------------------------------------------
 # Tests: ModelCallStarted
 # ---------------------------------------------------------------------------
@@ -517,3 +522,94 @@ class TestSignalOrdering:
         response = await runner.run(instance, "Quiet run")
 
         assert response.content == "No signals here."
+
+
+# ---------------------------------------------------------------------------
+# Tests: agent_name in signals
+# ---------------------------------------------------------------------------
+
+
+class TestAgentNameInSignals:
+    @pytest.mark.asyncio
+    async def test_model_call_complete_carries_explicit_agent_name(self):
+        """ModelCallComplete.agent_name reflects @agent(name=...) value."""
+        bus = SignalBus()
+        mock = MockTransport()
+        runner = make_runner_with_signals(mock, bus)
+
+        received: list[ModelCallComplete] = []
+
+        @bus.on(ModelCallComplete)
+        async def capture(event: ModelCallComplete) -> None:
+            received.append(event)
+
+        mock.queue_response(text_completion("Hi!"))
+
+        instance = NamedCRMAgent()
+        await runner.run(instance, "Hello")
+
+        assert len(received) == 1
+        assert received[0].agent_name == "Named CRM Agent"
+
+    @pytest.mark.asyncio
+    async def test_model_call_complete_defaults_to_class_name(self):
+        """ModelCallComplete.agent_name falls back to class __name__ when name not set."""
+        bus = SignalBus()
+        mock = MockTransport()
+        runner = make_runner_with_signals(mock, bus)
+
+        received: list[ModelCallComplete] = []
+
+        @bus.on(ModelCallComplete)
+        async def capture(event: ModelCallComplete) -> None:
+            received.append(event)
+
+        mock.queue_response(text_completion("Hi!"))
+
+        instance = SimpleSignalAgent()
+        await runner.run(instance, "Hello")
+
+        assert len(received) == 1
+        assert received[0].agent_name == "SimpleSignalAgent"
+
+    @pytest.mark.asyncio
+    async def test_agent_run_complete_carries_explicit_agent_name(self):
+        """AgentRunComplete.agent_name reflects @agent(name=...) value."""
+        bus = SignalBus()
+        mock = MockTransport()
+        runner = make_runner_with_signals(mock, bus)
+
+        received: list[AgentRunComplete] = []
+
+        @bus.on(AgentRunComplete)
+        async def capture(event: AgentRunComplete) -> None:
+            received.append(event)
+
+        mock.queue_response(text_completion("Done."))
+
+        instance = NamedCRMAgent()
+        await runner.run(instance, "Go")
+
+        assert len(received) == 1
+        assert received[0].agent_name == "Named CRM Agent"
+
+    @pytest.mark.asyncio
+    async def test_model_call_started_carries_agent_name(self):
+        """ModelCallStarted.agent_name is populated from AgentMeta."""
+        bus = SignalBus()
+        mock = MockTransport()
+        runner = make_runner_with_signals(mock, bus)
+
+        received: list[ModelCallStarted] = []
+
+        @bus.on(ModelCallStarted)
+        async def capture(event: ModelCallStarted) -> None:
+            received.append(event)
+
+        mock.queue_response(text_completion("Start!"))
+
+        instance = NamedCRMAgent()
+        await runner.run(instance, "Begin")
+
+        assert len(received) == 1
+        assert received[0].agent_name == "Named CRM Agent"

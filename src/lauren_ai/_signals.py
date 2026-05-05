@@ -64,6 +64,10 @@ class ModelCallStarted(LifecycleEvent):  # type: ignore[misc,valid-type]
     :type agent_id: str | None
     :param agent_class: The ``@agent()``-decorated class, or ``None``.
     :type agent_class: type | None
+    :param agent_name: Human-readable agent name from :attr:`AgentMeta.name`,
+        or the class ``__name__`` when not explicitly set.  Empty string when
+        the call originates outside an agent context.
+    :type agent_name: str
     :param messages_count: Number of messages in the prompt.
     :type messages_count: int
     :param input_tokens_estimate: Rough token estimate for the input messages
@@ -74,6 +78,7 @@ class ModelCallStarted(LifecycleEvent):  # type: ignore[misc,valid-type]
     model: str = ""
     agent_id: str | None = None
     agent_class: type | None = None
+    agent_name: str = ""
     messages_count: int = 0
     input_tokens_estimate: int = 0
 
@@ -88,6 +93,10 @@ class ModelCallComplete(LifecycleEvent):  # type: ignore[misc,valid-type]
     :type agent_id: str | None
     :param agent_class: The ``@agent()``-decorated class, or ``None``.
     :type agent_class: type | None
+    :param agent_name: Human-readable agent name from :attr:`AgentMeta.name`,
+        or the class ``__name__`` when not explicitly set.  Empty string when
+        the call originates outside an agent context.
+    :type agent_name: str
     :param usage: Token usage statistics from the provider.
     :type usage: Any
     :param duration_ms: Wall-clock duration of the transport call in
@@ -102,6 +111,7 @@ class ModelCallComplete(LifecycleEvent):  # type: ignore[misc,valid-type]
     model: str = ""
     agent_id: str | None = None
     agent_class: type | None = None
+    agent_name: str = ""
     usage: Any = None  # TokenUsage — kept as Any to avoid circular imports
     duration_ms: float = 0.0
     stop_reason: str = "unknown"
@@ -229,6 +239,9 @@ class AgentRunComplete(LifecycleEvent):  # type: ignore[misc,valid-type]
     :type agent_id: str
     :param agent_class: The ``@agent()``-decorated class.
     :type agent_class: type
+    :param agent_name: Human-readable agent name from :attr:`AgentMeta.name`,
+        or the class ``__name__`` when not explicitly set.
+    :type agent_name: str
     :param turns: Number of loop iterations that were executed.
     :type turns: int
     :param total_usage: Cumulative token usage across the entire run.
@@ -242,6 +255,7 @@ class AgentRunComplete(LifecycleEvent):  # type: ignore[misc,valid-type]
 
     agent_id: str = ""
     agent_class: type | None = None
+    agent_name: str = ""
     turns: int = 0
     total_usage: Any = None  # TokenUsage
     total_cost_usd: float = 0.0

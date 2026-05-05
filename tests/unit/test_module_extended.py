@@ -385,7 +385,7 @@ class TestAgentModule:
 
         cls = AgentModule.for_root(agents=[TestAgent])
         assert cls is not None
-        assert cls.__name__ == "AgentModule"
+        assert cls.__name__ == "TestAgentModule"
 
     def test_for_root_has_registry(self):
         from lauren_ai._agents import agent

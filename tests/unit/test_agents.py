@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from lauren_ai._agents import AGENT_META, AgentMeta, agent, use_tools
+from lauren_ai._agents import AGENT_META, AgentContext, AgentMeta, agent, use_tools
 from lauren_ai._exceptions import DecoratorUsageError
 from lauren_ai._tools import tool
 
@@ -64,6 +64,79 @@ class TestAgentDecorator:
 
         meta = getattr(CoolAgent, AGENT_META)
         assert meta.config.temperature == pytest.approx(0.2)
+
+
+class TestAgentName:
+    def test_explicit_name_stored_in_meta(self):
+        @agent(name="My CRM Agent")
+        class BankingCRMAgent:
+            pass
+
+        meta = getattr(BankingCRMAgent, AGENT_META)
+        assert meta.name == "My CRM Agent"
+
+    def test_name_defaults_to_class_name(self):
+        @agent()
+        class SomeOtherAgent:
+            pass
+
+        meta = getattr(SomeOtherAgent, AGENT_META)
+        assert meta.name == "SomeOtherAgent"
+
+    def test_name_none_falls_back_to_class_name(self):
+        @agent(name=None)
+        class ExplicitNoneAgent:
+            pass
+
+        meta = getattr(ExplicitNoneAgent, AGENT_META)
+        assert meta.name == "ExplicitNoneAgent"
+
+    def test_agent_context_agent_name_from_meta(self):
+        @agent(name="Transfer Agent")
+        class BankingTransferAgent:
+            pass
+
+        ctx = AgentContext(
+            agent_id="aid",
+            agent_run_id="rid",
+            agent_class=BankingTransferAgent,
+            config=None,  # type: ignore[arg-type]
+            memory=None,  # type: ignore[arg-type]
+            turn=0,
+            metadata={},
+        )
+        assert ctx.agent_name == "Transfer Agent"
+
+    def test_agent_context_agent_name_falls_back_to_class_name(self):
+        @agent()
+        class DefaultNameAgent:
+            pass
+
+        ctx = AgentContext(
+            agent_id="aid",
+            agent_run_id="rid",
+            agent_class=DefaultNameAgent,
+            config=None,  # type: ignore[arg-type]
+            memory=None,  # type: ignore[arg-type]
+            turn=0,
+            metadata={},
+        )
+        assert ctx.agent_name == "DefaultNameAgent"
+
+    def test_agent_context_agent_name_no_meta_falls_back(self):
+        class PlainClass:
+            pass
+
+        ctx = AgentContext(
+            agent_id="aid",
+            agent_run_id="rid",
+            agent_class=PlainClass,
+            config=None,  # type: ignore[arg-type]
+            memory=None,  # type: ignore[arg-type]
+            turn=0,
+            metadata={},
+        )
+        assert ctx.agent_name == "PlainClass"
 
 
 class TestUseTools:

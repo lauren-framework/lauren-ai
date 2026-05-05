@@ -77,12 +77,16 @@ class AgentMeta:
     :param tool_classes: Tool classes/functions attached via ``@use_tools()``.
         Resolved at compile time; ``None`` entries are already removed.
     :type tool_classes: tuple[Any, ...]
+    :param name: Human-readable agent name.  Defaults to the decorated class
+        name when not supplied explicitly to ``@agent()``.
+    :type name: str
     """
 
     model: str | None
     system: str | None
     config: AgentConfig
     tool_classes: tuple[Any, ...] = field(default_factory=tuple)
+    name: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +144,21 @@ class AgentContext:
     request: Any | None = None
     execution_context: Any | None = None  # lauren ExecutionContext, or None
     signals: Any | None = None
+
+    @property
+    def agent_name(self) -> str:
+        """Human-readable name for this agent.
+
+        Returns :attr:`AgentMeta.name` when the class was decorated with
+        ``@agent(name=...)``, otherwise falls back to the class ``__name__``.
+
+        :return: The agent's name string.
+        :rtype: str
+        """
+        meta: AgentMeta | None = getattr(self.agent_class, AGENT_META, None)
+        if meta and meta.name:
+            return meta.name
+        return self.agent_class.__name__
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
         """Return metadata value for *key*, or *default* if absent.
@@ -249,6 +268,7 @@ class AgentResponse:
 
 def agent(
     *args: Any,
+    name: str | None = None,
     model: str | None = None,
     system: str | None = None,
     max_turns: int | None = None,
@@ -274,6 +294,7 @@ def agent(
 
         @use_tools(WebSearchTool, CitationTool)
         @agent(
+            name="Research Agent",
             model="claude-opus-4-6",
             system="You are a research assistant.",
             max_turns=10,
@@ -283,6 +304,10 @@ def agent(
             async def on_start(self, ctx: AgentContext) -> None: ...
             async def on_finish(self, response: AgentResponse, ctx: AgentContext) -> None: ...
 
+    :param name: Human-readable agent name exposed via
+        :attr:`AgentMeta.name` and :attr:`AgentContext.agent_name`.  When
+        ``None`` the decorated class ``__name__`` is used.
+    :type name: str | None
     :param model: LLM model identifier override.  When ``None`` the model is
         taken from :class:`~lauren_ai._config.LLMConfig` at runtime.
     :type model: str | None
@@ -328,6 +353,9 @@ def agent(
         if effective_system is None and cls.__doc__:
             effective_system = cls.__doc__.strip() or None
 
+        # Resolve agent name: explicit > class __name__.
+        effective_name: str = name if name is not None else cls.__name__
+
         cfg = AgentConfig(**agent_config_kwargs)
 
         # Gather tool classes registered by @use_tools() on this class.
@@ -338,6 +366,7 @@ def agent(
             system=effective_system,
             config=cfg,
             tool_classes=raw_tools,
+            name=effective_name,
         )
         setattr(cls, AGENT_META, meta)
 
