@@ -174,13 +174,17 @@ user_id = ctx.get_metadata("user_id", default="anonymous")
 
 ## Running an agent — AgentRunner.run()
 
-`AgentRunner` is provided by `AgentModule` and is injectable via DI.  Inject
-it into a web controller alongside the agent:
+`AgentRunner` is a `@runtime_checkable Protocol`; `AgentRunnerBase` is the concrete
+implementation. `AgentModule.for_root()` generates a unique `AgentRunnerBase` subclass
+and registers it as the module's runner. Inject it via `runner: AgentRunner` (Protocol)
+when only one AgentModule is in scope, or via the named concrete subclass when two or
+more modules are in scope (see `injects=[MyRunner]` in [lauren-integration.md](lauren-integration.md)):
 
 ```python
-from lauren_ai import AgentRunner
+from lauren_ai import AgentRunner  # @runtime_checkable Protocol
 
 class ChatController:
+    # runner: AgentRunner works when exactly one AgentModule is in scope.
     def __init__(self, runner: AgentRunner, agent: ResearchAgent) -> None:
         self._runner = runner
         self._agent = agent

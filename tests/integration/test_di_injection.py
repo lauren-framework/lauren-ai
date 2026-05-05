@@ -501,3 +501,155 @@ class TestInjectsBreaksCircularDependency:
         assert isinstance(sr, SpecialistRunner)
         assert isinstance(ar, AgentRunner)
         assert sr is not ar
+
+
+# ---------------------------------------------------------------------------
+# Generic-alias tool end-to-end
+# ---------------------------------------------------------------------------
+
+
+class TestGenericAliasToolEndToEnd:
+    """A @tool() Generic[T] subclass wired via subscript runs correctly through DI."""
+
+    def test_generic_alias_tool_invoked_during_agent_run(self):
+        """EchoTool[Marker] is registered, DI-resolved, and called when the agent uses it."""
+        from typing import Generic, TypeVar as _TypeVar
+
+        from lauren import Json, LaurenFactory, controller, module, post
+        from lauren.testing import TestClient
+        from lauren_ai import AgentRunner, LLMConfig, LLMModule, agent, tool, use_tools
+        from lauren_ai._module import AgentModule
+        from lauren_ai._tools import ToolContext
+
+        _T = _TypeVar("_T")
+        called_with: list[str] = []
+
+        @tool()
+        class EchoTool(Generic[_T]):
+            """Echo the input text.
+
+            Args:
+                text: The text to echo.
+            """
+
+            async def run(self, ctx: ToolContext, text: str) -> dict:
+                called_with.append(text)
+                return {"echo": text}
+
+        class SomeMarker:
+            """Marker."""
+
+        @agent(model="mock-model")
+        @use_tools(EchoTool[SomeMarker])
+        class EchoAgent: ...
+
+        @controller("/echo")
+        class EchoController:
+            def __init__(self, runner: AgentRunner, ai: EchoAgent) -> None:
+                self._runner = runner
+                self._ai = ai
+
+            @post("/chat")
+            async def chat(self, body: Json[dict]) -> dict:
+                r = await self._runner.run(self._ai, body["message"])
+                return {"content": r.content}
+
+        cfg, mock = LLMConfig.for_testing()
+        mock.queue_tool_use("echo_tool", {"text": "hello"})
+        mock.queue_response(_text("Done!", id="c2"))
+
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        AIMod = AgentModule.for_root(agents=[EchoAgent], imports=[LLMProv])
+
+        @module(imports=[LLMProv, AIMod], controllers=[EchoController])
+        class AppModule: ...
+
+        r = TestClient(LaurenFactory.create(AppModule)).post(
+            "/echo/chat", json={"message": "Say hello"}
+        )
+        assert r.status_code == 200
+        assert called_with == ["hello"]
+
+    def test_two_generic_aliases_same_base_class_run_independently(self):
+        """Two modules each with a different alias of the same tool get independent singletons."""
+        from typing import Generic, TypeVar as _TypeVar
+
+        from lauren import Json, LaurenFactory, controller, injectable, module, post, Scope
+        from lauren.testing import TestClient
+        from lauren_ai import AgentRunner, LLMConfig, LLMModule, agent, tool, use_tools
+        from lauren_ai._agents._runner import AgentRunnerBase
+        from lauren_ai._module import AgentModule
+
+        _T = _TypeVar("_T")
+        instances: list[int] = []
+
+        @tool()
+        class TagTool(Generic[_T]):
+            """Tag the message.
+
+            Args:
+                msg: The message.
+            """
+
+            async def run(self, msg: str) -> dict:
+                instances.append(id(self))
+                return {"tagged": msg}
+
+        class MarkerX:
+            """X."""
+
+        class MarkerY:
+            """Y."""
+
+        @agent(model="mock-model")
+        @use_tools(TagTool[MarkerX])
+        class AgentX: ...
+
+        @agent(model="mock-model")
+        @use_tools(TagTool[MarkerY])
+        class AgentY: ...
+
+        @injectable(scope=Scope.SINGLETON)
+        class RunnerX(AgentRunnerBase):
+            """Runner X."""
+
+        @injectable(scope=Scope.SINGLETON)
+        class RunnerY(AgentRunnerBase):
+            """Runner Y."""
+
+        cfg, mock = LLMConfig.for_testing()
+        mock.queue_tool_use("tag_tool", {"msg": "x-msg"})
+        mock.queue_response(_text("X done", id="cx"))
+        mock.queue_tool_use("tag_tool", {"msg": "y-msg"})
+        mock.queue_response(_text("Y done", id="cy"))
+
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        ModX = AgentModule.for_root(agents=[AgentX], imports=[LLMProv], injects=[RunnerX])
+        ModY = AgentModule.for_root(agents=[AgentY], imports=[LLMProv], injects=[RunnerY])
+
+        @controller("/xy")
+        class XYController:
+            def __init__(self, rx: RunnerX, ry: RunnerY, ax: AgentX, ay: AgentY) -> None:
+                self._rx, self._ry, self._ax, self._ay = rx, ry, ax, ay
+
+            @post("/x")
+            async def run_x(self, body: Json[dict]) -> dict:
+                r = await self._rx.run(self._ax, body["msg"])
+                return {"content": r.content}
+
+            @post("/y")
+            async def run_y(self, body: Json[dict]) -> dict:
+                r = await self._ry.run(self._ay, body["msg"])
+                return {"content": r.content}
+
+        @module(imports=[LLMProv, ModX, ModY], controllers=[XYController])
+        class AppModule: ...
+
+        client = TestClient(LaurenFactory.create(AppModule))
+        rx = client.post("/xy/x", json={"msg": "x-msg"})
+        ry = client.post("/xy/y", json={"msg": "y-msg"})
+        assert rx.status_code == 200
+        assert ry.status_code == 200
+        # Two separate tool instances (one per alias token)
+        assert len(instances) == 2
+        assert instances[0] != instances[1]

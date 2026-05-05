@@ -179,7 +179,7 @@ Embedding-only facade backed by `LLMService`. Provided for consumers that only n
 
 ## `AgentModule`
 
-Factory that creates a `@module` providing `AgentRunner`, `ToolRegistry`, and all registered agent instances.
+Factory that creates a `@module` providing a unique `AgentRunnerBase` subclass (the module's runner token), all registered agent instances, and their tools.
 
 Must import the `LLMModule` result via the `imports` parameter so `Transport` and `LLMConfig` tokens are visible inside the generated module.
 
@@ -205,7 +205,7 @@ class AppModule: ...
 | `agents` | `list[type]` | `@agent()`-decorated classes to register. |
 | `tools` | `list[Any] \| None` | Shared tools available to all agents (in addition to per-agent `@use_tools()` registrations). |
 | `imports` | `type \| list[type] \| None` | `@module`-decorated class(es) to import. Pass the `LLMModule` result here. |
-| `signals` | `Any \| None` | Optional `SignalBus` wired into `AgentRunner`. |
+| `signals` | `Any \| None` | Optional `SignalBus` wired into the module's runner. |
 | `memory` | `Any \| None` | Long-term memory store instance. |
 | `conversation_store` | `Any \| None` | Conversation history store instance. |
 | `config` | `AgentConfig \| None` | Default `AgentConfig` for all agents in this module. |
@@ -213,6 +213,11 @@ class AppModule: ...
 | `knowledge` | `list[Any] \| None` | Knowledge base instances to pre-load into long-term memory. |
 
 The returned `@module` provides and exports:
-- `ToolRegistry` — all registered tools.
-- `AgentRunner` — the agentic loop runner.
+- A unique `AgentRunnerBase` subclass as the module's runner token. Inject it via
+  `runner: AgentRunner` (Protocol scan) in single-module scope, or via the explicit
+  named subclass passed to `injects=[MyRunner]` in multi-module scope.
 - All agent classes registered as injectable singletons.
+
+The `injects` parameter accepts one optional `AgentRunnerBase` subclass. When
+omitted, an anonymous subclass is auto-generated. Pass an explicit subclass when
+a controller or service imports two or more AgentModules and needs to disambiguate.

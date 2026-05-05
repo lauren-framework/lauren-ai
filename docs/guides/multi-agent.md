@@ -43,20 +43,28 @@ normal tool result channel.
 
 ```python
 # NOTE: Do NOT add `from __future__ import annotations` to this file.
-from lauren_ai import tool, agent, use_tools, AgentRunner
+from lauren_ai import tool, agent, use_tools, AgentRunnerBase
 from lauren_ai._tools import ToolContext
+from lauren import injectable, Scope
+
+@injectable(scope=Scope.SINGLETON)
+class ResearchAgentRunner(AgentRunnerBase):
+    """Distinct DI token for the Research module's runner."""
 
 @tool()
-async def ask_researcher(question: str, ctx: ToolContext) -> dict:
+class AskResearcher:
     """Delegate a research question to the ResearchAgent.
 
     Args:
         question: The research question to answer.
     """
-    runner: AgentRunner = ctx.agent_context.get_metadata("runner")
-    researcher = ctx.agent_context.get_metadata("researcher")
-    response = await runner.run(researcher, question)
-    return {"answer": response.content, "turns": response.turns}
+    def __init__(self, researcher: ResearchAgent, runner: ResearchAgentRunner) -> None:
+        self._researcher = researcher
+        self._runner = runner   # named subclass — unambiguous
+
+    async def run(self, ctx: ToolContext, question: str) -> dict:
+        response = await self._runner.run(self._researcher, question)
+        return {"answer": response.content, "turns": response.turns}
 
 
 @agent(

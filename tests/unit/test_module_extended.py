@@ -646,3 +646,95 @@ class TestAgentModule:
 
         with pytest.raises(AgentConfigError, match="at most one"):
             AgentModule.for_root(agents=[F], injects=[RA, RB])
+
+
+# ---------------------------------------------------------------------------
+# Generic-alias tool support
+# ---------------------------------------------------------------------------
+
+
+class TestAgentModuleGenericAliasTools:
+    """AgentModule.for_root(tools=[SomeTool[X]]) treats each alias as a distinct token."""
+
+    def test_generic_alias_tool_not_skipped(self):
+        """A @tool() Generic[T] subclass passed as MyTool[SomeClass] must appear in providers."""
+        from typing import Generic, TypeVar as _TypeVar
+
+        from lauren._di.custom import CustomProvider
+        from lauren_ai._agents import agent
+        from lauren_ai._tools import tool
+
+        _T = _TypeVar("_T")
+
+        @tool()
+        class DirectionTool(Generic[_T]):
+            """Return a fixed direction.
+
+            Args:
+                summary: The summary.
+            """
+
+            async def run(self, summary: str) -> dict:
+                return {"ok": True}
+
+        @agent()
+        class _Agent:
+            """Agent."""
+
+        class TargetA:
+            """A."""
+
+        alias = DirectionTool[TargetA]
+        mod_cls = AgentModule.for_root(agents=[_Agent], tools=[alias])
+
+        providers = mod_cls.__lauren_module__.providers
+        found = any(isinstance(p, CustomProvider) and p.provide == alias for p in providers)
+        assert found, f"Alias {alias!r} not found in module providers: {providers!r}"
+
+    def test_generic_alias_two_aliases_are_distinct_tokens(self):
+        """MyTool[ClassA] and MyTool[ClassB] in separate modules produce distinct DI tokens."""
+        from typing import Generic, TypeVar as _TypeVar
+
+        from lauren._di.custom import CustomProvider
+        from lauren_ai._agents import agent
+        from lauren_ai._tools import tool
+
+        _T = _TypeVar("_T")
+
+        @tool()
+        class FlexTool(Generic[_T]):
+            """A flexible tool.
+
+            Args:
+                msg: The message.
+            """
+
+            async def run(self, msg: str) -> dict:
+                return {"msg": msg}
+
+        @agent()
+        class _AgentA:
+            """Agent A."""
+
+        @agent()
+        class _AgentB:
+            """Agent B."""
+
+        class MarkerA:
+            """A."""
+
+        class MarkerB:
+            """B."""
+
+        mod_a = AgentModule.for_root(agents=[_AgentA], tools=[FlexTool[MarkerA]])
+        mod_b = AgentModule.for_root(agents=[_AgentB], tools=[FlexTool[MarkerB]])
+
+        def _alias_tokens(mod):
+            return {p.provide for p in mod.__lauren_module__.providers if isinstance(p, CustomProvider)}
+
+        tokens_a = _alias_tokens(mod_a)
+        tokens_b = _alias_tokens(mod_b)
+        assert FlexTool[MarkerA] in tokens_a
+        assert FlexTool[MarkerB] in tokens_b
+        assert FlexTool[MarkerA] != FlexTool[MarkerB]
+        assert tokens_a.isdisjoint(tokens_b)

@@ -244,7 +244,6 @@ import pytest
 from lauren import module, LaurenFactory
 from lauren_ai import LLMConfig
 from lauren_ai._module import LLMModule, AgentModule
-from lauren_ai._agents._runner import AgentRunner
 from lauren_ai.testing import AgentTestClient
 
 @pytest.fixture()
@@ -263,7 +262,8 @@ async def client():
 
     app = LaurenFactory.create(TestModule)
     agent_instance = await app.container.resolve(MyAgent)
-    runner = await app.container.resolve(AgentRunner)
+    # Resolve via the module's auto-generated runner class
+    runner = await app.container.resolve(AIModule.runner_class)
     return AgentTestClient(agent_instance, mock, runner=runner)
 
 @pytest.mark.asyncio

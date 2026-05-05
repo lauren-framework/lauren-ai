@@ -46,7 +46,7 @@ __all__ = [
 
 import logging
 from collections.abc import AsyncIterator
-from typing import Any, TypeVar
+from typing import Any, TypeVar, get_origin
 
 T = TypeVar("T")
 
@@ -56,7 +56,7 @@ from lauren_ai._transport import Completion, CompletionChunk, Embedding, Message
 
 logger = logging.getLogger(__name__)
 
-from lauren import Scope, module, use_factory, use_value
+from lauren import Scope, module, use_class, use_factory, use_value
 
 # ---------------------------------------------------------------------------
 # Transport builder
@@ -564,13 +564,17 @@ class AgentModule:
         _captured_conversation_store = conversation_store
 
         _fn_tools: list[Any] = []
-        _class_tools: list[type] = []
+        _class_tools: list[Any] = []
         _seen_tool_names: set[str] = set()
 
         def _categorize(tool_item: Any) -> None:
             if tool_item is None:
                 return
-            meta = getattr(tool_item, TOOL_META, None)
+            # Support generic aliases like HandoffBackTo[SomeAgent]:
+            # get_origin() returns the bare class for subscripted generics.
+            _origin = get_origin(tool_item)
+            _lookup = _origin if (_origin is not None and _inspect.isclass(_origin)) else tool_item
+            meta = getattr(_lookup, TOOL_META, None)
             if meta is None:
                 logger.warning(
                     "lauren_ai.AgentModule: %r has no @tool() metadata — skipping",
@@ -580,8 +584,8 @@ class AgentModule:
             if meta.name in _seen_tool_names:
                 return  # deduplicate across shared + per-agent lists
             _seen_tool_names.add(meta.name)
-            if _inspect.isclass(tool_item):
-                _class_tools.append(tool_item)
+            if _inspect.isclass(_lookup):
+                _class_tools.append(tool_item)  # keep alias as DI token
             else:
                 _fn_tools.append(tool_item)
 
@@ -600,7 +604,8 @@ class AgentModule:
         # AgentRunner is never longer-lived than the tools it holds.
         _effective_scope = Scope.SINGLETON
         for _ct in _class_tools:
-            _ct_meta = getattr(_ct, "__lauren_injectable__", None)
+            _actual_cls = get_origin(_ct) if not _inspect.isclass(_ct) else _ct
+            _ct_meta = getattr(_actual_cls, "__lauren_injectable__", None)
             _ct_scope = getattr(_ct_meta, "scope", Scope.SINGLETON) if _ct_meta else Scope.SINGLETON
             if _ct_scope < _effective_scope:
                 _effective_scope = _ct_scope
@@ -614,8 +619,18 @@ class AgentModule:
         # and resolved by the AgentRunner factory.  Exporting them would cause
         # ModuleExportViolation when two AgentModule instances share an import
         # chain (e.g. a CRM module importing a Transfer module).
+        #
+        # Generic aliases (e.g. HandoffBackTo[BankingCRMAgent]) are registered
+        # via use_class so each subscripted variant gets its own singleton bound
+        # to the alias token without declaring the origin class as a separate
+        # provider token (which would cause DuplicateBindingError when two
+        # AgentModules both need the same base tool class).
         for cls_tool in _class_tools:
-            providers.append(cls_tool)
+            _alias_origin = get_origin(cls_tool)
+            if _alias_origin is not None and _inspect.isclass(_alias_origin):
+                providers.append(use_class(provide=cls_tool, use=_alias_origin))
+            else:
+                providers.append(cls_tool)
 
         # Register all agent classes as providers and exports so parent modules
         # can inject the resolved agent singleton (e.g. for runner.run(agent, …)).
