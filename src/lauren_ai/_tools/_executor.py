@@ -287,8 +287,10 @@ class ToolExecutor:
 
         entry = self._tools.get(name)
         if entry is None:
+            agent_name = tool_context.agent_context.agent_name if tool_context.agent_context else "unknown"
             logger.warning(
-                "lauren_ai.ToolExecutor: unknown tool '%s' — returning error result",
+                "lauren_ai.ToolExecutor: agent with name '%s' called unknown tool '%s' — returning error result",
+                agent_name,
                 name,
             )
             return ToolResult.error(
