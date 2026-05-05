@@ -25,16 +25,13 @@ async def get_weather(city: str) -> dict:
 @use_tools(get_weather)
 class WeatherAgent: ...
 
-# 3. Wire via LLMModule + AgentRunner
-from lauren_ai._agents._runner import AgentRunner
-from lauren_ai._tools._registry import ToolRegistry
+# 3. Wire via AgentModule (production) or AgentRunnerBase (testing/scripting)
+from lauren_ai import AgentRunnerBase
 
 cfg = LLMConfig(provider="anthropic", model="claude-opus-4-6", api_key="sk-...")
 LLMProvider = LLMModule.for_root(cfg)
 transport = LLMProvider.transport_instance
-registry = ToolRegistry()
-registry.register(get_weather)
-runner = AgentRunner(transport=transport, registry=registry, config=cfg)
+runner = AgentRunnerBase(transport=transport, tools={}, config=cfg)
 
 # 4. Run
 result = await runner.run(WeatherAgent(), "What's the weather in Paris?")
@@ -275,12 +272,19 @@ async def my_operation(input: str) -> str:
 
 ---
 
-## `AgentRunner` methods
+## `AgentRunner` / `AgentRunnerBase` methods
+
+`AgentRunner` is a `@runtime_checkable Protocol`. Use `AgentRunnerBase` for direct
+construction. In production, `AgentModule.for_root()` auto-generates the runner and
+wires everything; inject it via `runner: AgentRunner` (single-module scope) or the
+named concrete subclass (multi-module scope).
 
 ```python
-runner = AgentRunner(
+from lauren_ai import AgentRunnerBase
+
+runner = AgentRunnerBase(
     transport=...,
-    registry=...,
+    tools={},              # dict[str, ToolSchema], or empty dict
     config=...,
     signals=...,           # Optional SignalBus
     cache_backend=...,     # Optional tool-result cache
@@ -350,37 +354,54 @@ async for event in team_runner.run_stream("Research topic"):
 
 ## Delegation pattern
 
-The recommended way to give one agent access to another is via module-level
-delegation tools that close over shared singletons:
+Use a class-form `@tool()` that injects the target agent and its named runner
+subclass. The delegation tool lives in the **calling module's `tools=`**; the
+calling module imports the target module so the target runner is visible to DI.
 
 ```python
-# delegation_tools.py — NO from __future__ import annotations
-from lauren_ai import tool
+# delegation.py — NO from __future__ import annotations (function-form schema generation)
+from lauren import injectable, Scope
+from lauren_ai import AgentRunnerBase, tool, ToolContext
 
-_runner = None
-_specialist = None
+@injectable(scope=Scope.SINGLETON)
+class SpecialistAgentRunner(AgentRunnerBase):
+    """Distinct DI token for the Specialist module's runner."""
 
-def init(runner, specialist) -> None:
-    global _runner, _specialist
-    _runner = runner
-    _specialist = specialist
+@injectable(scope=Scope.SINGLETON)
+class OrchestratorAgentRunner(AgentRunnerBase):
+    """Distinct DI token for the Orchestrator module's runner."""
 
 @tool()
-async def delegate_to_specialist(task: str) -> dict:
-    """Delegate a task to the specialist agent.
+class DelegateToSpecialist:
+    """Delegate a task to the SpecialistAgent.
     Args:
-        task: Description of the task.
+        task: Full task description.
     """
-    response = await _runner.run(_specialist, task)
-    return {"content": response.content, "turns": response.turns}
+    def __init__(self, agent: SpecialistAgent, runner: SpecialistAgentRunner) -> None:
+        self._agent = agent
+        self._runner = runner   # named subclass — no ambiguity with OrchestratorAgentRunner
+
+    async def run(self, ctx: ToolContext, task: str) -> dict:
+        response = await self._runner.run(self._agent, task,
+                                          execution_context=ctx.execution_context)
+        return {"result": response.content}
+
+# Target module — registers its named runner token
+SpecialistMod = AgentModule.for_root(
+    agents=[SpecialistAgent],
+    tools=[SpecialistTool],
+    imports=[LLMProvider],
+    injects=[SpecialistAgentRunner],
+)
+
+# Calling module — owns the delegation tool; imports target module
+OrchestratorMod = AgentModule.for_root(
+    agents=[OrchestratorAgent],
+    tools=[DelegateToSpecialist],          # ← delegation tool lives HERE
+    imports=[LLMProvider, SpecialistMod],  # ← makes SpecialistAgentRunner visible
+    injects=[OrchestratorAgentRunner],
+)
 ```
-
-Call `init()` once at application startup (after all agents are instantiated),
-then attach `delegate_to_specialist` to the orchestrator agent via `@use_tools`.
-
-**Anti-pattern — do not** pass an `AgentRunner` as a constructor argument to
-an agent; agents are plain classes and DI injects through `__init__` only for
-controllers and services.
 
 ---
 
@@ -587,9 +608,12 @@ print(match.matched)     # bool — False if below min_confidence
 exports it, so controllers in the parent module can inject it directly:
 
 ```python
-from lauren_ai import AgentRunner
+from lauren_ai import AgentRunner  # @runtime_checkable Protocol
 
 class ChatController:
+    # runner: AgentRunner resolves unambiguously when only one AgentModule is in scope.
+    # When two or more AgentModules are imported, use the named concrete subclass
+    # registered via injects=[MyRunner] to avoid ProtocolAmbiguityError.
     def __init__(self, runner: AgentRunner, agent: ChatAgent) -> None:
         self._runner = runner
         self._agent = agent   # DI-resolved singleton
@@ -708,28 +732,33 @@ class EventForwarder:
             await self.send_to_user(user_id, {"type": "token_usage", ...})
 ```
 
-### Avoiding circular DI with a runner subclass
+### Multi-runner disambiguation with named runner subclasses
 
-When agent delegation would create a circular DI dependency —
-
-```
-AgentRunner (CRM) → DelegateToBankingTransfer → AgentRunner (Transfer)
-```
-
-— break the cycle by creating a subclass of `AgentRunner` to act as a distinct
-DI token.  The container resolves each token independently.
+Every `AgentModule.for_root()` call MUST have its own dedicated runner. When a
+controller or service needs runners from two modules simultaneously, define a
+named `AgentRunnerBase` subclass per module and pass it via `injects=[MyRunner]`:
 
 ```python
-@injectable(scope=Scope.SINGLETON)
-class TransferAgentRunner(AgentRunner):
-    """Distinct DI token for the Transfer Agent's runner — breaks the cycle."""
+from lauren_ai import AgentRunnerBase
 
+@injectable(scope=Scope.SINGLETON)
+class TransferAgentRunner(AgentRunnerBase):
+    """Distinct DI token for the Transfer Agent's runner."""
+
+@injectable(scope=Scope.SINGLETON)
+class CRMAgentRunner(AgentRunnerBase):
+    """Distinct DI token for the CRM Agent's runner."""
+```
+
+The delegation tool uses the named subclass so DI resolves it unambiguously:
+
+```python
 @tool()
 class DelegateToBankingTransfer:
     def __init__(
         self,
         transfer_agent: BankingTransferAgent,
-        runner: TransferAgentRunner,       # ← distinct token, no cycle
+        runner: TransferAgentRunner,       # ← named subclass, not AgentRunner Protocol
     ) -> None:
         self._transfer_agent = transfer_agent
         self._runner = runner
@@ -737,7 +766,7 @@ class DelegateToBankingTransfer:
     async def run(self, ctx: ToolContext, task: str) -> dict:
         response = await self._runner.run(
             self._transfer_agent, task,
-            execution_context=ctx.execution_context,  # forward identity intact
+            execution_context=ctx.execution_context,
         )
         return {"result": response.content, "stop_reason": response.stop_reason}
 ```
@@ -755,3 +784,4 @@ class DelegateToBankingTransfer:
 - **Do not** pass `conversation_id=None` when you want session persistence — always supply one, and ensure `conversation_store` was passed to `AgentModule.for_root()` or `AgentRunner.__init__`.
 - **Do not** share `ShortTermMemory` across runs — it is created fresh per `AgentRunner.run()` call (prior history is loaded from `ConversationStore` when available).
 - **Do not** pass agent **classes** to `runner.run()` — always pass a DI-resolved **instance**. Passing a class bypasses DI and breaks lifecycle hooks (raises `TypeError: on_start() missing 1 required positional argument: 'ctx'`).
+- **Do not** use `runner: AgentRunner` (Protocol annotation) in a controller or tool that can see runners from two or more `AgentModule`s — the structural Protocol scan finds multiple matches and raises `ProtocolAmbiguityError`. Use the named concrete subclass registered via `injects=[MyRunner]` instead.

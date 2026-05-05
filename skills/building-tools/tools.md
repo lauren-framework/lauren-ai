@@ -243,7 +243,7 @@ parameters.
 
 ```python
 from lauren_ai._tools._executor import CacheBackend
-from lauren_ai import AgentRunner
+from lauren_ai import AgentRunnerBase
 
 class InMemoryCache(CacheBackend):
     def __init__(self) -> None:
@@ -256,9 +256,9 @@ class InMemoryCache(CacheBackend):
         self._store[key] = value
 
 
-runner = AgentRunner(
+runner = AgentRunnerBase(
     transport=transport,
-    registry=registry,
+    tools={},
     config=config,
     cache_backend=InMemoryCache(),
 )
@@ -334,18 +334,18 @@ from lauren_ai._skills import (
 | `CodeExecutionTool` | Runs Python in a subprocess sandbox with a 10-second timeout |
 | `DelegateToAgentTool` | Low-level delegation primitive used to forward tasks to sub-agents |
 
-Register skills in `ToolRegistry` before constructing `AgentRunner`:
+Register skills via `AgentModule.for_root()` (production) or directly for scripting:
 
 ```python
 from lauren_ai._skills import HttpFetchTool, CodeExecutionTool
-from lauren_ai._tools._registry import ToolRegistry
-from lauren_ai import AgentRunner
+from lauren_ai import AgentModule, LLMModule, LLMConfig
 
-registry = ToolRegistry()
-registry.register(HttpFetchTool)
-registry.register(CodeExecutionTool)
-
-runner = AgentRunner(transport=transport, registry=registry, config=config)
+LLMProvider = LLMModule.for_root(LLMConfig.for_anthropic())
+AgentProvider = AgentModule.for_root(
+    agents=[MyAgent],
+    tools=[HttpFetchTool, CodeExecutionTool],
+    imports=[LLMProvider],
+)
 ```
 
 Use built-in skills in an agent:

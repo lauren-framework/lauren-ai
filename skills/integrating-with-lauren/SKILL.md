@@ -38,7 +38,9 @@ AgentProvider = AgentModule.for_root(
 ```
 
 `AgentModule.for_root()` auto-registers each agent class and tool class as a
-singleton provider, builds a `ToolRegistry`, and provides `AgentRunner`.
+singleton provider and generates a unique `AgentRunnerBase` subclass as the module's
+runner token. Inject it with `runner: AgentRunner` (single-module scope) or with the
+named concrete subclass via `injects=[MyRunner]` (multi-module scope).
 
 ### Step 3 — parent `@module`
 
@@ -184,42 +186,56 @@ handlers without any extra wiring.
 
 ---
 
-## Breaking circular DI — `AgentRunner` subclass as a distinct token
+## Multi-runner disambiguation — named `AgentRunnerBase` subclass per module
 
-When agent A needs to delegate to agent B via a tool, and A's runner and B's
-runner would form a cycle in the DI graph, define a thin subclass:
+Every `AgentModule.for_root()` call MUST have its own dedicated runner token.
+When a controller or delegation tool can see runners from two modules simultaneously,
+use `injects=[MyRunner]` with an explicit `AgentRunnerBase` subclass:
 
 ```python
 from lauren import injectable, Scope
-from lauren_ai import AgentRunner
+from lauren_ai import AgentRunnerBase
 
 @injectable(scope=Scope.SINGLETON)
-class TransferAgentRunner(AgentRunner):
-    """Distinct DI token — same logic as AgentRunner, separate binding."""
+class TransferAgentRunner(AgentRunnerBase):
+    """Distinct DI token for the Transfer module's runner."""
+
+@injectable(scope=Scope.SINGLETON)
+class CRMAgentRunner(AgentRunnerBase):
+    """Distinct DI token for the CRM module's runner."""
 ```
 
 ```python
-# AgentModule.for_root() for the transfer sub-system:
-TransferProvider = AgentModule.for_root(
+# Transfer module — registers TransferAgentRunner as its runner token
+TransferMod = AgentModule.for_root(
     agents=[BankingTransferAgent],
     tools=[TransferFundsTool],
     imports=[LLMProvider],
     signals=signal_bus,
-    injects=[TransferAgentRunner],      # binds TransferAgentRunner instead of AgentRunner
+    injects=[TransferAgentRunner],
+)
+
+# CRM module — imports Transfer module, owns the delegation tool
+CRMMod = AgentModule.for_root(
+    agents=[BankingCRMAgent],
+    tools=[DelegateToBankingTransfer],     # ← delegation tool lives in the calling module
+    imports=[LLMProvider, TransferMod],    # ← makes TransferAgentRunner visible
+    signals=signal_bus,
+    injects=[CRMAgentRunner],
 )
 ```
 
-The CRM module receives `AgentRunner`; the transfer delegation tool receives
-`TransferAgentRunner`. The DI graph sees two distinct tokens — no cycle.
+The delegation tool uses `runner: TransferAgentRunner` (named subclass, not
+`AgentRunner` Protocol) — DI resolves it unambiguously from the imported scope.
 
 Always forward `execution_context` in the delegation tool:
 
 ```python
-async def run(self, transfer_request: str, ctx: ToolContext | None = None) -> dict:
+async def run(self, ctx: ToolContext, transfer_request: str) -> dict:
     response = await self._runner.run(
         self._agent,
         transfer_request,
-        execution_context=ctx.execution_context if ctx else None,
+        execution_context=ctx.execution_context,
     )
     return {"content": response.content}
 ```

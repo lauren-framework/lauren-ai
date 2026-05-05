@@ -9,15 +9,13 @@ make zero real network calls.
 
 ```python
 import pytest
-from lauren_ai import LLMConfig, AgentRunner, Completion, TokenUsage
+from lauren_ai import LLMConfig, AgentRunner, AgentRunnerBase, Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
-from lauren_ai._tools._registry import ToolRegistry
 
 @pytest.fixture
 def mock_setup():
     cfg, mock = LLMConfig.for_testing()
-    registry = ToolRegistry()
-    runner = AgentRunner(transport=mock, registry=registry, config=cfg)
+    runner = AgentRunnerBase(transport=mock, tools={}, config=cfg)
     return runner, mock
 
 async def test_agent_basic(mock_setup):
@@ -146,8 +144,7 @@ async def test_full_agent_run():
 ```python
 async def test_conversation_memory():
     cfg, mock = LLMConfig.for_testing()
-    registry = ToolRegistry()
-    runner = AgentRunner(transport=mock, registry=registry, config=cfg)
+    runner = AgentRunnerBase(transport=mock, tools={}, config=cfg)
 
     # Turn 1
     mock.queue_response(Completion(

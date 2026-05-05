@@ -30,13 +30,13 @@ from .tools import my_tool
 class MyAgent: ...
 ```
 
-Run it with `AgentRunner`:
+Run it with `AgentRunnerBase` (for scripting/testing) or via `AgentModule.for_root()` (production):
 
 ```python
-from lauren_ai import AgentRunner, LLMConfig
+from lauren_ai import AgentRunnerBase, LLMConfig
 
 cfg = LLMConfig(provider="anthropic", model="claude-opus-4-6")
-runner = AgentRunner(transport=transport, config=cfg)
+runner = AgentRunnerBase(transport=transport, tools={}, config=cfg)
 result = await runner.run(MyAgent(), "What can you help me with?")
 print(result.content)
 print(f"turns={result.turns}, cost=${result.total_usage.total_tokens}")
@@ -135,7 +135,7 @@ AgentRunner.run()
 objects.  Each chunk has a `delta` attribute with the streamed text fragment.
 
 ```python
-from lauren_ai._agents._runner import AgentRunner
+from lauren_ai import AgentRunner
 
 async def stream_response(runner: AgentRunner, agent_inst, message: str) -> None:
     async for chunk in await runner.run_stream(agent_inst, message):
@@ -183,7 +183,14 @@ to audit and debug.
 
 ```python
 # NOTE: Do NOT add `from __future__ import annotations` to this file.
-from lauren_ai import tool, ToolContext, AgentRunner
+from lauren import injectable, Scope
+from lauren_ai import tool, ToolContext, AgentRunnerBase
+
+# Named runner token for the target module — avoids ProtocolAmbiguityError
+# in any scope that can see both this runner and another AgentModule's runner.
+@injectable(scope=Scope.SINGLETON)
+class ResearchAgentRunner(AgentRunnerBase):
+    """Distinct DI token for the Research module's runner."""
 
 @tool()
 class DelegateToResearcher:
@@ -193,9 +200,9 @@ class DelegateToResearcher:
         task: Detailed description of what to research.
     """
 
-    def __init__(self, researcher: ResearchAgent, runner: AgentRunner) -> None:
+    def __init__(self, researcher: ResearchAgent, runner: ResearchAgentRunner) -> None:
         self._agent = researcher
-        self._runner = runner
+        self._runner = runner   # named subclass — unambiguous
 
     async def run(self, ctx: ToolContext, task: str) -> dict:
         response = await self._runner.run(
@@ -206,14 +213,27 @@ class DelegateToResearcher:
         return {"result": response.content}
 ```
 
-Then wire it into the coordinating agent:
+Wire the delegation tool in the **calling (coordinator) module's `tools=`**; the
+coordinator module imports the researcher module so `ResearchAgentRunner` is visible:
 
 ```python
-from lauren_ai import agent, use_tools
+from lauren_ai import AgentModule, agent, use_tools
 
 @agent(model="claude-opus-4-6", system="You are a coordinator.")
 @use_tools(DelegateToResearcher)
 class CoordinatorAgent: ...
+
+ResearchMod = AgentModule.for_root(
+    agents=[ResearchAgent], tools=[ResearchTool],
+    imports=[LLMProvider], injects=[ResearchAgentRunner],
+)
+
+CoordinatorMod = AgentModule.for_root(
+    agents=[CoordinatorAgent],
+    tools=[DelegateToResearcher],          # ← delegation tool lives in calling module
+    imports=[LLMProvider, ResearchMod],    # ← makes ResearchAgentRunner visible
+    injects=[CoordinatorAgentRunner],
+)
 ```
 
 The `execution_context` is always forwarded verbatim so that downstream tools
@@ -243,9 +263,11 @@ AgentProvider = AgentModule.for_root(
 Then inject the agent **instance** into a controller:
 
 ```python
-from lauren_ai import AgentRunner
+from lauren_ai import AgentRunner  # @runtime_checkable Protocol
 
 class ChatController:
+    # runner: AgentRunner works when only one AgentModule is in scope.
+    # If two AgentModules are in scope, use the named concrete subclass (injects=[MyRunner]).
     def __init__(self, runner: AgentRunner, agent: MyAgent) -> None:
         self._runner = runner
         self._agent = agent   # DI-resolved singleton

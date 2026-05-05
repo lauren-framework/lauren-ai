@@ -32,10 +32,10 @@ class SafeAgent: ...
 Run it:
 
 ```python
-from lauren_ai import AgentRunner, LLMConfig
+from lauren_ai import AgentRunnerBase, LLMConfig
 
 cfg = LLMConfig(provider="anthropic", model="claude-opus-4-6")
-runner = AgentRunner(transport=..., config=cfg)
+runner = AgentRunnerBase(transport=..., tools={}, config=cfg)
 result = await runner.run(SafeAgent(), "What is the refund policy?")
 print(result.content)
 ```

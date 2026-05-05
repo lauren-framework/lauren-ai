@@ -31,7 +31,7 @@ src/lauren_ai/
 ├── _agents/
 │   ├── __init__.py         # @agent(), @use_tools(), AgentMeta, AgentContext, AgentResponse
 │   ├── _compile.py         # Agent validation at startup
-│   └── _runner.py          # AgentRunner — the agentic loop
+│   └── _runner.py          # AgentRunner (Protocol) / AgentRunnerBase (concrete) — the agentic loop
 ├── _chains/                # Chain / Runnable / RunnableLambda
 ├── _config.py              # LLMConfig, AgentConfig (frozen dataclasses)
 ├── _cost/                  # CostTracker, TokenBudget, RateLimiter, PricingTable
@@ -175,9 +175,12 @@ argument and receive the fully-resolved singleton:
 
 ```python
 # CORRECT — inject the agent instance via DI, pass the instance to runner.run()
-from lauren_ai import AgentRunner
+from lauren_ai import AgentRunner  # @runtime_checkable Protocol
 
 class ChatController:
+    # runner: AgentRunner resolves unambiguously when only one AgentModule is in scope.
+    # If two or more AgentModules are imported, use the named concrete subclass
+    # registered via injects=[MyRunner] to avoid ProtocolAmbiguityError.
     def __init__(self, runner: AgentRunner, agent: ChatAgent) -> None:
         self._runner = runner
         self._agent = agent   # ← DI-resolved singleton
@@ -444,58 +447,79 @@ async def generate():
     # context copy is discarded automatically when the Task exits — no reset() needed
 ```
 
-### 4. `TransferAgentRunner` subclass for circular DI
+### 4. Named runner subclass as a distinct DI token
 
-When a delegation chain would be circular —
-
-```
-AgentRunner (CRM) → DelegateToBankingTransfer → AgentRunner (Transfer)
-```
-
-— the cycle is broken by declaring a dedicated **subclass** of `AgentRunner`
-as a distinct DI token.  Because the two tokens are different classes, the
-container can resolve `TransferAgentRunner` independently of the top-level
-`AgentRunner`:
+Every `AgentModule.for_root()` call has its own dedicated runner. By default a
+unique `AgentRunnerBase` subclass is auto-generated. When a controller or service
+needs to inject runners from **two or more** `AgentModule`s simultaneously, use
+`injects=[MyRunner]` with an explicit `AgentRunnerBase` subclass per module — the
+named class becomes the unambiguous DI token:
 
 ```python
 # banking_delegation.py
 from lauren import injectable, Scope
-from lauren_ai import AgentRunner
+from lauren_ai import AgentRunnerBase
 
 @injectable(scope=Scope.SINGLETON)
-class TransferAgentRunner(AgentRunner):
-    """Distinct DI token for the Transfer Agent's runner.
+class TransferAgentRunner(AgentRunnerBase):
+    """Distinct DI token for the Transfer Agent's runner."""
 
-    Breaks the circular dependency without post-construction wiring hacks.
-    """
+@injectable(scope=Scope.SINGLETON)
+class CRMAgentRunner(AgentRunnerBase):
+    """Distinct DI token for the CRM Agent's runner."""
+```
 
+The delegation tool uses `runner: TransferAgentRunner` (not `AgentRunner` Protocol),
+which DI resolves unambiguously from the imported Transfer module scope:
+
+```python
 @tool()
 class DelegateToBankingTransfer:
     def __init__(self, transfer_agent: BankingTransferAgent, runner: TransferAgentRunner) -> None:
         self._transfer_agent = transfer_agent
-        self._runner = runner          # ← TransferAgentRunner, not AgentRunner
+        self._runner = runner          # ← named subclass, not AgentRunner Protocol
 
     async def run(self, ctx: ToolContext, task: str) -> dict:
         response = await self._runner.run(
             self._transfer_agent, task,
-            execution_context=ctx.execution_context,  # forward identity intact
+            execution_context=ctx.execution_context,
         )
         return {"result": response.content, "stop_reason": response.stop_reason}
 ```
 
-### 5. Register `DelegationWiring` (or equivalent) in `providers=[]`
+### 5. Delegation tool lives in the calling module's `tools=`
 
-Any class that performs post-construction wiring — subscribing signal handlers,
-registering listeners, seeding cross-singleton references — must appear in the
-`providers` list of the enclosing `@module` so the Lauren lifecycle scheduler
-instantiates it eagerly at startup, before the first request arrives.
+The delegation tool (`DelegateToBankingTransfer`) belongs in the **calling module's
+`tools=`** (e.g. the CRM module), NOT in the target module. The calling module
+imports the target module so the target runner token is visible to DI:
+
+```python
+_TransferAgentModule = AgentModule.for_root(
+    agents=[BankingTransferAgent],
+    tools=[TransferFundsTool],
+    imports=[LLMProvider, BankingModule],
+    injects=[TransferAgentRunner],          # registers TransferAgentRunner token
+)
+
+_CRMAgentModule = AgentModule.for_root(
+    agents=[BankingCRMAgent],
+    tools=[DelegateToBankingTransfer],      # ← delegation tool lives HERE
+    imports=[LLMProvider, _TransferAgentModule, BankingModule],  # ← makes TransferAgentRunner visible
+    injects=[CRMAgentRunner],
+)
+```
+
+### 6. Register observability singletons in `providers=[]`
+
+Any class that subscribes to `SignalBus` events or performs post-construction
+wiring in `__init__` must appear in the `providers` list of the enclosing `@module`
+so the Lauren lifecycle scheduler instantiates it eagerly at startup:
 
 ```python
 @module(
     providers=[
         BankDatabase,
         EventForwarder,    # ← subscribes signal handlers in __init__; must be eager
-        DelegationWiring,  # ← or equivalent wiring class
     ],
     controllers=[BankingChatController],
 )
@@ -503,4 +527,4 @@ class BankingModule: ...
 ```
 
 Without appearing in `providers`, the singleton is never constructed and the
-signal subscriptions / wiring never run.
+signal subscriptions never run.

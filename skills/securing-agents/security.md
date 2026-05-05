@@ -218,7 +218,16 @@ so the sub-agent's tools can also read the verified identity:
 
 ```python
 # NOTE: Do NOT add `from __future__ import annotations` to this file.
-from lauren_ai import tool, ToolContext, AgentRunner
+from lauren import injectable, Scope
+from lauren_ai import tool, ToolContext, AgentRunnerBase
+
+@injectable(scope=Scope.SINGLETON)
+class TransferAgentRunner(AgentRunnerBase):
+    """Distinct DI token for the Transfer module's runner.
+
+    Using a named subclass (not AgentRunner Protocol) avoids ProtocolAmbiguityError
+    when the calling module can see two runners simultaneously.
+    """
 
 @tool()
 class DelegateToTransferAgent:
@@ -228,14 +237,11 @@ class DelegateToTransferAgent:
         task: Description of what to transfer, to whom, and how much.
     """
 
-    def __init__(self, transfer_agent: TransferAgent, runner: AgentRunner | None = None) -> None:
+    def __init__(self, transfer_agent: TransferAgent, runner: TransferAgentRunner) -> None:
         self._agent = transfer_agent
-        self._runner = runner   # wired post-DI by a wiring singleton
+        self._runner = runner   # injected by DI from the imported Transfer module scope
 
     async def run(self, ctx: ToolContext, task: str) -> dict:
-        if not self._runner:
-            return {"error": "Transfer service unavailable."}
-
         # Forward execution_context intact — sub-agent tools will read
         # ctx.execution_context.request.state.user_id without any LLM input.
         response = await self._runner.run(

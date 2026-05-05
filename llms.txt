@@ -284,19 +284,23 @@ Stream events via `runner.run_stream(...)`:
 
 ### Delegation pattern — cross-module tool routing
 
-Declare the delegation tool as a provider of the **target** module using
-`export_tools=[DelegateTool]`. The tool's `runner: AgentRunner` resolves to the
-target runner (only one runner is in scope in the target module). The calling module
-imports the pre-wired tool and lists it in its own `tools=[...]`.
+The delegation tool lives in the **calling module's `tools=`**. The calling module
+imports the target module so the named target runner is visible to DI. The tool's
+constructor uses the **named concrete runner subclass** — not the `AgentRunner`
+Protocol — to avoid ambiguity when two runners are in scope.
 
 ```python
 from lauren import injectable, Scope
-from lauren_ai import AgentRunnerBase, AgentRunner, tool, ToolContext
+from lauren_ai import AgentRunnerBase, tool, ToolContext
 
-# Named runner token — required when a controller needs BOTH runners simultaneously
+# Named runner token for the target module
 @injectable(scope=Scope.SINGLETON)
 class SpecialistAgentRunner(AgentRunnerBase):
     """Distinct DI token for the Specialist module's runner."""
+
+@injectable(scope=Scope.SINGLETON)
+class OrchestratorAgentRunner(AgentRunnerBase):
+    """Distinct DI token for the Orchestrator module's runner."""
 
 @tool()
 class DelegateToSpecialist:
@@ -307,35 +311,35 @@ class DelegateToSpecialist:
     """
     def __init__(self, agent: SpecialistAgent, runner: SpecialistAgentRunner) -> None:
         self._agent = agent
-        self._runner = runner   # injected from Specialist module scope
+        self._runner = runner   # named subclass — resolves unambiguously
 
     async def run(self, ctx: ToolContext, task: str) -> dict:
         response = await self._runner.run(self._agent, task,
                                           execution_context=ctx.execution_context)
         return {"result": response.content}
 
-# Target module: owns and exports the delegation tool
+# Target module: registers SpecialistAgentRunner as its runner token
 SpecialistMod = AgentModule.for_root(
     agents=[SpecialistAgent],
     tools=[SpecialistTool1],
     imports=[LLMProvider],
     injects=[SpecialistAgentRunner],
-    export_tools=[DelegateToSpecialist],   # ← pre-wired, exported
 )
 
-# Calling module: consumes the pre-wired tool
+# Calling module: owns the delegation tool; imports target module so
+# SpecialistAgentRunner is visible to DI when resolving DelegateToSpecialist
 OrchestratorMod = AgentModule.for_root(
     agents=[OrchestratorAgent],
-    tools=[DelegateToSpecialist],          # ← imported from SpecialistMod
-    imports=[LLMProvider, SpecialistMod],
+    tools=[DelegateToSpecialist],          # ← delegation tool lives HERE
+    imports=[LLMProvider, SpecialistMod],  # ← makes SpecialistAgentRunner visible
     injects=[OrchestratorAgentRunner],
 )
 ```
 
-**Rule:** put delegation tools in `export_tools=`, NOT in `tools=` of the target
-module. `tools=` wires a tool into the target agent's own tool map — that creates
-a cycle (runner → tool → runner). `export_tools=` registers the tool as a provider
-(so DI can inject the runner) and exports it for the calling module.
+**Rule:** The delegation tool belongs in the **calling module's `tools=`**. The
+calling module imports the target module so the target runner token is visible.
+Use the named concrete runner subclass (not `AgentRunner` Protocol) in the tool's
+`__init__` — this is unambiguous even when two runners are in scope.
 
 ### @traced() — tracing & observability
 

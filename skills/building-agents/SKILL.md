@@ -22,10 +22,10 @@ class ShopAgent: ...
 Run it:
 
 ```python
-from lauren_ai import AgentRunner, LLMConfig
+from lauren_ai import AgentRunnerBase, LLMConfig
 
 cfg = LLMConfig(provider="anthropic", model="claude-opus-4-6")
-runner = AgentRunner(transport=transport, config=cfg)
+runner = AgentRunnerBase(transport=transport, tools={}, config=cfg)
 result = await runner.run(ShopAgent(), "How much is a Widget?")
 print(result.content)
 ```

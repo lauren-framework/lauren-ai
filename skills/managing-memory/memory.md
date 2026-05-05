@@ -65,14 +65,15 @@ resp2 = await runner.run(agent, "What is my name?", conversation_id="sess-1")
 # resp2.content → "Your name is Alice."
 ```
 
-You can also construct `AgentRunner` directly if you need finer control:
+You can also construct `AgentRunnerBase` directly if you need finer control:
 
 ```python
-from lauren_ai import AgentRunner, LLMConfig
+from lauren_ai import AgentRunnerBase, LLMConfig
 
 cfg = LLMConfig(provider="anthropic", model="claude-opus-4-6")
-runner = AgentRunner(
+runner = AgentRunnerBase(
     transport=transport,
+    tools={},
     config=cfg,
     conversation_store=store,
 )
