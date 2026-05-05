@@ -344,3 +344,163 @@ assert result.content == "42"
 2. Add its name to `__all__`.
 3. Write unit tests in `tests/skills/test_myskill.py`.
 4. Document it in `skills/tools.md` and `AGENTS.md`.
+
+---
+
+## Production security invariants (from the banking chatbot)
+
+The following invariants are derived from `lauren-examples/lauren-ai-chatbot/backend/`
+and must be preserved in any production agent that handles privileged operations.
+
+### 1. Identity must come from `execution_context.request.state`, never from the LLM
+
+The authenticated sender is always read from the server-side execution context
+that a guard populated **before** the LLM ran.  The LLM only supplies
+non-identity parameters such as the transfer recipient and amount.
+
+```python
+# banking_tools.py — TransferFundsTool.run()
+async def run(self, ctx: ToolContext, to_user: str, amount: float) -> dict:
+    # CORRECT: read the sender from the guard-verified state
+    exec_ctx = ctx.execution_context
+    auth_uid = exec_ctx.request.state.get("user_id")  # set by SignatureGuard
+    if not auth_uid:
+        return {"error": "Security error: no authenticated user in ExecutionContext."}
+
+    # `to_user` and `amount` are LLM-supplied — that is fine, they are not identity.
+    result = self._db.transfer(from_user=auth_uid, to_user=to_user, amount=amount)
+    ...
+```
+
+The full trust chain is:
+
+```
+SignatureGuard.can_activate(ExecutionContext)
+    └─ request.state.user_id = <HMAC-verified value>
+            │
+AgentRunner.run(..., execution_context=ExecutionContext(request=request))
+    └─ AgentContext.execution_context  (same ExecutionContext)
+            │
+ToolExecutor._execute_single_tool(...)
+    └─ ToolContext.execution_context  (forwarded from AgentContext)
+            │
+tool.run(ctx: ToolContext, ...)
+    └─ ctx.execution_context.request.state.get("user_id")  ← read here
+```
+
+At no point does the LLM supply or influence the sender identity.
+
+### 2. The ContextVar routing pattern
+
+A `ContextVar` set **before** `AgentRunner.run()` is visible inside every
+`asyncio.gather` task that `SignalBus.emit` spawns, because `gather` copies the
+current context into each spawned task automatically.
+
+```python
+# ws/context.py
+from contextvars import ContextVar
+
+current_user_id: ContextVar[str | None] = ContextVar("ws_current_user_id", default=None)
+
+# chat_banking_controller.py — generate() async generator
+async def generate():
+    current_user_id.set(account.user_id)   # set BEFORE runner.run()
+    response = await self._runner.run(
+        self._crm_agent,
+        full_prompt,
+        execution_context=exec_ctx,
+    )
+    ...
+
+# event_forwarder.py — signal handler called via asyncio.gather inside SignalBus.emit
+async def _on_model_complete(self, event: ModelCallComplete) -> None:
+    user_id = current_user_id.get()        # visible because gather copies the context
+    if user_id:
+        await self.send_to_user(user_id, {...})
+```
+
+### 3. Never `reset()` a ContextVar across task boundaries
+
+`EventStream`'s keep-alive implementation wraps each `__anext__()` call in a
+separate `asyncio.Task`.  Each task receives its own copy of the ContextVar
+context at creation time.  Calling `ContextVar.reset(token)` with a `Token`
+that was created in a *different* task raises `ValueError: <Token> was created
+in a different Context`.
+
+The correct pattern is to call `.set()` once at the top of the generator and
+never call `.reset()`.  The task's context copy is discarded automatically when
+the task completes:
+
+```python
+async def generate():
+    # CORRECT: set once, never reset
+    current_user_id.set(account.user_id)
+    try:
+        response = await self._runner.run(...)
+        ...
+        yield ServerSentEvent(event="done", data="")
+    except Exception as exc:
+        yield ServerSentEvent(event="error", data=str(exc))
+    # context copy is discarded automatically when the Task exits — no reset() needed
+```
+
+### 4. `TransferAgentRunner` subclass for circular DI
+
+When a delegation chain would be circular —
+
+```
+AgentRunner (CRM) → DelegateToBankingTransfer → AgentRunner (Transfer)
+```
+
+— the cycle is broken by declaring a dedicated **subclass** of `AgentRunner`
+as a distinct DI token.  Because the two tokens are different classes, the
+container can resolve `TransferAgentRunner` independently of the top-level
+`AgentRunner`:
+
+```python
+# banking_delegation.py
+from lauren import injectable, Scope
+from lauren_ai import AgentRunner
+
+@injectable(scope=Scope.SINGLETON)
+class TransferAgentRunner(AgentRunner):
+    """Distinct DI token for the Transfer Agent's runner.
+
+    Breaks the circular dependency without post-construction wiring hacks.
+    """
+
+@tool()
+class DelegateToBankingTransfer:
+    def __init__(self, transfer_agent: BankingTransferAgent, runner: TransferAgentRunner) -> None:
+        self._transfer_agent = transfer_agent
+        self._runner = runner          # ← TransferAgentRunner, not AgentRunner
+
+    async def run(self, ctx: ToolContext, task: str) -> dict:
+        response = await self._runner.run(
+            self._transfer_agent, task,
+            execution_context=ctx.execution_context,  # forward identity intact
+        )
+        return {"result": response.content, "stop_reason": response.stop_reason}
+```
+
+### 5. Register `DelegationWiring` (or equivalent) in `providers=[]`
+
+Any class that performs post-construction wiring — subscribing signal handlers,
+registering listeners, seeding cross-singleton references — must appear in the
+`providers` list of the enclosing `@module` so the Lauren lifecycle scheduler
+instantiates it eagerly at startup, before the first request arrives.
+
+```python
+@module(
+    providers=[
+        BankDatabase,
+        EventForwarder,    # ← subscribes signal handlers in __init__; must be eager
+        DelegationWiring,  # ← or equivalent wiring class
+    ],
+    controllers=[BankingChatController],
+)
+class BankingModule: ...
+```
+
+Without appearing in `providers`, the singleton is never constructed and the
+signal subscriptions / wiring never run.

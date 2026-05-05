@@ -272,6 +272,8 @@ Stream events via `runner.run_stream(...)`:
 
 ### Delegation pattern — DI-friendly class-form tools
 
+**Pattern A — `AgentRunner | None` + wiring singleton** (simple):
+
 Use `from __future__ import annotations` **in the delegation tool file** and declare
 `runner: AgentRunner | None = None` as a constructor parameter. The DI container
 sees the union type `AgentRunner | None`, finds no registered provider, skips
@@ -317,6 +319,50 @@ class DelegationWiring:
 
 Register `DelegationWiring` in the parent `@module`'s `providers=[...]` list so
 Lauren's lifecycle scheduler instantiates it eagerly at startup.
+
+**Pattern B — `AgentRunner` subclass as a distinct DI token** (production-grade):
+
+When two coordinators need to share a single `AgentRunner` but one also runs the
+other's sub-agent (creating a cycle), define a thin subclass so the DI container
+treats it as a separate token:
+
+```python
+from lauren import injectable, Scope
+from lauren_ai import AgentRunner
+
+@injectable(scope=Scope.SINGLETON)
+class TransferAgentRunner(AgentRunner):
+    """Distinct DI token — same logic as AgentRunner, separate binding."""
+
+# In the delegation tool:
+@tool()
+class DelegateToBankingTransfer:
+    """Hand off a transfer request to BankingTransferAgent.
+
+    Args:
+        transfer_request: Natural-language transfer instruction.
+    """
+    def __init__(
+        self,
+        transfer_agent: BankingTransferAgent,
+        transfer_runner: TransferAgentRunner,
+    ) -> None:
+        self._agent = transfer_agent
+        self._runner = transfer_runner
+
+    async def run(self, transfer_request: str, ctx: ToolContext | None = None) -> dict:
+        response = await self._runner.run(
+            self._agent,
+            transfer_request,
+            execution_context=ctx.execution_context if ctx else None,
+        )
+        return {"content": response.content, "turns": response.turns}
+```
+
+The `CRMAgent` receives `AgentRunner`; `BankingTransferAgent`'s delegation tool
+receives `TransferAgentRunner`. The DI graph sees two distinct types with no cycle.
+`execution_context` is forwarded intact so `TransferFundsTool` can still read the
+authenticated identity from `ctx.execution_context.request.state`.
 
 ### @traced() — tracing & observability
 

@@ -605,6 +605,145 @@ Passing the class breaks lifecycle hooks because `on_start` / `on_turn_complete`
 
 ---
 
+## Production patterns from the banking chatbot
+
+The following patterns are drawn from
+`lauren-examples/lauren-ai-chatbot/backend/` and represent battle-tested
+conventions for production agent deployments.
+
+### Identity from ExecutionContext, not the LLM
+
+`SignatureGuard` (or any `lauren-guards` auth guard) pins a verified identity
+to `request.state` before the handler runs.  The controller wraps the live
+`Request` in an `ExecutionContext` and passes it to `AgentRunner.run()`.
+`ToolExecutor` forwards that context object to every tool call as
+`ToolContext.execution_context`.  The tool reads the identity from there — the
+LLM never sees it and cannot override it.
+
+```python
+# The guard sets the identity (runs before the controller)
+class SignatureGuard:
+    async def can_activate(self, ctx: ExecutionContext) -> bool:
+        payload = await verify_hmac(ctx.request)        # cryptographic check
+        ctx.request.state.user_id = payload["user_id"]  # pinned — immutable from here
+        return True
+
+# The controller wraps and passes the context
+@post("/chat")
+async def stream(self, body: Json[ChatRequest], exec_ctx: ExecutionContext) -> EventStream:
+    user_id = exec_ctx.request.state.get("user_id")  # trust state, not the body field
+    response = await self._runner.run(
+        self._agent, message,
+        execution_context=exec_ctx,   # ← security anchor
+    )
+
+# The tool reads the verified identity — never adds user_id to its JSON schema
+async def run(self, ctx: ToolContext, to_user: str, amount: float) -> dict:
+    auth_uid = ctx.execution_context.request.state.get("user_id")
+    if not auth_uid:
+        return {"error": "Security error: unauthenticated."}
+    result = self._db.transfer(from_user=auth_uid, to_user=to_user, amount=amount)
+    ...
+```
+
+If you find yourself adding `authenticated_user: str` or `from_user: str` to a
+tool's parameter list, that is a security vulnerability.  Read from
+`ctx.execution_context.request.state` instead.
+
+### Streaming agent output as SSE
+
+Set the ContextVar **before** awaiting `runner.run()` inside the `generate()`
+async generator.  Do not call `.reset()` — each keep-alive task gets its own
+context copy and discards it automatically on exit.
+
+```python
+from app.ws.context import current_user_id
+
+@post("/chat")
+async def stream(self, body: Json[ChatRequest], exec_ctx: ExecutionContext) -> EventStream:
+    account = ...  # resolved from exec_ctx.request.state
+
+    async def generate():
+        # Pin ContextVar so signal handlers can route events to the right WebSocket
+        current_user_id.set(account.user_id)
+        try:
+            response = await self._runner.run(
+                self._crm_agent, full_prompt,
+                conversation_id=body.conversation_id,
+                execution_context=exec_ctx,
+            )
+            content = response.content or ""
+            for i in range(0, len(content), 40):
+                yield ServerSentEvent(event="token", data=content[i : i + 40])
+            yield ServerSentEvent(event="done", data="")
+        except Exception as exc:
+            yield ServerSentEvent(event="error", data=str(exc))
+
+    return EventStream(generate(), keep_alive=15.0)
+```
+
+### SignalBus + WebSocket for real-time agent events
+
+`EventForwarder` is a singleton injectable that subscribes to `SignalBus`
+events in its `__init__` and uses the `current_user_id` ContextVar to route
+events to the right user's WebSocket.  `asyncio.gather` (used by
+`SignalBus.emit`) copies ContextVar state into every spawned task, so the
+handler can call `.get()` to find the target user.
+
+```python
+@injectable(scope=Scope.SINGLETON)
+class EventForwarder:
+    def __init__(self, db: BankDatabase) -> None:
+        self._connections: dict[str, list[WebSocket]] = {}
+        self._lock = asyncio.Lock()
+        # Subscribe once at construction — must be listed in providers=[] so the
+        # Lauren lifecycle scheduler instantiates it eagerly before requests arrive
+        signal_bus.on(ModelCallComplete)(self._on_model_complete)
+        signal_bus.on(ToolCallStarted)(self._on_tool_started)
+        db.add_transfer_listener(self._on_transfer)
+
+    async def _on_model_complete(self, event: ModelCallComplete) -> None:
+        user_id = current_user_id.get()   # ContextVar copied by asyncio.gather
+        if user_id:
+            await self.send_to_user(user_id, {"type": "token_usage", ...})
+```
+
+### Avoiding circular DI with a runner subclass
+
+When agent delegation would create a circular DI dependency —
+
+```
+AgentRunner (CRM) → DelegateToBankingTransfer → AgentRunner (Transfer)
+```
+
+— break the cycle by creating a subclass of `AgentRunner` to act as a distinct
+DI token.  The container resolves each token independently.
+
+```python
+@injectable(scope=Scope.SINGLETON)
+class TransferAgentRunner(AgentRunner):
+    """Distinct DI token for the Transfer Agent's runner — breaks the cycle."""
+
+@tool()
+class DelegateToBankingTransfer:
+    def __init__(
+        self,
+        transfer_agent: BankingTransferAgent,
+        runner: TransferAgentRunner,       # ← distinct token, no cycle
+    ) -> None:
+        self._transfer_agent = transfer_agent
+        self._runner = runner
+
+    async def run(self, ctx: ToolContext, task: str) -> dict:
+        response = await self._runner.run(
+            self._transfer_agent, task,
+            execution_context=ctx.execution_context,  # forward identity intact
+        )
+        return {"result": response.content, "stop_reason": response.stop_reason}
+```
+
+---
+
 ## Anti-patterns to avoid
 
 - **Do not** use `from __future__ import annotations` in **function-form** `@tool()` files — it breaks schema generation (see note in `@tool()` section; class-form tools may use it for DI cycle-breaking).

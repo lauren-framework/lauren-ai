@@ -117,3 +117,55 @@ usability boundary.  Both layers are needed.
 | [security.md](security.md) | Full patterns: guard, controller, tool, delegation, testing secure tools |
 | [../building-agents/agents.md](../building-agents/agents.md) | `@agent`, decorator order, `@use_guardrails` placement |
 | [../building-tools/tools.md](../building-tools/tools.md) | Class-form tools, `ToolContext` attributes |
+
+---
+
+## Real-world example (banking chatbot)
+
+The banking chatbot at `lauren-examples/lauren-ai-chatbot/backend/` is the
+canonical production implementation of every pattern described in this skill.
+
+### The full trust chain in the chatbot
+
+```
+1. SignatureGuard.can_activate(ExecutionContext)
+       └─ verifies HMAC-SHA256 of the request body
+       └─ request.state.user_id = payload["user_id"]   ← cryptographically pinned
+
+2. BankingChatController.stream(exec_ctx: ExecutionContext)
+       └─ user_id = exec_ctx.request.state.get("user_id")  ← from state, NOT body
+       └─ request.state.user_name  = account.name          ← enriched from DB
+       └─ AgentRunner.run(..., execution_context=exec_ctx) ← security anchor passed in
+
+3. ToolExecutor._execute_single_tool(...)
+       └─ ToolContext.execution_context = AgentContext.execution_context  ← forwarded
+
+4. TransferFundsTool.run(ctx: ToolContext, to_user: str, amount: float)
+       └─ auth_uid = ctx.execution_context.request.state.get("user_id")  ← read here
+       └─ self._db.transfer(from_user=auth_uid, to_user=to_user, amount=amount)
+```
+
+The LLM only supplies `to_user` and `amount`.  The sender (`from_user`) is
+derived entirely from `ctx.execution_context.request.state` — the LLM has no
+path to influence it.
+
+### Why `authenticated_user` is not a tool parameter
+
+`TransferFundsTool` intentionally omits `from_user` / `authenticated_user` from
+its signature.  Adding either as a parameter would expose them in the JSON
+schema that the LLM receives, creating a prompt-injection attack surface.
+Instead, the tool calls the private helper `_auth_uid(ctx)` which walks the
+`ctx.execution_context.request.state` chain and returns an empty string when
+any link is missing — the tool treats a falsy result as unauthenticated and
+returns an error immediately, before touching the database.
+
+### Canonical reference files
+
+`banking_tools.py` (`app/ai/banking_tools.py`) is the canonical example of the
+`_auth_uid(ctx)` helper pattern and shows all three privileged tools
+(`TransferFundsTool`, `GetTransactionHistoryTool`, `GetBalanceTool`) using it
+consistently.  `chat_banking_controller.py` (`app/ai/chat_banking_controller.py`)
+is the canonical example of how a controller sets up `ExecutionContext`, passes
+it to `AgentRunner.run()`, and streams the result as SSE — including the
+`current_user_id` ContextVar set-before-run pattern that allows `EventForwarder`
+signal handlers to route real-time events to the right WebSocket client.
