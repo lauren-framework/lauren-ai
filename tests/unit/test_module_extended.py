@@ -541,7 +541,7 @@ class TestAgentModule:
         assert cls is not None
 
     def test_for_root_runner_class_exported_under_subclass_token(self):
-        """runner_class= causes the module to export the subclass, not AgentRunner."""
+        """injects=[MyCustomRunner] causes the module to export the subclass."""
         from lauren_ai._agents import agent
         from lauren_ai._agents._runner import AgentRunner
 
@@ -554,7 +554,7 @@ class TestAgentModule:
 
         cls = AgentModule.for_root(
             agents=[AgentForCustomRunner],
-            runner_class=MyCustomRunner,
+            injects=[MyCustomRunner],
         )
         # The module's exports should contain MyCustomRunner, not AgentRunner.
         assert MyCustomRunner in cls.__lauren_module__.exports
@@ -571,3 +571,62 @@ class TestAgentModule:
 
         cls = AgentModule.for_root(agents=[AgentForDefaultRunner])
         assert AgentRunner in cls.__lauren_module__.exports
+
+    def test_injects_list_exported_under_subclass_token(self):
+        """injects=[SubClass] exports that subclass, not AgentRunner."""
+        from lauren_ai._agents import agent
+        from lauren_ai._agents._runner import AgentRunner
+
+        class MyRunner(AgentRunner):
+            """Marker subclass."""
+
+        @agent()
+        class A:
+            """A."""
+
+        cls = AgentModule.for_root(agents=[A], injects=[MyRunner])
+        assert MyRunner in cls.__lauren_module__.exports
+        assert AgentRunner not in cls.__lauren_module__.exports
+
+    def test_injects_empty_list_exports_base_agent_runner(self):
+        """injects=[] (empty list) falls back to base AgentRunner."""
+        from lauren_ai._agents import agent
+        from lauren_ai._agents._runner import AgentRunner
+
+        @agent()
+        class B:
+            """B."""
+
+        cls = AgentModule.for_root(agents=[B], injects=[])
+        assert AgentRunner in cls.__lauren_module__.exports
+
+    def test_injects_none_exports_base_agent_runner(self):
+        """injects=None (default) exports base AgentRunner."""
+        from lauren_ai._agents import agent
+        from lauren_ai._agents._runner import AgentRunner
+
+        @agent()
+        class C:
+            """C."""
+
+        cls = AgentModule.for_root(agents=[C])
+        assert AgentRunner in cls.__lauren_module__.exports
+
+    def test_injects_multiple_elements_raises(self):
+        """injects=[A, B] (more than 1 element) → AgentConfigError."""
+        from lauren_ai._agents import agent
+        from lauren_ai._agents._runner import AgentRunner
+        from lauren_ai._exceptions import AgentConfigError
+
+        class RA(AgentRunner):
+            """RA."""
+
+        class RB(AgentRunner):
+            """RB."""
+
+        @agent()
+        class F:
+            """F."""
+
+        with pytest.raises(AgentConfigError, match="at most one"):
+            AgentModule.for_root(agents=[F], injects=[RA, RB])

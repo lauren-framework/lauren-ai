@@ -205,7 +205,7 @@ TransferProvider = AgentModule.for_root(
     tools=[TransferFundsTool],
     imports=[LLMProvider],
     signals=signal_bus,
-    runner_class=TransferAgentRunner,   # binds TransferAgentRunner instead of AgentRunner
+    injects=[TransferAgentRunner],      # binds TransferAgentRunner instead of AgentRunner
 )
 ```
 

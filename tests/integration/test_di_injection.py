@@ -409,3 +409,85 @@ class TestClassToolDIInjectionAtExecution:
         data = r.json()
         assert data["tool_calls"] == 1
         assert "Alice" in data["reply"]
+
+
+class TestInjectsBreaksCircularDependency:
+    """injects=[SpecialistRunner] resolves two runners independently without a cycle."""
+
+    def test_two_runners_resolved_independently_via_injects(self):
+        from lauren_ai._agents._runner import AgentRunner as _AgentRunner
+
+        @injectable(scope=Scope.SINGLETON)
+        class SpecialistRunner(_AgentRunner):
+            """A distinct runner subclass used as a separate DI token."""
+
+        @tool()
+        class DelegateTool:
+            """Delegate to specialist.
+
+            Args:
+                task: Task description.
+            """
+
+            def __init__(self, runner: SpecialistRunner) -> None:
+                self._runner = runner
+
+            async def run(self, task: str) -> dict:
+                return {"delegated": True}
+
+        @agent(model=None)
+        class SpecialistAgent:
+            """Specialist agent."""
+
+        @agent(model=None)
+        @use_tools(DelegateTool)
+        class OrchestratorAgent:
+            """Orchestrator agent."""
+
+        @controller("/orch")
+        class OrchestratorController:
+            def __init__(self, runner: AgentRunner) -> None:
+                self._runner = runner
+
+            @post("/run")
+            async def run(self) -> dict:
+                return {"ok": True}
+
+        cfg, mock = LLMConfig.for_testing()
+        mock.queue_response("ok")
+
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+
+        SpecialistMod = AgentModule.for_root(
+            agents=[SpecialistAgent],
+            imports=[LLMProv],
+            injects=[SpecialistRunner],
+        )
+        OrchestratorMod = AgentModule.for_root(
+            agents=[OrchestratorAgent],
+            tools=[DelegateTool],
+            imports=[LLMProv, SpecialistMod],
+        )
+
+        @module(
+            imports=[LLMProv, SpecialistMod, OrchestratorMod],
+            controllers=[OrchestratorController],
+        )
+        class AppModule: ...
+
+        app = LaurenFactory.create(AppModule)
+        r = TestClient(app).post("/orch/run")
+        assert r.status_code == 200
+
+        # Distinct tokens resolve to distinct instances
+        import asyncio
+
+        loop = asyncio.new_event_loop()
+        try:
+            sr = loop.run_until_complete(app.container.resolve(SpecialistRunner))
+            ar = loop.run_until_complete(app.container.resolve(AgentRunner))
+        finally:
+            loop.close()
+        assert isinstance(sr, SpecialistRunner)
+        assert isinstance(ar, AgentRunner)
+        assert sr is not ar

@@ -477,7 +477,7 @@ class AgentModule:
         config: AgentConfig | None = None,
         tool_cache: Any | None = None,
         knowledge: list[Any] | None = None,
-        runner_class: type | None = None,
+        injects: list[type] | None = None,
     ) -> type:
         """Create a ``@module`` providing the agent runner and all agent instances.
 
@@ -510,14 +510,13 @@ class AgentModule:
         :param knowledge: Knowledge base instances to pre-load into long-term
             memory.
         :type knowledge: list[Any] | None
-        :param runner_class: Optional :class:`~lauren_ai._agents._runner.AgentRunner`
-            subclass to use as the DI token and constructor.  When ``None``
-            (the default) the base :class:`~lauren_ai._agents._runner.AgentRunner`
-            class is used.  Pass a subclass to produce a distinct DI token —
-            useful for breaking circular dependencies when two agents are wired
-            in the same application and one agent's delegation tool needs the
-            other agent's runner.
-        :type runner_class: type | None
+        :param injects: Optional list containing at most one
+            :class:`~lauren_ai._agents._runner.AgentRunner` subclass.  When
+            provided, that subclass is used as both the DI token and the
+            concrete runner constructor — useful for breaking circular
+            dependencies.  An empty list or ``None`` uses the base
+            :class:`~lauren_ai._agents._runner.AgentRunner`.
+        :type injects: list[type] | None
         :return: A ``@module``-decorated class.
         :rtype: type
         """
@@ -527,7 +526,13 @@ class AgentModule:
         from lauren_ai._agents._runner import AgentRunner  # noqa: PLC0415
         from lauren_ai._tools import TOOL_META, _add_to_tool_map  # noqa: PLC0415
 
-        _runner_cls: type = runner_class if runner_class is not None else AgentRunner
+        _injects: list[type] = list(injects or [])
+        if len(_injects) > 1:
+            raise AgentConfigError(
+                "AgentModule.for_root() 'injects' accepts at most one AgentRunner "
+                f"subclass; got {len(_injects)}: {_injects!r}."
+            )
+        _runner_cls: type = _injects[0] if _injects else AgentRunner
 
         _captured_tool_cache = tool_cache
         _captured_signals = signals
@@ -649,7 +654,7 @@ class AgentModule:
                 _runner_provider = use_factory(
                     provide=_runner_cls,
                     factory=_build_runner_with_classes,
-                    inject=[_Transport, *_class_tools, LLMConfig],
+                    injects=[_Transport, *_class_tools, LLMConfig],
                     scope=_effective_scope,
                 )
             else:
@@ -680,7 +685,7 @@ class AgentModule:
                         cache_backend=_captured_tool_cache_ref,
                         conversation_store=_captured_conv_store_ref,
                     ),
-                    inject=[_Transport, LLMConfig],
+                    injects=[_Transport, LLMConfig],
                     scope=_effective_scope,
                 )
 

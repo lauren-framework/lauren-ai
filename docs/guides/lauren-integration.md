@@ -430,7 +430,7 @@ class DelegateToBankingTransfer:
 ```
 
 The two modules are wired with separate `AgentModule.for_root()` calls.  The
-Transfer module uses `runner_class=TransferAgentRunner` so its runner is
+Transfer module uses `injects=[TransferAgentRunner]` so its runner is
 registered under that token, not the default `AgentRunner`:
 
 ```python title="app/ai/ai_module.py"
@@ -446,7 +446,7 @@ _TransferAgentModule = AgentModule.for_root(
     imports=[LLMProvider, BankingModule],
     signals=signal_bus,
     conversation_store=_conversation_store,
-    runner_class=TransferAgentRunner,   # registers under TransferAgentRunner, not AgentRunner
+    injects=[TransferAgentRunner],      # registers under TransferAgentRunner, not AgentRunner
 )
 
 # Step 2: wire the CRM Agent module, importing TransferAgentModule so that
@@ -701,7 +701,7 @@ AppModule
 │       │   └── DelegateToBankingTransfer → TransferAgentRunner
 │       └── _TransferAgentModule
 │           ├── BankingTransferAgent, TransferFundsTool
-│           └── runner_class=TransferAgentRunner
+│           └── injects=[TransferAgentRunner]
 └── MetricsModule          — /api/metrics/* (injects CostTracker from AIModule)
 ```
 
