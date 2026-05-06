@@ -13,14 +13,11 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from lauren import LaurenFactory, Scope, controller, injectable, module, post
 from lauren.testing import TestClient
 
 from lauren_ai import AgentModule, AgentRunner, AgentRunnerBase, LLMConfig, LLMModule, agent, tool
 from lauren_ai._transport import Completion, TokenUsage
-
 
 # ---------------------------------------------------------------------------
 # Helpers

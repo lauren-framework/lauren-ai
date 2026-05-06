@@ -642,9 +642,11 @@ class TestAgentModuleGenericAliasTools:
 
     def test_generic_alias_tool_not_skipped(self):
         """A @tool() Generic[T] subclass passed as MyTool[SomeClass] must appear in providers."""
-        from typing import Generic, TypeVar as _TypeVar
+        from typing import Generic
+        from typing import TypeVar as _TypeVar
 
         from lauren._di.custom import CustomProvider
+
         from lauren_ai._agents import agent
         from lauren_ai._tools import tool
 
@@ -677,9 +679,11 @@ class TestAgentModuleGenericAliasTools:
 
     def test_generic_alias_two_aliases_are_distinct_tokens(self):
         """MyTool[ClassA] and MyTool[ClassB] in separate modules produce distinct DI tokens."""
-        from typing import Generic, TypeVar as _TypeVar
+        from typing import Generic
+        from typing import TypeVar as _TypeVar
 
         from lauren._di.custom import CustomProvider
+
         from lauren_ai._agents import agent
         from lauren_ai._tools import tool
 

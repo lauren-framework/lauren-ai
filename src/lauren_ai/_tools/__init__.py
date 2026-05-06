@@ -34,7 +34,7 @@ import inspect
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, TypeVar, TypedDict
+from typing import Any, TypedDict, TypeVar
 
 _T = TypeVar("_T")
 

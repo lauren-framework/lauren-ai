@@ -513,11 +513,13 @@ class TestGenericAliasToolEndToEnd:
 
     def test_generic_alias_tool_invoked_during_agent_run(self):
         """EchoTool[Marker] is registered, DI-resolved, and called when the agent uses it."""
-        from typing import Generic, TypeVar as _TypeVar
+        from typing import Generic
+        from typing import TypeVar as _TypeVar
 
-        from lauren import Json, LaurenFactory, controller, module, post
+        from lauren import LaurenFactory, controller, module, post
         from lauren.testing import TestClient
-        from lauren_ai import AgentRunner, LLMConfig, LLMModule, agent, tool, use_tools
+
+        from lauren_ai import LLMConfig, LLMModule, agent, tool, use_tools
         from lauren_ai._module import AgentModule
         from lauren_ai._tools import ToolContext
 
@@ -572,11 +574,13 @@ class TestGenericAliasToolEndToEnd:
 
     def test_two_generic_aliases_same_base_class_run_independently(self):
         """Two modules each with a different alias of the same tool get independent singletons."""
-        from typing import Generic, TypeVar as _TypeVar
+        from typing import Generic
+        from typing import TypeVar as _TypeVar
 
-        from lauren import Json, LaurenFactory, controller, injectable, module, post, Scope
+        from lauren import LaurenFactory, Scope, controller, injectable, module, post
         from lauren.testing import TestClient
-        from lauren_ai import AgentRunner, LLMConfig, LLMModule, agent, tool, use_tools
+
+        from lauren_ai import LLMConfig, LLMModule, agent, tool, use_tools
         from lauren_ai._agents._runner import AgentRunnerBase
         from lauren_ai._module import AgentModule
 
