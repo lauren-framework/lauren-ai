@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """@team() decorator for multi-agent coordination."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal, TypeVar
 
@@ -35,7 +36,7 @@ def team(
     model: str = "claude-haiku-4-5",
     max_rounds: int = 5,
     coordinator_prompt: str | None = None,
-) -> Any:
+) -> Callable[[C], C]:
     """Mark a class as a multi-agent team.
 
     Must be called with parentheses::
@@ -63,7 +64,7 @@ def team(
             "@team must be called with parentheses: @team(name=..., mode=..., model=...)"
         )
 
-    def _apply(cls: type) -> type:
+    def _apply(cls: C) -> C:
         effective_name = name or cls.__name__
         if mode not in VALID_MODES:
             raise TeamConfigError(

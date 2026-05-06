@@ -14,6 +14,7 @@ Two decorators are provided:
   ``@use_guards()`` attaches guard classes to a controller.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeVar
 
@@ -76,7 +77,7 @@ def guardrail(
     *args: Any,
     kind: Literal["input", "output", "any"] = "any",
     scope: Any = None,
-) -> Any:
+) -> Callable[[C], C]:
     """Mark a class as a DI-injectable guardrail and register it as a provider.
 
     Applying ``@guardrail()`` to a class does two things:
@@ -173,7 +174,7 @@ def use_guardrails(
     *args: Any,
     input: list[Any] | None = None,
     output: list[Any] | None = None,
-) -> Any:
+) -> Callable[[C], C]:
     """Attach input/output guardrail instances to an ``@agent()``-decorated class.
 
     Analogous to ``@use_guards()`` in the Lauren framework — attaches

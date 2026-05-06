@@ -34,7 +34,9 @@ import inspect
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, TypedDict
+from typing import Any, TypeVar, TypedDict
+
+_T = TypeVar("_T")
 
 # ---------------------------------------------------------------------------
 # Schema type
@@ -419,7 +421,7 @@ def tool(
     error_hook: Callable[..., Any] | None = None,
     cache_ttl: int | None = None,
     cache_key_fn: Callable[..., Any] | None = None,
-) -> Callable[..., Any]:
+) -> Callable[[_T], _T]:
     """Decorator that marks a function or class as a tool for AI agents.
 
     Must be called **with parentheses**: ``@tool()``.  Using the bare form
@@ -486,7 +488,7 @@ def tool(
             "@tool must be used with parentheses: @tool()"
         )
 
-    def decorator(fn_or_cls: Any) -> Any:
+    def decorator(fn_or_cls: _T) -> _T:
         meta = _build_meta(
             fn_or_cls,
             name=name,
@@ -510,8 +512,8 @@ def tool(
 
                 # Only apply if not already marked injectable (check __dict__
                 # to avoid detecting inherited __lauren_injectable__).
-                if "__lauren_injectable__" not in fn_or_cls.__dict__:
-                    fn_or_cls = injectable(scope=Scope.SINGLETON)(fn_or_cls)
+                if "__lauren_injectable__" not in fn_or_cls.__dict__:  # type: ignore[union-attr]
+                    fn_or_cls = injectable(scope=Scope.SINGLETON)(fn_or_cls)  # type: ignore[assignment]
             except ImportError:
                 pass  # lauren not installed — DI unavailable, skip silently
 

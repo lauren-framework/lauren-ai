@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import functools
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from contextvars import ContextVar
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 
 from lauren_ai._exceptions import DecoratorUsageError
 from lauren_ai._tracing._core import Span, SpanKind, Trace, TraceStore
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 __all__ = [
     "traced",
@@ -68,7 +71,7 @@ def traced(
     name: str | None = None,
     kind: SpanKind = SpanKind.CUSTOM,
     metadata: dict[str, Any] | None = None,
-) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+) -> Callable[[Callable[_P, Coroutine[Any, Any, _R]]], Callable[_P, Coroutine[Any, Any, _R]]]:
     """Decorate an async function to create a trace span.
 
     The decorator **requires parentheses** — bare ``@traced`` usage raises
@@ -104,11 +107,11 @@ def traced(
             decorator_name="traced",
         )
 
-    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+    def decorator(fn: Callable[_P, Coroutine[Any, Any, _R]]) -> Callable[_P, Coroutine[Any, Any, _R]]:
         span_name = name or fn.__name__
 
         @functools.wraps(fn)
-        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
             # Determine whether we are inside an active trace.
             parent_trace = _ACTIVE_TRACE.get()
             parent_id: str | None = None
@@ -156,6 +159,6 @@ def traced(
                             except Exception:
                                 pass
 
-        return wrapper
+        return wrapper  # type: ignore[return-value]
 
-    return decorator
+    return decorator  # type: ignore[return-value]

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 
 from lauren_ai._exceptions import LaurenAIError
 
 REMEMBER_META = "__lauren_ai_remember__"
+
+C = TypeVar("C", bound=type)
 
 
 class MemoryConfigError(LaurenAIError):
@@ -33,7 +35,7 @@ def remember(
     inject: bool = True,
     top_k: int = 5,
     extraction_model: str | None = None,
-) -> Callable[[type], type]:
+) -> Callable[[C], C]:
     """Opt a @agent() class into automatic user memory extraction/injection.
 
     Must be applied BELOW @agent()::
@@ -60,7 +62,7 @@ def remember(
             "@remember must be called with parentheses: @remember()"
         )
 
-    def _apply(cls: type) -> type:
+    def _apply(cls: C) -> C:
         meta = RememberMeta(
             store_token=store,
             extract=extract,

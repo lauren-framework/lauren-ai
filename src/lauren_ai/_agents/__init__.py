@@ -377,7 +377,7 @@ def agent(
 
             cls = injectable(scope=Scope.SINGLETON)(cls)
 
-        return cls  # type: ignore[return-value]
+        return cls
 
     return decorator  # type: ignore[return-value]
 
