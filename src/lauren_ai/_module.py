@@ -480,6 +480,7 @@ class AgentModule:
         runner: type | None = None,
         injects: list[type] | None = None,
         export_tools: list[type] | None = None,
+        shared_tools: list[type] | None = None,
     ) -> type:
         """Create a ``@module`` providing the agent runner and all agent instances.
 
@@ -538,6 +539,16 @@ class AgentModule:
             classes are added as providers but not exported; export them
             explicitly if parent modules need them.
         :type injects: list[type] | None
+        :param shared_tools: Tool classes that are owned and exported by an imported module
+            and must not be auto-registered as providers here.  Pass tool classes that appear
+            in ``@use_tools()`` on an agent but are already provided by a module in ``imports``,
+            to prevent ``ModuleExportViolation`` when the same class would otherwise be declared
+            as a provider in multiple ``AgentModule`` instances.
+
+            The tools remain fully usable by agents in this module — the DI container resolves
+            them through the import chain.  Only the *declaration* step is skipped; ownership,
+            lifecycle, and scope all remain in the providing module.
+        :type shared_tools: list[type] | None
         :return: A ``@module``-decorated class.
         :rtype: type
         """
@@ -565,6 +576,7 @@ class AgentModule:
         _fn_tools: list[Any] = []
         _class_tools: list[Any] = []
         _seen_tool_names: set[str] = set()
+        _shared_tools_set: frozenset[type] = frozenset(shared_tools or ())
 
         def _categorize(tool_item: Any) -> None:
             if tool_item is None:
@@ -584,7 +596,8 @@ class AgentModule:
                 return  # deduplicate across shared + per-agent lists
             _seen_tool_names.add(meta.name)
             if _inspect.isclass(_lookup):
-                _class_tools.append(tool_item)  # keep alias as DI token
+                if _lookup not in _shared_tools_set:   # owned by an imported module; skip re-registration
+                    _class_tools.append(tool_item)     # keep alias as DI token
             else:
                 _fn_tools.append(tool_item)
 

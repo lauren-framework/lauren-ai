@@ -238,6 +238,52 @@ returning from a tool function — the executor will patch it.
 
 ---
 
+## Sharing a tool across multiple AgentModules
+
+When the same `@tool()` class is listed in `@use_tools()` on agents in more than
+one `AgentModule`, the DI container raises `ModuleExportViolation` at startup
+because the same class is declared as a provider in multiple modules.
+
+**Solution:** create a dedicated *ownership module* that provides and exports the
+tool once, then pass the class via `shared_tools=` in every `AgentModule` that
+imports it.  `shared_tools` suppresses the re-declaration without removing the
+tool from the agent's callable set.
+
+```python
+# 1. Ownership module — declares the tool singleton exactly once.
+from lauren import module
+from app.ai.check_auth_tool import CheckAuthenticationTool
+
+@module(providers=[CheckAuthenticationTool], exports=[CheckAuthenticationTool])
+class CheckAuthModule: ...
+
+# 2. Every AgentModule that uses the tool imports CheckAuthModule and
+#    lists the tool in shared_tools= to skip re-registration.
+from lauren_ai._module import AgentModule
+
+UnauthMod = AgentModule.for_root(
+    agents=[UnauthenticatedCRMAgent],
+    imports=[LLMProvider, CheckAuthModule],
+    shared_tools=[CheckAuthenticationTool],   # owned by CheckAuthModule
+)
+
+AuthMod = AgentModule.for_root(
+    agents=[AuthenticatedCRMAgent],
+    imports=[LLMProvider, CheckAuthModule],
+    shared_tools=[CheckAuthenticationTool],   # owned by CheckAuthModule
+)
+```
+
+Rules:
+- The tool **must** be exported by a module in `imports`.  The DI container
+  will raise `MissingProviderError` at startup if it cannot be resolved.
+- `shared_tools` only affects *provider registration*; the tool's scope,
+  lifecycle hooks, and singleton identity are all controlled by its owning module.
+- Function-form tools (plain `async def`) do not need this treatment — they are
+  added directly to the runner's tool map, not registered as DI providers.
+
+---
+
 ## Built-in skills
 
 `lauren_ai.skills` ships four ready-to-use tools:

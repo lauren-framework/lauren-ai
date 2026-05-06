@@ -618,6 +618,41 @@ class ChatService:
 - Class-form tools as DI providers (own-module only — not re-exported by default)
 - A unique `AgentRunnerBase` subclass via `use_factory` (injecting Transport + LLMConfig)
 
+#### Sharing a tool across multiple AgentModules (`shared_tools`)
+
+When the same `@tool()` class is used by agents in more than one `AgentModule`,
+declaring it as a provider in each module raises `ModuleExportViolation` at startup.
+
+The solution is a dedicated ownership module that provides and exports the tool,
+combined with `shared_tools=` in every `AgentModule` that imports it:
+
+```python
+from lauren import module
+from app.ai.check_auth_tool import CheckAuthenticationTool
+
+# Ownership module — declares and exports the tool once.
+@module(providers=[CheckAuthenticationTool], exports=[CheckAuthenticationTool])
+class CheckAuthModule: ...
+
+# Each AgentModule imports CheckAuthModule and lists the tool in shared_tools=
+# so the framework skips re-registering it as a provider here.
+UnauthMod = AgentModule.for_root(
+    agents=[UnauthenticatedCRMAgent],
+    imports=[LLMProvider, CheckAuthModule],
+    shared_tools=[CheckAuthenticationTool],   # owned by CheckAuthModule
+)
+
+AuthMod = AgentModule.for_root(
+    agents=[AuthenticatedCRMAgent],
+    imports=[LLMProvider, CheckAuthModule],
+    shared_tools=[CheckAuthenticationTool],   # owned by CheckAuthModule
+)
+```
+
+`shared_tools` only suppresses the DI *declaration* — agents in both modules can
+still call `CheckAuthenticationTool` normally.  The singleton is provided once by
+`CheckAuthModule` and resolved via the import chain.
+
 #### Multi-module runner disambiguation (advanced)
 
 When a controller or service sits in a scope that **imports two or more
