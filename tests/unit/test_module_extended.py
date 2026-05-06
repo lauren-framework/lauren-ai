@@ -541,7 +541,7 @@ class TestAgentModule:
         assert cls is not None
 
     def test_for_root_runner_class_exported_under_subclass_token(self):
-        """injects=[MyCustomRunner] causes the module to export the subclass."""
+        """runner=MyCustomRunner causes the module to export the subclass."""
         from lauren_ai._agents import agent
         from lauren_ai._agents._runner import AgentRunner, AgentRunnerBase
 
@@ -554,14 +554,14 @@ class TestAgentModule:
 
         cls = AgentModule.for_root(
             agents=[AgentForCustomRunner],
-            injects=[MyCustomRunner],
+            runner=MyCustomRunner,
         )
         # The module's exports should contain MyCustomRunner, not the Protocol.
         assert MyCustomRunner in cls.__lauren_module__.exports
         assert AgentRunner not in cls.__lauren_module__.exports
 
     def test_for_root_runner_class_default_exports_dynamic_subclass(self):
-        """Without injects= the module exports a dynamic AgentRunnerBase subclass."""
+        """Without runner= the module exports a dynamic AgentRunnerBase subclass."""
         from lauren_ai._agents import agent
         from lauren_ai._agents._runner import AgentRunner, AgentRunnerBase
 
@@ -578,8 +578,8 @@ class TestAgentModule:
             for e in exported
         )
 
-    def test_injects_list_exported_under_subclass_token(self):
-        """injects=[SubClass] exports that subclass, not the AgentRunner Protocol."""
+    def test_runner_param_exported_under_subclass_token(self):
+        """runner=SubClass exports that subclass, not the AgentRunner Protocol."""
         from lauren_ai._agents import agent
         from lauren_ai._agents._runner import AgentRunner, AgentRunnerBase
 
@@ -590,29 +590,12 @@ class TestAgentModule:
         class A:
             """A."""
 
-        cls = AgentModule.for_root(agents=[A], injects=[MyRunner])
+        cls = AgentModule.for_root(agents=[A], runner=MyRunner)
         assert MyRunner in cls.__lauren_module__.exports
         assert AgentRunner not in cls.__lauren_module__.exports
 
-    def test_injects_empty_list_exports_dynamic_subclass(self):
-        """injects=[] (empty list) auto-generates a dynamic AgentRunnerBase subclass."""
-        from lauren_ai._agents import agent
-        from lauren_ai._agents._runner import AgentRunner, AgentRunnerBase
-
-        @agent()
-        class B:
-            """B."""
-
-        cls = AgentModule.for_root(agents=[B], injects=[])
-        exported = cls.__lauren_module__.exports
-        assert AgentRunner not in exported
-        assert any(
-            isinstance(e, type) and issubclass(e, AgentRunnerBase) and e is not AgentRunnerBase
-            for e in exported
-        )
-
-    def test_injects_none_exports_dynamic_subclass(self):
-        """injects=None (default) auto-generates a dynamic AgentRunnerBase subclass."""
+    def test_runner_none_exports_dynamic_subclass(self):
+        """runner=None (default) auto-generates a dynamic AgentRunnerBase subclass."""
         from lauren_ai._agents import agent
         from lauren_ai._agents._runner import AgentRunner, AgentRunnerBase
 
@@ -628,24 +611,25 @@ class TestAgentModule:
             for e in exported
         )
 
-    def test_injects_multiple_elements_raises(self):
-        """injects=[A, B] (more than 1 element) → AgentConfigError."""
+    def test_injects_adds_extra_providers(self):
+        """injects=[Extra] registers the class as an additional provider (not exported)."""
         from lauren_ai._agents import agent
-        from lauren_ai._agents._runner import AgentRunnerBase
-        from lauren_ai._exceptions import AgentConfigError
 
-        class RA(AgentRunnerBase):
-            """RA."""
-
-        class RB(AgentRunnerBase):
-            """RB."""
+        class ExtraService:
+            """An extra singleton for tools to use."""
 
         @agent()
-        class F:
-            """F."""
+        class D:
+            """D."""
 
-        with pytest.raises(AgentConfigError, match="at most one"):
-            AgentModule.for_root(agents=[F], injects=[RA, RB])
+        cls = AgentModule.for_root(agents=[D], injects=[ExtraService])
+        # injects= classes are providers, not exports
+        provider_tokens = [
+            getattr(p, "provide", p) if hasattr(p, "provide") else p
+            for p in cls.__lauren_module__.providers
+        ]
+        assert ExtraService in provider_tokens or ExtraService in cls.__lauren_module__.providers
+        assert ExtraService not in cls.__lauren_module__.exports
 
 
 # ---------------------------------------------------------------------------

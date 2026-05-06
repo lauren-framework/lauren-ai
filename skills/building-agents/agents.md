@@ -225,14 +225,14 @@ class CoordinatorAgent: ...
 
 ResearchMod = AgentModule.for_root(
     agents=[ResearchAgent], tools=[ResearchTool],
-    imports=[LLMProvider], injects=[ResearchAgentRunner],
+    imports=[LLMProvider], runner=ResearchAgentRunner,
 )
 
 CoordinatorMod = AgentModule.for_root(
     agents=[CoordinatorAgent],
     tools=[DelegateToResearcher],          # ← delegation tool lives in calling module
     imports=[LLMProvider, ResearchMod],    # ← makes ResearchAgentRunner visible
-    injects=[CoordinatorAgentRunner],
+    runner=CoordinatorAgentRunner,
 )
 ```
 
@@ -267,7 +267,7 @@ from lauren_ai import AgentRunner  # @runtime_checkable Protocol
 
 class ChatController:
     # runner: AgentRunner works when only one AgentModule is in scope.
-    # If two AgentModules are in scope, use the named concrete subclass (injects=[MyRunner]).
+    # If two AgentModules are in scope, use the named concrete subclass (runner=MyRunner).
     def __init__(self, runner: AgentRunner, agent: MyAgent) -> None:
         self._runner = runner
         self._agent = agent   # DI-resolved singleton

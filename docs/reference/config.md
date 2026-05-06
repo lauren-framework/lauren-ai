@@ -215,9 +215,11 @@ class AppModule: ...
 The returned `@module` provides and exports:
 - A unique `AgentRunnerBase` subclass as the module's runner token. Inject it via
   `runner: AgentRunner` (Protocol scan) in single-module scope, or via the explicit
-  named subclass passed to `injects=[MyRunner]` in multi-module scope.
+  named subclass passed to `runner=MyRunner` in multi-module scope.
 - All agent classes registered as injectable singletons.
 
-The `injects` parameter accepts one optional `AgentRunnerBase` subclass. When
+The `runner` parameter accepts one optional `AgentRunnerBase` subclass. When
 omitted, an anonymous subclass is auto-generated. Pass an explicit subclass when
 a controller or service imports two or more AgentModules and needs to disambiguate.
+The `injects` parameter accepts a list of additional provider classes (e.g. caches,
+domain services) made available to agents and tools in this module.

@@ -461,7 +461,7 @@ class TestInjectsBreaksCircularDependency:
         SpecialistMod = AgentModule.for_root(
             agents=[SpecialistAgent],
             imports=[LLMProv],
-            injects=[SpecialistRunner],
+            runner=SpecialistRunner,
         )
         OrchestratorMod = AgentModule.for_root(
             agents=[OrchestratorAgent],
@@ -624,8 +624,8 @@ class TestGenericAliasToolEndToEnd:
         mock.queue_response(_text("Y done", id="cy"))
 
         LLMProv = LLMModule.for_root(cfg, transport_override=mock)
-        ModX = AgentModule.for_root(agents=[AgentX], imports=[LLMProv], injects=[RunnerX])
-        ModY = AgentModule.for_root(agents=[AgentY], imports=[LLMProv], injects=[RunnerY])
+        ModX = AgentModule.for_root(agents=[AgentX], imports=[LLMProv], runner=RunnerX)
+        ModY = AgentModule.for_root(agents=[AgentY], imports=[LLMProv], runner=RunnerY)
 
         @controller("/xy")
         class XYController:

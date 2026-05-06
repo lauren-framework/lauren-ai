@@ -94,7 +94,7 @@ _CRMAgentModule = AgentModule.for_root(
 - A unique `AgentRunnerBase` subclass is registered as the module's runner token.
   Inject it with `runner: AgentRunner` (Protocol annotation) in any provider
   belonging to the same module. When two or more AgentModules are in scope,
-  use `injects=[MyRunner]` with an explicit named subclass instead (see below).
+  use `runner=MyRunner` with an explicit named subclass instead (see below).
 - `signals=signal_bus` wires the shared `SignalBus` so every model call emits
   `ModelCallComplete` and friends.
 
@@ -454,7 +454,7 @@ _TransferAgentModule = AgentModule.for_root(
     imports=[LLMProvider, BankingModule],
     signals=signal_bus,
     conversation_store=_conversation_store,
-    injects=[TransferAgentRunner],   # registers TransferAgentRunner as this module's runner
+    runner=TransferAgentRunner,   # registers TransferAgentRunner as this module's runner
 )
 
 # Step 2: wire the CRM Agent module; import TransferAgentModule so that
@@ -466,7 +466,7 @@ _CRMAgentModule = AgentModule.for_root(
     imports=[LLMProvider, _TransferAgentModule, BankingModule],
     signals=signal_bus,
     conversation_store=_conversation_store,
-    injects=[CRMAgentRunner],        # registers CRMAgentRunner as this module's runner
+    runner=CRMAgentRunner,        # registers CRMAgentRunner as this module's runner
 )
 ```
 
@@ -706,10 +706,10 @@ AppModule
 │   ├── imports: LLMProvider, _CRMAgentModule, _TransferAgentModule
 │   │              BankingModule, CryptoModule
 │   └── exports: LLMService, BankingCRMAgent, CostTracker
-│       ├── _CRMAgentModule  (injects=[CRMAgentRunner])
+│       ├── _CRMAgentModule  (runner=CRMAgentRunner)
 │       │   ├── BankingCRMAgent, GetBalanceTool, GetTransactionHistoryTool
 │       │   └── DelegateToBankingTransfer → runner: TransferAgentRunner
-│       └── _TransferAgentModule  (injects=[TransferAgentRunner])
+│       └── _TransferAgentModule  (runner=TransferAgentRunner)
 │           └── BankingTransferAgent, TransferFundsTool
 └── MetricsModule          — /api/metrics/* (injects CostTracker from AIModule)
 ```
@@ -738,7 +738,7 @@ Before shipping an integration like this, verify:
 - [ ] Runner and agent singletons are constructor-injected into controllers, not
   resolved per-request.  Singletons are cheap to inject and expensive to construct.
   Use `runner: AgentRunner` (Protocol) for single-module scope; use the named
-  concrete subclass (`injects=[MyRunner]`) when two or more AgentModules are
+  concrete subclass (`runner=MyRunner`) when two or more AgentModules are
   in scope to avoid `ProtocolAmbiguityError`.
 
 ---

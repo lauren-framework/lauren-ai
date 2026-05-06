@@ -6,7 +6,7 @@ Verifies that:
 3. Delegation tool resolved in target-module scope receives the target module's runner.
 4. ``isinstance(runner, AgentRunner)`` is True (Protocol is ``@runtime_checkable``).
 5. ``isinstance(runner, AgentRunnerBase)`` is True.
-6. ``injects=[SubClass]`` still works; the subclass is exported, not the Protocol.
+6. ``runner=SubClass`` exports the subclass as the module's runner DI token.
 """
 
 from __future__ import annotations
@@ -212,49 +212,49 @@ class TestDelegationToolResolvesTargetRunner:
         assert type(tool_instance._runner) is TargetMod.runner_class
 
 
-class TestInjectsBackwardsCompatibility:
-    """injects=[SubClass] still works; SubClass is exported, not the Protocol."""
+class TestRunnerParam:
+    """runner=SubClass registers the subclass as the module's runner token."""
 
-    def test_injects_subclass_exported_not_protocol(self):
-        """injects=[SubClass] exports the concrete subclass; AgentRunner Protocol not in exports."""
+    def test_runner_subclass_exported_not_protocol(self):
+        """runner=SubClass exports the concrete subclass; AgentRunner Protocol not in exports."""
 
         @injectable(scope=Scope.SINGLETON)
         class MySpecialRunner(AgentRunnerBase):
             """Custom runner subclass."""
 
         @agent(model=None)
-        class InjectsAgent:
+        class RunnerParamAgent:
             """Agent."""
 
         cfg, mock = LLMConfig.for_testing()
         LLMProv = LLMModule.for_root(cfg, transport_override=mock)
         AgentMod = AgentModule.for_root(
-            agents=[InjectsAgent],
+            agents=[RunnerParamAgent],
             imports=[LLMProv],
-            injects=[MySpecialRunner],
+            runner=MySpecialRunner,
         )
 
         exports = AgentMod.__lauren_module__.exports
         assert MySpecialRunner in exports
         assert AgentRunner not in exports
 
-    def test_injects_subclass_resolves_as_agent_runner(self):
-        """An instance of injects=[SubClass] satisfies isinstance(…, AgentRunner)."""
+    def test_runner_subclass_resolves_as_agent_runner(self):
+        """An instance of runner=SubClass satisfies isinstance(…, AgentRunner)."""
 
         @injectable(scope=Scope.SINGLETON)
         class MyRunner2(AgentRunnerBase):
             """Custom runner 2."""
 
         @agent(model=None)
-        class InjectsAgent2:
+        class RunnerParamAgent2:
             """Agent."""
 
         cfg, mock = LLMConfig.for_testing()
         LLMProv = LLMModule.for_root(cfg, transport_override=mock)
         AgentMod = AgentModule.for_root(
-            agents=[InjectsAgent2],
+            agents=[RunnerParamAgent2],
             imports=[LLMProv],
-            injects=[MyRunner2],
+            runner=MyRunner2,
         )
 
         app = LaurenFactory.create(AgentMod)

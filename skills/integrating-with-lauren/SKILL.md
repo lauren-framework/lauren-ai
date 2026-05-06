@@ -40,7 +40,7 @@ AgentProvider = AgentModule.for_root(
 `AgentModule.for_root()` auto-registers each agent class and tool class as a
 singleton provider and generates a unique `AgentRunnerBase` subclass as the module's
 runner token. Inject it with `runner: AgentRunner` (single-module scope) or with the
-named concrete subclass via `injects=[MyRunner]` (multi-module scope).
+named concrete subclass via `runner=MyRunner` (multi-module scope).
 
 ### Step 3 — parent `@module`
 
@@ -190,7 +190,7 @@ handlers without any extra wiring.
 
 Every `AgentModule.for_root()` call MUST have its own dedicated runner token.
 When a controller or delegation tool can see runners from two modules simultaneously,
-use `injects=[MyRunner]` with an explicit `AgentRunnerBase` subclass:
+use `runner=MyRunner` with an explicit `AgentRunnerBase` subclass:
 
 ```python
 from lauren import injectable, Scope
@@ -212,7 +212,7 @@ TransferMod = AgentModule.for_root(
     tools=[TransferFundsTool],
     imports=[LLMProvider],
     signals=signal_bus,
-    injects=[TransferAgentRunner],
+    runner=TransferAgentRunner,
 )
 
 # CRM module — imports Transfer module, owns the delegation tool
@@ -221,7 +221,7 @@ CRMMod = AgentModule.for_root(
     tools=[DelegateToBankingTransfer],     # ← delegation tool lives in the calling module
     imports=[LLMProvider, TransferMod],    # ← makes TransferAgentRunner visible
     signals=signal_bus,
-    injects=[CRMAgentRunner],
+    runner=CRMAgentRunner,
 )
 ```
 

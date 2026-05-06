@@ -391,7 +391,7 @@ SpecialistMod = AgentModule.for_root(
     agents=[SpecialistAgent],
     tools=[SpecialistTool],
     imports=[LLMProvider],
-    injects=[SpecialistAgentRunner],
+    runner=SpecialistAgentRunner,
 )
 
 # Calling module — owns the delegation tool; imports target module
@@ -399,7 +399,7 @@ OrchestratorMod = AgentModule.for_root(
     agents=[OrchestratorAgent],
     tools=[DelegateToSpecialist],          # ← delegation tool lives HERE
     imports=[LLMProvider, SpecialistMod],  # ← makes SpecialistAgentRunner visible
-    injects=[OrchestratorAgentRunner],
+    runner=OrchestratorAgentRunner,
 )
 ```
 
@@ -613,7 +613,7 @@ from lauren_ai import AgentRunner  # @runtime_checkable Protocol
 class ChatController:
     # runner: AgentRunner resolves unambiguously when only one AgentModule is in scope.
     # When two or more AgentModules are imported, use the named concrete subclass
-    # registered via injects=[MyRunner] to avoid ProtocolAmbiguityError.
+    # registered via runner=MyRunner to avoid ProtocolAmbiguityError.
     def __init__(self, runner: AgentRunner, agent: ChatAgent) -> None:
         self._runner = runner
         self._agent = agent   # DI-resolved singleton
@@ -736,7 +736,7 @@ class EventForwarder:
 
 Every `AgentModule.for_root()` call MUST have its own dedicated runner. When a
 controller or service needs runners from two modules simultaneously, define a
-named `AgentRunnerBase` subclass per module and pass it via `injects=[MyRunner]`:
+named `AgentRunnerBase` subclass per module and pass it via `runner=MyRunner`:
 
 ```python
 from lauren_ai import AgentRunnerBase
@@ -784,4 +784,4 @@ class DelegateToBankingTransfer:
 - **Do not** pass `conversation_id=None` when you want session persistence — always supply one, and ensure `conversation_store` was passed to `AgentModule.for_root()` or `AgentRunner.__init__`.
 - **Do not** share `ShortTermMemory` across runs — it is created fresh per `AgentRunner.run()` call (prior history is loaded from `ConversationStore` when available).
 - **Do not** pass agent **classes** to `runner.run()` — always pass a DI-resolved **instance**. Passing a class bypasses DI and breaks lifecycle hooks (raises `TypeError: on_start() missing 1 required positional argument: 'ctx'`).
-- **Do not** use `runner: AgentRunner` (Protocol annotation) in a controller or tool that can see runners from two or more `AgentModule`s — the structural Protocol scan finds multiple matches and raises `ProtocolAmbiguityError`. Use the named concrete subclass registered via `injects=[MyRunner]` instead.
+- **Do not** use `runner: AgentRunner` (Protocol annotation) in a controller or tool that can see runners from two or more `AgentModule`s — the structural Protocol scan finds multiple matches and raises `ProtocolAmbiguityError`. Use the named concrete subclass registered via `runner=MyRunner` instead.

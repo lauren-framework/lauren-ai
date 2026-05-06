@@ -180,7 +180,7 @@ from lauren_ai import AgentRunner  # @runtime_checkable Protocol
 class ChatController:
     # runner: AgentRunner resolves unambiguously when only one AgentModule is in scope.
     # If two or more AgentModules are imported, use the named concrete subclass
-    # registered via injects=[MyRunner] to avoid ProtocolAmbiguityError.
+    # registered via runner=MyRunner to avoid ProtocolAmbiguityError.
     def __init__(self, runner: AgentRunner, agent: ChatAgent) -> None:
         self._runner = runner
         self._agent = agent   # ← DI-resolved singleton
@@ -452,7 +452,7 @@ async def generate():
 Every `AgentModule.for_root()` call has its own dedicated runner. By default a
 unique `AgentRunnerBase` subclass is auto-generated. When a controller or service
 needs to inject runners from **two or more** `AgentModule`s simultaneously, use
-`injects=[MyRunner]` with an explicit `AgentRunnerBase` subclass per module — the
+`runner=MyRunner` with an explicit `AgentRunnerBase` subclass per module — the
 named class becomes the unambiguous DI token:
 
 ```python
@@ -498,14 +498,14 @@ _TransferAgentModule = AgentModule.for_root(
     agents=[BankingTransferAgent],
     tools=[TransferFundsTool],
     imports=[LLMProvider, BankingModule],
-    injects=[TransferAgentRunner],          # registers TransferAgentRunner token
+    runner=TransferAgentRunner,          # registers TransferAgentRunner token
 )
 
 _CRMAgentModule = AgentModule.for_root(
     agents=[BankingCRMAgent],
     tools=[DelegateToBankingTransfer],      # ← delegation tool lives HERE
     imports=[LLMProvider, _TransferAgentModule, BankingModule],  # ← makes TransferAgentRunner visible
-    injects=[CRMAgentRunner],
+    runner=CRMAgentRunner,
 )
 ```
 

@@ -477,6 +477,7 @@ class AgentModule:
         config: AgentConfig | None = None,
         tool_cache: Any | None = None,
         knowledge: list[Any] | None = None,
+        runner: type | None = None,
         injects: list[type] | None = None,
         export_tools: list[type] | None = None,
     ) -> type:
@@ -511,27 +512,31 @@ class AgentModule:
         :param knowledge: Knowledge base instances to pre-load into long-term
             memory.
         :type knowledge: list[Any] | None
-        :param injects: Optional list containing at most one
-            :class:`~lauren_ai._agents._runner.AgentRunnerBase` subclass.
+        :param runner: Optional named :class:`~lauren_ai._agents._runner.AgentRunnerBase`
+            subclass to use as this module's runner DI token.
 
-            **Default (``None`` or ``[]``):** a unique ``AgentRunnerBase``
-            subclass is auto-generated per ``for_root()`` call and registered
-            as the module's runner token.  Providers inside this module can
-            inject it with ``runner: AgentRunner`` — the DI container resolves
+            **Default (``None``):** a unique ``AgentRunnerBase`` subclass is
+            auto-generated per ``for_root()`` call.  Providers inside this module
+            can inject it with ``runner: AgentRunner`` — the DI container resolves
             it via structural Protocol scan.
 
             **Explicit subclass:** pass a named ``AgentRunnerBase`` subclass
             (decorated with ``@injectable(scope=Scope.SINGLETON)``) when this
             module coexists with other ``AgentModule`` instances in the same
-            import scope **and** a controller or service needs to inject two or
-            more runners simultaneously.  The named class becomes the
-            unambiguous DI token; consumers annotate the parameter with the
-            concrete type (e.g. ``runner: TransferAgentRunner``).
+            import scope **and** a controller, service, or delegation tool needs
+            to inject a specific module's runner by name.  The named class becomes
+            the unambiguous DI token (e.g. ``runner: TransferAgentRunner``).
 
             Every ``AgentModule.for_root()`` call MUST have its own dedicated
-            runner — either the auto-generated one (default) or a user-supplied
-            subclass (``injects=[MyRunner]``).  Sharing a runner across modules
-            is not supported.
+            runner — either the auto-generated one (default) or this explicit
+            subclass.  Sharing a runner across modules is not supported.
+        :type runner: type | None
+        :param injects: Optional list of additional provider classes to register
+            inside this module.  Use this to make extra singletons available to
+            the agents and tools wired by this module — for example, a shared
+            cache, a domain service, or a custom configuration class.  These
+            classes are added as providers but not exported; export them
+            explicitly if parent modules need them.
         :type injects: list[type] | None
         :return: A ``@module``-decorated class.
         :rtype: type
@@ -542,15 +547,9 @@ class AgentModule:
         from lauren_ai._agents._runner import AgentRunnerBase  # noqa: PLC0415
         from lauren_ai._tools import TOOL_META, _add_to_tool_map  # noqa: PLC0415
 
-        _injects: list[type] = list(injects or [])
-        if len(_injects) > 1:
-            raise AgentConfigError(
-                "AgentModule.for_root() 'injects' accepts at most one AgentRunner "
-                f"subclass; got {len(_injects)}: {_injects!r}."
-            )
-        if _injects:
-            # Advanced path: caller supplied an explicit runner subclass.
-            _runner_cls: type = _injects[0]
+        if runner is not None:
+            # Advanced path: caller supplied an explicit named runner subclass.
+            _runner_cls: type = runner
         else:
             # Default path: generate a unique subclass per for_root() call so
             # each AgentModule gets its own DI token.  ``runner: AgentRunner``
@@ -747,6 +746,12 @@ class AgentModule:
         else:
             _imports = [imports]
 
+        # Register any additional provider classes from ``injects=``.  These are
+        # not exported; they are purely internal to this module.
+        for _inj_cls in (injects or []):
+            if _inj_cls not in providers:
+                providers.append(_inj_cls)
+
         # Register and export delegation tools.  These tools are providers of
         # THIS module (so they can receive this module's runner via DI) but are
         # NOT included in the runner's tool map — they are consumed by OTHER
@@ -768,8 +773,9 @@ class AgentModule:
             # (the dict is built inside the AgentRunner factory).
             tools_instance: dict | None = _eager_tools
             agent_classes: list[type] = list(agents)
-            # The concrete runner class generated for this module.  Useful for
-            # introspection; DI injection should use ``runner: AgentRunner``.
+            # The concrete runner class for this module.  Useful for
+            # introspection; DI injection should use ``runner: AgentRunner``
+            # (single-module scope) or the named subclass (multi-module scope).
             runner_class: type = _runner_cls
             exported_tools: list[type] = _captured_export_tools
 

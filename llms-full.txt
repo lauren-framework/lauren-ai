@@ -623,7 +623,7 @@ class ChatService:
 When a controller or service sits in a scope that **imports two or more
 AgentModules**, `runner: AgentRunner` is ambiguous — both runners are visible and
 the DI container raises `ProtocolAmbiguityError`. Each module MUST define a
-dedicated named runner class and pass it via `injects=[MyRunner]`:
+dedicated named runner class and pass it via `runner=MyRunner`:
 
 ```python
 from lauren import injectable, Scope
@@ -639,12 +639,12 @@ class CRMAgentRunner(AgentRunnerBase):
 
 TransferMod = AgentModule.for_root(
     agents=[TransferAgent], tools=[...],
-    injects=[TransferAgentRunner],   # explicit runner token
+    runner=TransferAgentRunner,   # explicit runner token
     imports=[LLMProvider],
 )
 CRMMod = AgentModule.for_root(
     agents=[CRMAgent], tools=[DelegateToBankingTransfer],
-    injects=[CRMAgentRunner],        # explicit runner token
+    runner=CRMAgentRunner,        # explicit runner token
     imports=[LLMProvider, TransferMod],
 )
 
@@ -1363,7 +1363,7 @@ SpecialistMod = AgentModule.for_root(
     agents=[SpecialistAgent],
     tools=[SpecialistTool1, SpecialistTool2],
     imports=[LLMProvider],
-    injects=[SpecialistAgentRunner],   # registers SpecialistAgentRunner as the runner token
+    runner=SpecialistAgentRunner,   # registers SpecialistAgentRunner as the runner token
 )
 ```
 
@@ -1380,7 +1380,7 @@ OrchestratorMod = AgentModule.for_root(
     agents=[OrchestratorAgent],
     tools=[DelegateToSpecialist],          # ← delegation tool lives in the CALLING module
     imports=[LLMProvider, SpecialistMod],  # ← import makes SpecialistAgentRunner visible to DI
-    injects=[OrchestratorAgentRunner],
+    runner=OrchestratorAgentRunner,
 )
 
 # A controller in the outer module can inject both runners unambiguously:
@@ -1400,7 +1400,7 @@ class AppController:
 > Protocol — because two runners are in scope and Protocol scan would be ambiguous.
 >
 > Every `AgentModule.for_root()` call MUST have its own dedicated runner token.
-> Use `injects=[MyRunner]` with an explicit `AgentRunnerBase` subclass whenever
+> Use `runner=MyRunner` with an explicit `AgentRunnerBase` subclass whenever
 > a controller, service, or tool needs to inject a specific module's runner.
 
 ### `AgentRunner.run()` accurate signature
