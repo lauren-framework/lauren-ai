@@ -1,4 +1,5 @@
 """Unit tests for the AgentRunner agentic loop."""
+
 from __future__ import annotations
 
 import pytest
@@ -36,8 +37,11 @@ class TestAgentRunnerBasic:
     async def test_single_turn_response(self, mock):
         mock.queue_response(
             Completion(
-                id="c1", model="mock", content="Hello! How can I help?",
-                tool_calls=[], stop_reason="end_turn",
+                id="c1",
+                model="mock",
+                content="Hello! How can I help?",
+                tool_calls=[],
+                stop_reason="end_turn",
                 usage=TokenUsage(input_tokens=10, output_tokens=8),
             )
         )
@@ -70,9 +74,11 @@ class TestAgentRunnerBasic:
         # Turn 2: model responds with final answer
         mock.queue_response(
             Completion(
-                id="c2", model="mock",
+                id="c2",
+                model="mock",
                 content="The time is 12:00 PM UTC.",
-                tool_calls=[], stop_reason="end_turn",
+                tool_calls=[],
+                stop_reason="end_turn",
                 usage=TokenUsage(input_tokens=20, output_tokens=10),
             )
         )
@@ -110,8 +116,11 @@ class TestAgentRunnerBasic:
     async def test_cumulative_token_usage(self, mock):
         mock.queue_response(
             Completion(
-                id="c1", model="mock", content="Result",
-                tool_calls=[], stop_reason="end_turn",
+                id="c1",
+                model="mock",
+                content="Result",
+                tool_calls=[],
+                stop_reason="end_turn",
                 usage=TokenUsage(input_tokens=100, output_tokens=50),
             )
         )
@@ -130,8 +139,11 @@ class TestAgentRunnerBasic:
     async def test_lifecycle_hooks_called(self, mock):
         mock.queue_response(
             Completion(
-                id="c1", model="mock", content="Done",
-                tool_calls=[], stop_reason="end_turn",
+                id="c1",
+                model="mock",
+                content="Done",
+                tool_calls=[],
+                stop_reason="end_turn",
                 usage=TokenUsage(input_tokens=5, output_tokens=5),
             )
         )
@@ -168,9 +180,11 @@ class TestAgentRunnerBasic:
         mock.queue_tool_use("failing_tool", {})
         mock.queue_response(
             Completion(
-                id="c2", model="mock",
+                id="c2",
+                model="mock",
                 content="I see the tool encountered an error.",
-                tool_calls=[], stop_reason="end_turn",
+                tool_calls=[],
+                stop_reason="end_turn",
                 usage=TokenUsage(input_tokens=10, output_tokens=5),
             )
         )
@@ -195,8 +209,11 @@ from lauren_ai._memory._stores import InMemoryConversationStore  # noqa: E402
 
 def _compl(content: str, *, n: int = 1) -> Completion:
     return Completion(
-        id=f"c{n}", model="mock", content=content,
-        tool_calls=[], stop_reason="end_turn",
+        id=f"c{n}",
+        model="mock",
+        content=content,
+        tool_calls=[],
+        stop_reason="end_turn",
         usage=TokenUsage(input_tokens=10, output_tokens=5),
     )
 

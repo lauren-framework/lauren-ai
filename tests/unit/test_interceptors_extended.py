@@ -1,5 +1,6 @@
 """Unit tests for _interceptors.py — ai_metrics_interceptor and
 token_usage_response_interceptor (fallback paths)."""
+
 from __future__ import annotations
 
 import pytest

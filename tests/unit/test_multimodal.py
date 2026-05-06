@@ -1,4 +1,5 @@
 """Unit tests for multimodal content types."""
+
 from __future__ import annotations
 
 import base64

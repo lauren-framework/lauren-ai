@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 # Exceptions
 # ---------------------------------------------------------------------------
 
+
 class ToolExecutionError(Exception):
     """Raised when a tool raises an unhandled exception during execution.
 
@@ -84,6 +85,7 @@ class ToolPendingApprovalSignal(Exception):
 # ToolCall (minimal local definition — the transport layer re-exports this)
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ToolCall:
     """A single tool-use request emitted by the model.
@@ -104,6 +106,7 @@ class ToolCall:
 # ---------------------------------------------------------------------------
 # CacheBackend protocol
 # ---------------------------------------------------------------------------
+
 
 @runtime_checkable
 class CacheBackend(Protocol):
@@ -146,6 +149,7 @@ class CacheBackend(Protocol):
 # ---------------------------------------------------------------------------
 # InMemoryCacheBackend
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class _CacheEntry:
@@ -223,6 +227,7 @@ class InMemoryCacheBackend:
 # ToolExecutor
 # ---------------------------------------------------------------------------
 
+
 class ToolExecutor:
     """Dispatches tool calls from the agentic loop.
 
@@ -287,7 +292,9 @@ class ToolExecutor:
 
         entry = self._tools.get(name)
         if entry is None:
-            agent_name = tool_context.agent_context.agent_name if tool_context.agent_context else "unknown"
+            agent_name = (
+                tool_context.agent_context.agent_name if tool_context.agent_context else "unknown"
+            )
             logger.warning(
                 "lauren_ai.ToolExecutor: agent with name '%s' called unknown tool '%s' — returning error result",
                 agent_name,
@@ -392,8 +399,7 @@ class ToolExecutor:
             # Shouldn't happen but guard against it
             fn = callable_or_instance.run
         elif inspect.ismethod(callable_or_instance) or (
-            hasattr(callable_or_instance, "run")
-            and not inspect.isfunction(callable_or_instance)
+            hasattr(callable_or_instance, "run") and not inspect.isfunction(callable_or_instance)
         ):
             # Instance from DI — use its run() method
             fn = callable_or_instance.run

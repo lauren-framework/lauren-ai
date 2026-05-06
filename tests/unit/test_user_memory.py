@@ -1,4 +1,5 @@
 """Unit tests for user-level persistent memory."""
+
 from __future__ import annotations
 
 import pytest
@@ -118,6 +119,7 @@ class TestRememberDecorator:
 
     def test_bare_usage_raises(self):
         with pytest.raises(MemoryConfigError, match="parentheses"):
+
             @remember
             class Bad:
                 pass

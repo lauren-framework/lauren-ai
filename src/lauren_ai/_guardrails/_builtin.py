@@ -55,6 +55,7 @@ class TopicFilter:
 
     async def _embedding_check(self, message: str, context: GuardrailContext) -> GuardrailDecision:
         import math
+
         results = await self._embed_fn([message] + self._topics)
         query_vec = results[0].vector if hasattr(results[0], "vector") else results[0]
 
@@ -89,11 +90,11 @@ class PIIRedactor:
     """
 
     PATTERNS: dict[str, str] = {
-        "EMAIL": r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
-        "PHONE": r'(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}',
-        "SSN": r'\b\d{3}-\d{2}-\d{4}\b',
-        "CREDIT_CARD": r'\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b',
-        "IP_ADDRESS": r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b',
+        "EMAIL": r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
+        "PHONE": r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}",
+        "SSN": r"\b\d{3}-\d{2}-\d{4}\b",
+        "CREDIT_CARD": r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b",
+        "IP_ADDRESS": r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b",
     }
 
     def __init__(
@@ -104,9 +105,7 @@ class PIIRedactor:
         self._entities = entities or list(self.PATTERNS.keys())
         self._replacement = replacement
         self._compiled = [
-            re.compile(self.PATTERNS[e])
-            for e in self._entities
-            if e in self.PATTERNS
+            re.compile(self.PATTERNS[e]) for e in self._entities if e in self.PATTERNS
         ]
 
     async def check(self, response: str, context: GuardrailContext) -> GuardrailDecision:
@@ -171,17 +170,17 @@ class PromptInjectionFilter:
     """
 
     INJECTION_PATTERNS = [
-        r'ignore\s+(?:all\s+)?(?:previous|prior)\s+instructions',
-        r'disregard\s+(?:all\s+)?(?:previous|prior)\s+instructions',
-        r'forget\s+(?:all\s+)?(?:previous|prior)\s+instructions',
-        r'you\s+are\s+now\s+(?:a\s+)?(?:different|new)',
-        r'act\s+as\s+(?:a\s+)?(?:different|new|evil|dan)',
-        r'jailbreak',
-        r'do\s+anything\s+now',
-        r'system\s*:\s*you\s+are',
-        r'\[system\]',
-        r'<\|im_start\|>',
-        r'###\s*instruction',
+        r"ignore\s+(?:all\s+)?(?:previous|prior)\s+instructions",
+        r"disregard\s+(?:all\s+)?(?:previous|prior)\s+instructions",
+        r"forget\s+(?:all\s+)?(?:previous|prior)\s+instructions",
+        r"you\s+are\s+now\s+(?:a\s+)?(?:different|new)",
+        r"act\s+as\s+(?:a\s+)?(?:different|new|evil|dan)",
+        r"jailbreak",
+        r"do\s+anything\s+now",
+        r"system\s*:\s*you\s+are",
+        r"\[system\]",
+        r"<\|im_start\|>",
+        r"###\s*instruction",
     ]
 
     def __init__(self, violation_message: str = "Potential prompt injection detected.") -> None:

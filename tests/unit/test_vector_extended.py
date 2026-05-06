@@ -1,6 +1,7 @@
 """Extended tests for _memory/_vector.py — covers upsert with embedding,
 search with filter, search k<=0, search empty query, get missing doc,
 clear, normalise_dense."""
+
 from __future__ import annotations
 
 import pytest

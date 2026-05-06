@@ -1,4 +1,5 @@
 """Unit tests for agent teams."""
+
 from __future__ import annotations
 
 import pytest
@@ -46,12 +47,14 @@ class TestTeamDecorator:
 
     def test_bare_usage_raises(self):
         with pytest.raises(DecoratorUsageError, match="parentheses"):
+
             @team
             class Bad:
                 pass
 
     def test_invalid_mode_raises(self):
         with pytest.raises(TeamConfigError, match="mode"):
+
             @team(name="t", mode="invalid", model="m")  # type: ignore[arg-type]
             class Bad:
                 pass
@@ -162,11 +165,13 @@ class TestTeamRunner:
                 pass
 
         # Responses: coordinator says ROUTE researcher, then worker output, then DONE
-        llm, _ = _make_llm([
-            "ROUTE: researcher",   # coordinator decision round 0
-            "Research findings",   # researcher worker output
-            "DONE: Final answer",  # coordinator decision round 1
-        ])
+        llm, _ = _make_llm(
+            [
+                "ROUTE: researcher",  # coordinator decision round 0
+                "Research findings",  # researcher worker output
+                "DONE: Final answer",  # coordinator decision round 1
+            ]
+        )
         runner = TeamRunner(team_cls=MyTeam, llm=llm, agent_runner=None)
         result = await runner.run("Research AI trends")
         assert isinstance(result, TeamResult)
@@ -179,10 +184,12 @@ class TestTeamRunner:
             def __init__(self, analyst: object) -> None:
                 pass
 
-        llm, _ = _make_llm([
-            "Analysis result",   # analyst output
-            "Final synthesis",   # synthesis
-        ])
+        llm, _ = _make_llm(
+            [
+                "Analysis result",  # analyst output
+                "Final synthesis",  # synthesis
+            ]
+        )
         runner = TeamRunner(team_cls=MyTeam, llm=llm, agent_runner=None)
         result = await runner.run("Analyse this data")
         assert result.final_answer == "Final synthesis"
@@ -194,10 +201,12 @@ class TestTeamRunner:
             def __init__(self, worker: object) -> None:
                 pass
 
-        llm, _ = _make_llm([
-            "Worker output",
-            "Final answer",
-        ])
+        llm, _ = _make_llm(
+            [
+                "Worker output",
+                "Final answer",
+            ]
+        )
         runner = TeamRunner(team_cls=MyTeam, llm=llm, agent_runner=None)
         events: list[object] = []
         async for event in runner.run_stream("Task"):
@@ -214,9 +223,11 @@ class TestTeamRunner:
             def __init__(self, worker: object) -> None:
                 pass
 
-        llm, _ = _make_llm([
-            "DONE: All done",   # coordinator immediately done
-        ])
+        llm, _ = _make_llm(
+            [
+                "DONE: All done",  # coordinator immediately done
+            ]
+        )
         runner = TeamRunner(team_cls=MyTeam, llm=llm, agent_runner=None)
         events: list[object] = []
         async for event in runner.run_stream("Task"):
@@ -243,12 +254,14 @@ class TestTeamRunner:
                 pass
 
         # Always routes to worker, never says DONE — should hit max_rounds
-        llm, _ = _make_llm([
-            "ROUTE: w",
-            "worker result 1",
-            "ROUTE: w",
-            "worker result 2",
-        ])
+        llm, _ = _make_llm(
+            [
+                "ROUTE: w",
+                "worker result 1",
+                "ROUTE: w",
+                "worker result 2",
+            ]
+        )
         runner = TeamRunner(team_cls=MyTeam, llm=llm, agent_runner=None)
         result = await runner.run("Task")
         assert result.rounds == 2

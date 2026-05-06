@@ -98,10 +98,10 @@ def _validate_agent_hooks(cls: type) -> None:
     # (hook_name, min_positional_params_excluding_self)
     hook_specs: list[tuple[str, int, int]] = [
         # (name, min_extra_params, max_extra_params)
-        ("on_start", 1, 1),               # ctx
-        ("on_tool_result", 2, 2),         # result, ctx
-        ("on_turn_complete", 2, 2),       # completion, ctx
-        ("on_finish", 2, 2),              # response, ctx
+        ("on_start", 1, 1),  # ctx
+        ("on_tool_result", 2, 2),  # result, ctx
+        ("on_turn_complete", 2, 2),  # completion, ctx
+        ("on_finish", 2, 2),  # response, ctx
     ]
 
     for hook_name, min_params, max_params in hook_specs:
@@ -120,8 +120,7 @@ def _validate_agent_hooks(cls: type) -> None:
             sig = inspect.signature(hook)
         except (TypeError, ValueError) as exc:
             raise AgentConfigError(
-                f"Agent {cls.__name__!r}: could not inspect signature of "
-                f"'{hook_name}': {exc}",
+                f"Agent {cls.__name__!r}: could not inspect signature of '{hook_name}': {exc}",
                 agent_class=cls,
                 cause=exc,
             ) from exc
@@ -129,7 +128,8 @@ def _validate_agent_hooks(cls: type) -> None:
         params = list(sig.parameters.values())
         # Filter out 'self' and **kwargs; count positional-capable params
         positional_params = [
-            p for p in params
+            p
+            for p in params
             if p.name != "self"
             and p.kind
             not in (

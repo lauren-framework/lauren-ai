@@ -15,6 +15,7 @@ from lauren_ai._cost._pricing import CostEstimate, PricingTable, default_pricing
 @dataclass
 class CostSession:
     """Context manager result from CostTracker.session()."""
+
     conversation_id: str | None = None
     user_id: str | None = None
     usage_by_model: dict[str, Any] = field(default_factory=dict)
@@ -31,6 +32,7 @@ class CostSession:
 @dataclass
 class CostReport:
     """Aggregated cost report for a user or conversation."""
+
     total_estimate: CostEstimate = field(default_factory=CostEstimate)
     by_model: dict[str, CostEstimate] = field(default_factory=dict)
     by_conversation: dict[str, CostEstimate] = field(default_factory=dict)

@@ -1,4 +1,5 @@
 """Extended unit tests for ToolExecutor — covers cache, hooks, HITL, and dispatch."""
+
 from __future__ import annotations
 
 import pytest
@@ -52,10 +53,12 @@ class TestInMemoryCacheBackend:
     @pytest.mark.asyncio
     async def test_expired_entry_returns_none(self):
         import time
+
         cache = InMemoryCacheBackend()
         await cache.set("key1", "value1", ttl=1)
         # Manually expire by setting expires_at in the past
         from lauren_ai._tools._executor import _CacheEntry
+
         cache._store["key1"] = _CacheEntry(value="value1", expires_at=time.monotonic() - 1)
         result = await cache.get("key1")
         assert result is None

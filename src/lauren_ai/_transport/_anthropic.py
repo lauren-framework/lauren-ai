@@ -58,6 +58,7 @@ def _require_anthropic() -> Any:
     """
     try:
         import anthropic  # noqa: PLC0415
+
         return anthropic
     except ImportError as exc:
         raise ImportError(_ANTHROPIC_IMPORT_ERROR) from exc
@@ -270,9 +271,7 @@ def _extract_thinking_blocks(
                 )
             )
         elif block_type == "redacted_thinking":
-            result.append(
-                RedactedThinkingBlock(data=getattr(block, "data", ""))
-            )
+            result.append(RedactedThinkingBlock(data=getattr(block, "data", "")))
     return result
 
 
@@ -407,7 +406,7 @@ class AnthropicTransport:
                 if isinstance(exc, TransientTransportError):
                     last_exc = exc
                     if attempt < max_retries:
-                        wait = (2 ** attempt) * 0.5
+                        wait = (2**attempt) * 0.5
                         await asyncio.sleep(wait)
                     continue
                 raise
@@ -596,7 +595,7 @@ class AnthropicTransport:
                 if classified is not None:
                     if isinstance(classified, TransientTransportError) and attempt < max_retries:
                         last_exc = classified
-                        wait = (2 ** attempt) * 0.5
+                        wait = (2**attempt) * 0.5
                         await asyncio.sleep(wait)
                         continue
                     raise classified from exc
@@ -668,9 +667,7 @@ class AnthropicTransport:
                             yield CompletionChunk(delta=getattr(delta, "text", ""))
 
                         elif delta_type == "thinking_delta":
-                            yield CompletionChunk(
-                                thinking_delta=getattr(delta, "thinking", "")
-                            )
+                            yield CompletionChunk(thinking_delta=getattr(delta, "thinking", ""))
 
                         elif delta_type == "input_json_delta":
                             if _current_tool_use_id is not None:
@@ -765,8 +762,7 @@ class AnthropicTransport:
                 **({"dimensions": dimensions} if dimensions is not None else {}),
             )
             return [
-                Embedding(index=i, vector=item.embedding)
-                for i, item in enumerate(response.data)
+                Embedding(index=i, vector=item.embedding) for i, item in enumerate(response.data)
             ]
         except Exception as exc:  # noqa: BLE001
             classified = self._classify_exception(exc)
@@ -854,7 +850,9 @@ def _heuristic_count(
         total += max(1, len(system) // 4)
     if tools:
         for t in tools:
-            total += max(1, (len(t.name) + len(t.description) + len(json.dumps(t.input_schema))) // 4)
+            total += max(
+                1, (len(t.name) + len(t.description) + len(json.dumps(t.input_schema))) // 4
+            )
     for msg in messages:
         if isinstance(msg.content, str):
             total += max(1, len(msg.content) // 4)

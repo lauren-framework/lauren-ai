@@ -92,14 +92,10 @@ class PydanticOutputParser(Generic[T]):
             import json as _json
 
             return (
-                f"Respond with a JSON object matching this schema:\n"
-                f"{_json.dumps(schema, indent=2)}"
+                f"Respond with a JSON object matching this schema:\n{_json.dumps(schema, indent=2)}"
             )
         except Exception:
-            return (
-                f"Respond with a JSON object that can be parsed as "
-                f"{self._model.__name__}."
-            )
+            return f"Respond with a JSON object that can be parsed as {self._model.__name__}."
 
     def __or__(self, other: Any) -> Any:
         from lauren_ai._chains import Chain  # noqa: PLC0415

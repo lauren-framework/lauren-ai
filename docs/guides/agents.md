@@ -27,9 +27,17 @@ class ResearchAgent:
 | `system` | `str \| None` | class docstring or `AgentConfig.system_prompt` | System prompt |
 | `max_turns` | `int \| None` | `10` | Maximum agentic loop iterations |
 | `temperature` | `float \| None` | `1.0` | Sampling temperature |
+| `thinking` | `bool` | `False` | Enable Anthropic extended thinking |
+| `thinking_budget_tokens` | `int` | `8_000` | Token ceiling for the thinking phase |
+| `reasoning_effort` | `str \| None` | `None` | OpenAI o-series effort: `"low"` / `"medium"` / `"high"` |
+| `include_reasoning_in_response` | `bool` | `False` | Expose OpenAI reasoning text in `AgentResponse` |
 
 `@agent()` must be called **with parentheses**.  Bare `@agent` raises
 `DecoratorUsageError`.
+
+For a full treatment of extended thinking — including `Completion.thinking_blocks`,
+streaming thinking deltas, lifecycle hook access, and testing — see the
+[extended thinking guide](extended-thinking.md).
 
 `@agent()` automatically applies `@injectable(scope=Scope.SINGLETON)` unless
 the class is already `@injectable`.

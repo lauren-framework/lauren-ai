@@ -1,4 +1,5 @@
 """Extended tests for _tools/_schema.py — covering missing type branches."""
+
 from __future__ import annotations
 
 import pytest
@@ -18,6 +19,7 @@ class TestTypeToJsonSchemaExtended:
 
     def test_empty_annotation(self):
         import inspect
+
         result = type_to_json_schema(inspect.Parameter.empty)
         assert result == {"type": "string"}
 
@@ -40,6 +42,7 @@ class TestTypeToJsonSchemaExtended:
 
     def test_any_type(self):
         import typing
+
         result = type_to_json_schema(typing.Any)
         assert result == {}
 
@@ -69,18 +72,21 @@ class TestTypeToJsonSchemaExtended:
 
     def test_literal_strings(self):
         from typing import Literal
+
         result = type_to_json_schema(Literal["a", "b", "c"])
         assert result["type"] == "string"
         assert result["enum"] == ["a", "b", "c"]
 
     def test_literal_ints(self):
         from typing import Literal
+
         result = type_to_json_schema(Literal[1, 2, 3])
         assert result["type"] == "integer"
         assert result["enum"] == [1, 2, 3]
 
     def test_literal_mixed(self):
         from typing import Literal
+
         result = type_to_json_schema(Literal["a", 1])
         assert "enum" in result
         # Mixed types: no type key, just enum
@@ -89,6 +95,7 @@ class TestTypeToJsonSchemaExtended:
 
     def test_union_non_optional(self):
         from typing import Union
+
         result = type_to_json_schema(Union[str, int])
         assert "anyOf" in result
         types = {s.get("type") for s in result["anyOf"]}
@@ -97,17 +104,20 @@ class TestTypeToJsonSchemaExtended:
 
     def test_union_collapses_to_single(self):
         from typing import Union
+
         result = type_to_json_schema(Union[str, None])
         # Optional[str] → str
         assert result == {"type": "string"}
 
     def test_optional_int(self):
         from typing import Optional
+
         result = type_to_json_schema(Optional[int])
         assert result == {"type": "integer"}
 
     def test_optional_list_str(self):
         from typing import Optional
+
         result = type_to_json_schema(Optional[list[str]])
         assert result["type"] == "array"
         assert result["items"] == {"type": "string"}
@@ -175,6 +185,7 @@ class TestTypeToJsonSchemaExtended:
 
     def test_python310_union_syntax(self):
         import sys
+
         if sys.version_info < (3, 10):
             pytest.skip("Python 3.10+ only")
         # str | int union syntax
@@ -183,6 +194,7 @@ class TestTypeToJsonSchemaExtended:
 
     def test_python310_optional_syntax(self):
         import sys
+
         if sys.version_info < (3, 10):
             pytest.skip("Python 3.10+ only")
         result = type_to_json_schema(eval("str | None"))
@@ -336,6 +348,7 @@ class TestGenerateToolSchema:
     def test_class_form_missing_run_raises(self):
         class BadTool:
             """A bad tool with no run method."""
+
             pass
 
         with pytest.raises(ValueError) as exc_info:
@@ -363,8 +376,10 @@ class TestGenerateToolSchema:
 
     def test_self_excluded(self):
         """Ensure 'self' is excluded from schema properties."""
+
         class MyTool:
             """A tool."""
+
             def run(self, x: str) -> str:
                 """Run. Args: x: Input."""
                 return x

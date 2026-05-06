@@ -12,7 +12,6 @@ from lauren_ai._transport import Message
 # Avoid circular imports; Chain imported lazily inside __or__ and invoke.
 
 
-
 class PromptRenderError(LaurenAIError):
     """Raised when a prompt template is rendered with missing variables."""
 
@@ -193,9 +192,7 @@ class ChatPromptTemplate:
         required = set(self.input_variables) if self.input_variables else self._all_variables()
         missing = required - set(kwargs.keys())
         if missing:
-            raise PromptRenderError(
-                f"ChatPromptTemplate missing variables: {sorted(missing)}"
-            )
+            raise PromptRenderError(f"ChatPromptTemplate missing variables: {sorted(missing)}")
         result: list[Message] = []
         for item in self.messages:
             if isinstance(item, Message):
@@ -296,13 +293,10 @@ class FewShotPromptTemplate:
         )
         missing = required - set(kwargs.keys())
         if missing:
-            raise PromptRenderError(
-                f"FewShotPromptTemplate missing variables: {sorted(missing)}"
-            )
+            raise PromptRenderError(f"FewShotPromptTemplate missing variables: {sorted(missing)}")
         all_examples = list(self.examples)
         example_strs = [
-            self.example_template.format(input=ex.input, output=ex.output)
-            for ex in all_examples
+            self.example_template.format(input=ex.input, output=ex.output) for ex in all_examples
         ]
         suffix_str = self.suffix.format(**kwargs)
         parts = [self.prefix] + example_strs + [suffix_str]
@@ -332,13 +326,10 @@ class FewShotPromptTemplate:
         )
         missing = required - set(kwargs.keys())
         if missing:
-            raise PromptRenderError(
-                f"FewShotPromptTemplate missing variables: {sorted(missing)}"
-            )
+            raise PromptRenderError(f"FewShotPromptTemplate missing variables: {sorted(missing)}")
         all_examples = list(self.examples) + (extra_examples or [])
         example_strs = [
-            self.example_template.format(input=ex.input, output=ex.output)
-            for ex in all_examples
+            self.example_template.format(input=ex.input, output=ex.output) for ex in all_examples
         ]
         suffix_str = self.suffix.format(**kwargs)
         parts = [self.prefix] + example_strs + [suffix_str]

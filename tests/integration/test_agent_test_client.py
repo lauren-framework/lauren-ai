@@ -161,8 +161,12 @@ class TestAgentTestClientCallTracking:
         call = client.calls[0]
         # The first message in the call should be the user message
         assert len(call.messages) >= 1
-        user_msgs = [m for m in call.messages if getattr(m, "role", None) == "user" or
-                     (isinstance(m, dict) and m.get("role") == "user")]
+        user_msgs = [
+            m
+            for m in call.messages
+            if getattr(m, "role", None) == "user"
+            or (isinstance(m, dict) and m.get("role") == "user")
+        ]
         assert len(user_msgs) >= 1
 
     @pytest.mark.asyncio

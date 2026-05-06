@@ -1,4 +1,5 @@
 """Unit tests for LLMConfig and AgentConfig."""
+
 from __future__ import annotations
 
 import pytest

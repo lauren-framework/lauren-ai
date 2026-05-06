@@ -87,9 +87,7 @@ class JSONOutputParser:
         try:
             return json.loads(cleaned.strip())
         except json.JSONDecodeError as e:
-            raise OutputParserError(
-                f"Failed to parse JSON: {e}. Text: {text!r}"
-            ) from e
+            raise OutputParserError(f"Failed to parse JSON: {e}. Text: {text!r}") from e
 
     async def invoke(self, input: Any) -> Any:
         """Invoke as a :class:`~lauren_ai._chains.Runnable`.
@@ -143,9 +141,7 @@ class RegexParser:
         """
         m = self.pattern.search(text)
         if m is None:
-            raise OutputParserError(
-                f"Pattern {self.pattern.pattern!r} did not match: {text!r}"
-            )
+            raise OutputParserError(f"Pattern {self.pattern.pattern!r} did not match: {text!r}")
         return m.groupdict()
 
     async def invoke(self, input: Any) -> dict[str, str]:

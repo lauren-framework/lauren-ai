@@ -32,7 +32,7 @@ class TeamWorkerFinished(TeamEvent):
 class TeamCoordinatorDecision(TeamEvent):
     """Emitted when the coordinator decides next action."""
 
-    decision: str = ""     # "ROUTE: <name>" or "DONE"
+    decision: str = ""  # "ROUTE: <name>" or "DONE"
     reasoning: str | None = None
     round: int = 0
 

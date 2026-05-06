@@ -15,9 +15,7 @@ nox.options.default_venv_backend = "uv"
 nox.options.reuse_existing_virtualenvs = True
 # Keep envs in a user-writable location so `nox` works regardless of which
 # user originally bootstrapped the project (root vs ai-slave, etc.).
-nox.options.envdir = os.path.join(
-    os.path.expanduser("~"), ".cache", "nox", "lauren-ai"
-)
+nox.options.envdir = os.path.join(os.path.expanduser("~"), ".cache", "nox", "lauren-ai")
 
 PYTHON_VERSIONS = ["3.11", "3.12", "3.13", "3.14"]
 DEFAULT_PYTHON = "3.12"
@@ -88,7 +86,7 @@ def tests(session: nox.Session) -> None:
         "-q",
         *session.posargs,
     )
-    
+
 
 @nox.session(name="coverage", python=DEFAULT_PYTHON)
 def coverage(session: nox.Session) -> None:
@@ -292,7 +290,7 @@ def clean(session: nox.Session) -> None:
         "htmlcov",
         ".eggs",
         "*.egg-info",
-        "node_modules",   # if present anywhere
+        "node_modules",  # if present anywhere
         ".cache",
         "tmp",
     }

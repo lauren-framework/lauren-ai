@@ -63,6 +63,7 @@ class TokenBudget:
         )
         config = LLMConfig(..., budget=budget)
     """
+
     max_tokens_per_conversation: int | None = None
     max_usd_per_conversation: float | None = None
     max_tokens_per_user_per_day: int | None = None

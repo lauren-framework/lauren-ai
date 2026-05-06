@@ -144,9 +144,7 @@ class SemanticRouter:
             )
         for r in routes:
             if not r.description and not r.examples:
-                raise RouterConfigError(
-                    f"Route {r.name!r} must have a description or examples."
-                )
+                raise RouterConfigError(f"Route {r.name!r} must have a description or examples.")
 
     async def compile(self) -> None:
         """Precompute embedding centroids for all routes. Call at startup."""
@@ -203,9 +201,7 @@ class SemanticRouter:
     async def _llm_route(self, query: str) -> str:
         from lauren_ai._transport import Message
 
-        route_list = "\n".join(
-            f"- {r.name}: {r.description}" for r in self.routes
-        )
+        route_list = "\n".join(f"- {r.name}: {r.description}" for r in self.routes)
         prompt = (
             f"You are a routing assistant. Given a user query, pick the most appropriate route.\n\n"
             f"Available routes:\n{route_list}\n\n"
@@ -256,9 +252,7 @@ class SemanticRouter:
         match = await self.route(query)
         handler = handlers.get(match.route_name) or handlers.get(self._fallback_route)
         if handler is None:
-            raise RouterConfigError(
-                f"No handler for route {match.route_name!r} and no fallback."
-            )
+            raise RouterConfigError(f"No handler for route {match.route_name!r} and no fallback.")
         import inspect
 
         if inspect.iscoroutinefunction(handler):

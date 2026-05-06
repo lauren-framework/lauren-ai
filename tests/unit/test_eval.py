@@ -1,4 +1,5 @@
 """Unit tests for the evaluation framework."""
+
 from __future__ import annotations
 
 import pytest
@@ -39,10 +40,12 @@ class FakeAgentClient:
 
 class TestEvalDataset:
     def test_len(self):
-        ds = EvalDataset([
-            EvalExample(input="q1", expected="a1"),
-            EvalExample(input="q2", expected="a2"),
-        ])
+        ds = EvalDataset(
+            [
+                EvalExample(input="q1", expected="a1"),
+                EvalExample(input="q2", expected="a2"),
+            ]
+        )
         assert len(ds) == 2
 
     def test_iter(self):
@@ -120,12 +123,14 @@ class TestTrajectoryEval:
     async def test_exact_tool_order(self):
         client = FakeAgentClient("result", tool_names=["search", "summarise"])
         evaluator = TrajectoryEval(strict_order=True)
-        dataset = EvalDataset([
-            EvalExample(
-                input="Research and summarise",
-                expected_tools=["search", "summarise"],
-            )
-        ])
+        dataset = EvalDataset(
+            [
+                EvalExample(
+                    input="Research and summarise",
+                    expected_tools=["search", "summarise"],
+                )
+            ]
+        )
         report = await evaluator.run(client, dataset)
         assert report.pass_rate == 1.0
 
@@ -133,11 +138,13 @@ class TestTrajectoryEval:
     async def test_wrong_order_fails_strict(self):
         client = FakeAgentClient("result", tool_names=["summarise", "search"])
         evaluator = TrajectoryEval(strict_order=True)
-        dataset = EvalDataset([
-            EvalExample(
-                input="Research and summarise",
-                expected_tools=["search", "summarise"],
-            )
-        ])
+        dataset = EvalDataset(
+            [
+                EvalExample(
+                    input="Research and summarise",
+                    expected_tools=["search", "summarise"],
+                )
+            ]
+        )
         report = await evaluator.run(client, dataset)
         assert report.pass_rate == 0.0

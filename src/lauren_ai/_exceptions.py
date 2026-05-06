@@ -325,13 +325,8 @@ class AgentMaxTurnsError(LaurenAIError):
         self.agent_class: type | None = agent_class
 
     def __str__(self) -> str:
-        agent_name = (
-            self.agent_class.__name__ if self.agent_class is not None else "unknown"
-        )
-        return (
-            f"Agent {agent_name!r} exceeded max_turns after {self.turns} turns: "
-            f"{self.message}"
-        )
+        agent_name = self.agent_class.__name__ if self.agent_class is not None else "unknown"
+        return f"Agent {agent_name!r} exceeded max_turns after {self.turns} turns: {self.message}"
 
 
 class AgentBudgetExceededError(LaurenAIError):
@@ -365,9 +360,7 @@ class AgentBudgetExceededError(LaurenAIError):
         self.agent_class: type | None = agent_class
 
     def __str__(self) -> str:
-        agent_name = (
-            self.agent_class.__name__ if self.agent_class is not None else "unknown"
-        )
+        agent_name = self.agent_class.__name__ if self.agent_class is not None else "unknown"
         return (
             f"Agent {agent_name!r} exceeded {self.budget_type} budget "
             f"({self.used} / {self.limit}): {self.message}"
@@ -396,9 +389,7 @@ class AgentConfigError(LaurenAIError):
         self.agent_class: type | None = agent_class
 
     def __str__(self) -> str:
-        agent_name = (
-            self.agent_class.__name__ if self.agent_class is not None else "unknown"
-        )
+        agent_name = self.agent_class.__name__ if self.agent_class is not None else "unknown"
         return f"Agent config error for {agent_name!r}: {self.message}"
 
 
@@ -457,15 +448,15 @@ class DelegateToAgent(LaurenAIError):
         :param message: The message to pass to the target agent.
         :type message: str
         """
-        super().__init__(f"Delegate to {agent!r}: {message}" if message else f"Delegate to {agent!r}")
+        super().__init__(
+            f"Delegate to {agent!r}: {message}" if message else f"Delegate to {agent!r}"
+        )
         self.agent: Any = agent
         self.message: str = message
 
     def __str__(self) -> str:
         agent_name = (
-            self.agent.__name__
-            if isinstance(self.agent, type)
-            else type(self.agent).__name__
+            self.agent.__name__ if isinstance(self.agent, type) else type(self.agent).__name__
         )
         if self.message:
             return f"Handoff to {agent_name!r} with message: {self.message!r}"
@@ -521,10 +512,7 @@ class ToolConfirmationRejectedError(LaurenAIError):
         self.reason: str = reason
 
     def __str__(self) -> str:
-        base = (
-            f"Tool call {self.tool_name!r} (id={self.tool_use_id!r}) rejected: "
-            f"{self.message}"
-        )
+        base = f"Tool call {self.tool_name!r} (id={self.tool_use_id!r}) rejected: {self.message}"
         if self.reason:
             base += f" Reason: {self.reason!r}"
         return base

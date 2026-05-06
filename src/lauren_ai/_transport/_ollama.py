@@ -65,6 +65,7 @@ def _require_httpx() -> Any:
     """
     try:
         import httpx  # noqa: PLC0415
+
         return httpx
     except ImportError as exc:
         raise ImportError(_HTTPX_IMPORT_ERROR) from exc
@@ -483,7 +484,9 @@ class OllamaTransport:
                         tool_calls_present = bool(raw_tool_calls) or (
                             _current_tool_use_id is not None
                         )
-                        stop_reason = _parse_stop_reason(done_reason, [ToolCall("", "", {})] if tool_calls_present else [])
+                        stop_reason = _parse_stop_reason(
+                            done_reason, [ToolCall("", "", {})] if tool_calls_present else []
+                        )
 
                         prompt_eval_count = data.get("prompt_eval_count", 0) or 0
                         eval_count = data.get("eval_count", 0) or 0
@@ -538,10 +541,7 @@ class OllamaTransport:
             if response.status_code == 200:
                 data = response.json()
                 embeddings = data.get("embeddings", [])
-                return [
-                    Embedding(index=i, vector=vec)
-                    for i, vec in enumerate(embeddings)
-                ]
+                return [Embedding(index=i, vector=vec) for i, vec in enumerate(embeddings)]
         except Exception:  # noqa: BLE001
             pass
 
@@ -596,7 +596,9 @@ class OllamaTransport:
             total += max(1, len(system) // 4)
         if tools:
             for t in tools:
-                total += max(1, (len(t.name) + len(t.description) + len(json.dumps(t.input_schema))) // 4)
+                total += max(
+                    1, (len(t.name) + len(t.description) + len(json.dumps(t.input_schema))) // 4
+                )
         for msg in messages:
             if isinstance(msg.content, str):
                 total += max(1, len(msg.content) // 4)

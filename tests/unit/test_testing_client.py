@@ -1,4 +1,5 @@
 """Unit tests for AgentTestClient."""
+
 from __future__ import annotations
 
 import pytest
@@ -13,6 +14,7 @@ from lauren_ai.testing import AgentTestClient
 @pytest.fixture()
 def simple_agent_and_client():
     """Return (agent_instance, AgentTestClient)."""
+
     @agent(model="mock-model")
     class EchoAgent:
         pass
@@ -20,8 +22,11 @@ def simple_agent_and_client():
     cfg, mock = LLMConfig.for_testing()
     mock.queue_response(
         Completion(
-            id="c1", model="mock", content="Echo response",
-            tool_calls=[], stop_reason="end_turn",
+            id="c1",
+            model="mock",
+            content="Echo response",
+            tool_calls=[],
+            stop_reason="end_turn",
             usage=TokenUsage(input_tokens=5, output_tokens=3),
         )
     )
@@ -53,8 +58,11 @@ class TestAgentTestClient:
         # Queue a response first since we already consumed the initial one
         client.mock.queue_response(
             Completion(
-                id="c2", model="mock", content="Another response",
-                tool_calls=[], stop_reason="end_turn",
+                id="c2",
+                model="mock",
+                content="Another response",
+                tool_calls=[],
+                stop_reason="end_turn",
                 usage=TokenUsage(input_tokens=3, output_tokens=2),
             )
         )
@@ -62,8 +70,11 @@ class TestAgentTestClient:
         # Re-queue after reset
         client.mock.queue_response(
             Completion(
-                id="c3", model="mock", content="Third response",
-                tool_calls=[], stop_reason="end_turn",
+                id="c3",
+                model="mock",
+                content="Third response",
+                tool_calls=[],
+                stop_reason="end_turn",
                 usage=TokenUsage(input_tokens=3, output_tokens=2),
             )
         )

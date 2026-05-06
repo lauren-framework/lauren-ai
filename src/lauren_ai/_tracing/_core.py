@@ -148,7 +148,7 @@ class TraceStore:
         """
         self._traces.append(trace)
         if len(self._traces) > self._max:
-            self._traces = self._traces[-self._max:]
+            self._traces = self._traces[-self._max :]
 
     async def get(self, trace_id: str) -> Trace | None:
         """Retrieve a trace by its identifier.

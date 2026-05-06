@@ -1,4 +1,5 @@
 """Unit tests for the @tool() decorator and schema generation."""
+
 from __future__ import annotations
 
 import pytest
@@ -38,6 +39,7 @@ class TestToolDecorator:
 
     def test_bare_usage_raises(self):
         with pytest.raises(Exception):  # DecoratorUsageError (from lauren or lauren_ai)
+
             @tool
             async def bad_tool(x: str) -> str:
                 return x
@@ -152,6 +154,7 @@ class TestToolClassInjectable:
             Args:
                 x: Input value.
             """
+
             async def run(self, x: str) -> str:
                 return x
 
@@ -169,10 +172,12 @@ class TestToolClassInjectable:
             Args:
                 x: Input.
             """
+
             async def run(self, x: str) -> str:
                 return x
 
         from lauren import Scope
+
         inj_meta = getattr(SingletonTool, INJECTABLE_META)
         assert inj_meta.scope == Scope.SINGLETON
 
@@ -189,6 +194,7 @@ class TestToolClassInjectable:
             Args:
                 x: Input.
             """
+
             async def run(self, x: str) -> str:
                 return x
 
@@ -206,6 +212,7 @@ class TestToolClassInjectable:
             Args:
                 x: Input.
             """
+
             async def run(self, x: str) -> str:
                 return x
 
@@ -222,10 +229,13 @@ class TestToolClassInjectable:
             Args:
                 x: Input.
             """
+
             async def run(self, x: str) -> str:
                 return x
 
-        assert TOOL_META in MetaTool.__dict__, "TOOL_META must be on the class __dict__ after injectable"
+        assert TOOL_META in MetaTool.__dict__, (
+            "TOOL_META must be on the class __dict__ after injectable"
+        )
 
 
 class TestToolInheritance:
@@ -239,6 +249,7 @@ class TestToolInheritance:
             Args:
                 x: Input.
             """
+
             async def run(self, x: str) -> str:
                 return x
 
@@ -256,6 +267,7 @@ class TestToolInheritance:
             Args:
                 x: Input.
             """
+
             async def run(self, x: str) -> str:
                 return x
 
@@ -266,6 +278,7 @@ class TestToolInheritance:
             Args:
                 x: Input.
             """
+
             async def run(self, x: str) -> str:
                 return x
 
@@ -275,6 +288,7 @@ class TestToolInheritance:
 
     def test_non_subclass_unaffected(self):
         """Registering an object with no TOOL_META raises ValueError, not MetadataInheritanceError."""
+
         class NoMeta:
             pass
 
@@ -398,20 +412,23 @@ class TestExecutionContext:
         @agent(model="mock-model")
         class CapturCtxAgent:
             """Test agent."""
+
             captured_ctx: AgentContext | None = None
 
             async def on_start(self, ctx: AgentContext) -> None:
                 CapturCtxAgent.captured_ctx = ctx
 
         mock_transport = MagicMock()
-        mock_transport.complete = AsyncMock(return_value=Completion(
-            id="c1",
-            model="mock-model",
-            content="done",
-            tool_calls=[],
-            stop_reason="end_turn",
-            usage=TokenUsage(input_tokens=10, output_tokens=5),
-        ))
+        mock_transport.complete = AsyncMock(
+            return_value=Completion(
+                id="c1",
+                model="mock-model",
+                content="done",
+                tool_calls=[],
+                stop_reason="end_turn",
+                usage=TokenUsage(input_tokens=10, output_tokens=5),
+            )
+        )
 
         runner = AgentRunner(
             transport=mock_transport,
@@ -422,9 +439,7 @@ class TestExecutionContext:
         sentinel = object()
         instance = CapturCtxAgent()
 
-        asyncio.run(
-            runner.run(instance, "hello", execution_context=sentinel)
-        )
+        asyncio.run(runner.run(instance, "hello", execution_context=sentinel))
 
         assert CapturCtxAgent.captured_ctx is not None
         assert CapturCtxAgent.captured_ctx.execution_context is sentinel
@@ -489,9 +504,7 @@ class TestExecutionContext:
         sentinel = object()
         instance = SpyAgent()
 
-        asyncio.run(
-            runner.run(instance, "go", execution_context=sentinel)
-        )
+        asyncio.run(runner.run(instance, "go", execution_context=sentinel))
 
         assert len(tool_contexts) == 1
         assert tool_contexts[0].execution_context is sentinel
@@ -521,5 +534,6 @@ class TestTypeToJsonSchema:
 
     def test_optional_str(self):
         from typing import Optional
+
         result = type_to_json_schema(Optional[str])
         assert result == {"type": "string"}

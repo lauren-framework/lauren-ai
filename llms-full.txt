@@ -170,7 +170,18 @@ result = Completion(
     tool_calls=[],
     stop_reason="end_turn",
     usage=TokenUsage(input_tokens=10, output_tokens=5),
+    thinking_blocks=[],        # list[ThinkingBlock | RedactedThinkingBlock] — Anthropic only
 )
+
+# ThinkingBlock / RedactedThinkingBlock (Anthropic extended thinking)
+from lauren_ai._transport import ThinkingBlock, RedactedThinkingBlock
+
+block = ThinkingBlock(thinking="Let me reason through this...", signature="ant-sig-abc")
+# block.thinking  — str — the model's reasoning text
+# block.signature — str — Anthropic cryptographic signature
+
+redacted = RedactedThinkingBlock(data="<opaque-base64-blob>")
+# redacted.data   — str — opaque base64 blob (safety-redacted content)
 
 # TokenUsage
 usage = TokenUsage(input_tokens=100, output_tokens=50)
@@ -410,8 +421,74 @@ response = await runner.run(
 
 ```python
 async for chunk in runner.run_stream(agent_instance, "Hello"):
-    print(chunk.delta, end="", flush=True)
+    if chunk.thinking_delta is not None:
+        print("[thinking]", chunk.thinking_delta, end="", flush=True)
+    elif chunk.delta:
+        print(chunk.delta, end="", flush=True)
+# chunk.delta          — str | None — incremental response text
+# chunk.thinking_delta — str | None — incremental thinking text (Anthropic only)
 ```
+
+---
+
+## Extended Thinking
+
+### Anthropic extended thinking
+
+```python
+from lauren_ai import agent, AgentConfig
+
+@agent(
+    model="claude-opus-4-6",
+    system="You are a careful analyst.",
+    thinking=True,
+    thinking_budget_tokens=10_000,   # tokens the model may spend on internal reasoning
+)
+class AnalystAgent: ...
+```
+
+> **Temperature is suppressed when `thinking=True`.**  Anthropic's API does not
+> accept a temperature parameter when extended thinking is enabled.  `AgentRunner`
+> detects `thinking=True` and omits temperature from the call entirely, regardless
+> of what `AgentConfig.temperature` is set to.
+
+Supported models: `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5`.
+Older pinned-version model IDs (e.g. `claude-3-opus-20240229`) do not support it.
+
+`AgentResponse.reasoning_traces` — `list[str]` — flat list of thinking text collected
+across all agentic-loop turns.  `Completion.thinking_blocks` — `list[ThinkingBlock |
+RedactedThinkingBlock]` — raw per-turn blocks before flattening.
+
+```python
+response = await runner.run(agent_inst, "Analyse the pros and cons of microservices.")
+print(response.content)          # final answer
+print(response.reasoning_traces) # list[str] — one entry per thinking block
+```
+
+`thinking_budget_tokens` guidance:
+
+| Budget | Use case |
+|---|---|
+| `2_000 – 5_000` | Simple reasoning, quick checks |
+| `8_000` | Default — balanced |
+| `16_000` | Complex multi-step analysis |
+| `32_000` | Very hard problems (significant cost increase) |
+
+The budget is a ceiling, not a target.
+
+### OpenAI reasoning models (o1 / o3)
+
+```python
+@agent(
+    model="o3",                           # or "o1", "o1-mini", "o3-mini"
+    reasoning_effort="high",              # "low" | "medium" | "high" | None
+    include_reasoning_in_response=True,   # expose reasoning in AgentResponse
+)
+class ReasoningAgent: ...
+```
+
+`reasoning_effort` is silently ignored by non-o-series OpenAI models and by
+Anthropic / Ollama transports.
 
 ---
 

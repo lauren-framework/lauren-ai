@@ -1,4 +1,5 @@
 """Unit tests for Chain, Runnable, RunnableLambda, and the chain() factory."""
+
 from __future__ import annotations
 
 import pytest
@@ -237,7 +238,7 @@ class TestChainFactory:
         assert c.steps == []
 
     async def test_chain_factory_single_step(self):
-        c = chain(RunnableLambda(lambda x: x ** 2))
+        c = chain(RunnableLambda(lambda x: x**2))
         result = await c.invoke(5)
         assert result == 25
 

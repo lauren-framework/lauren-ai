@@ -85,9 +85,7 @@ class TestSingleModuleProtocolResolution:
         app = LaurenFactory.create(AgentMod)
         loop = asyncio.new_event_loop()
         try:
-            runner = loop.run_until_complete(
-                app.container.resolve(AgentMod.runner_class)
-            )
+            runner = loop.run_until_complete(app.container.resolve(AgentMod.runner_class))
         finally:
             loop.close()
 
@@ -197,9 +195,7 @@ class TestDelegationToolResolvesTargetRunner:
         app = LaurenFactory.create(AppModule)
         loop = asyncio.new_event_loop()
         try:
-            tool_instance = loop.run_until_complete(
-                app.container.resolve(DelegateTool)
-            )
+            tool_instance = loop.run_until_complete(app.container.resolve(DelegateTool))
         finally:
             loop.close()
 

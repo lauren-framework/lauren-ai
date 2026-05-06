@@ -1,4 +1,5 @@
 """Extended unit tests for _memory/__init__.py — covers uncovered branches."""
+
 from __future__ import annotations
 
 from lauren_ai._memory import (
@@ -45,6 +46,7 @@ class TestEstimateContentLength:
     def test_list_of_mixed_items(self):
         class Block:
             text = None
+
         result = _estimate_content_length([Block()])
         assert result > 0  # json.dumps(block) fallback
 
@@ -301,6 +303,7 @@ class TestShortTermMemoryExtended:
 
     def test_tool_call_id_fallback_to_id_attr(self):
         """Tool calls with 'id' instead of 'tool_use_id' should work."""
+
         class FakeToolCall:
             id = "tc_from_id"
             tool_use_id = None  # Will fall back to id

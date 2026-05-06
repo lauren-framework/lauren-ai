@@ -1,4 +1,5 @@
 """Unit tests for the tracing system."""
+
 from __future__ import annotations
 
 import pytest
@@ -297,6 +298,7 @@ class TestTracedBareUsageGuard:
         from lauren_ai._exceptions import DecoratorUsageError
 
         with pytest.raises(DecoratorUsageError, match="parentheses"):
+
             @traced
             async def my_fn() -> None:
                 pass
@@ -305,9 +307,11 @@ class TestTracedBareUsageGuard:
         from lauren_ai._exceptions import DecoratorUsageError
 
         with pytest.raises(DecoratorUsageError) as exc_info:
+
             @traced
             async def my_fn() -> None:
                 pass
+
         assert exc_info.value.decorator_name == "traced"
 
 
@@ -336,14 +340,17 @@ class TestSetGetTraceStore:
     def setup_method(self) -> None:
         # Reset global state before each test.
         from lauren_ai._tracing import _traced as _t
+
         _t._GLOBAL_TRACE_STORE = None
 
     def teardown_method(self) -> None:
         from lauren_ai._tracing import _traced as _t
+
         _t._GLOBAL_TRACE_STORE = None
 
     def test_get_trace_store_returns_none_by_default(self):
         from lauren_ai._tracing import get_trace_store
+
         assert get_trace_store() is None
 
     def test_set_and_get_trace_store(self):

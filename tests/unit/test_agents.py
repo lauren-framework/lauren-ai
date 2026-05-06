@@ -1,4 +1,5 @@
 """Unit tests for the @agent() and @use_tools() decorators."""
+
 from __future__ import annotations
 
 import pytest
@@ -29,6 +30,7 @@ class TestAgentDecorator:
 
     def test_bare_usage_raises(self):
         with pytest.raises(DecoratorUsageError):
+
             @agent
             class BadAgent:
                 pass

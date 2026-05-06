@@ -65,6 +65,7 @@ def _require_openai() -> Any:
     """
     try:
         import openai  # noqa: PLC0415
+
         return openai
     except ImportError as exc:
         raise ImportError(_OPENAI_IMPORT_ERROR) from exc
@@ -158,11 +159,17 @@ def _message_to_openai(message: Any) -> list[dict[str, Any]]:
         content_parts: list[dict[str, Any]] = []
         tool_calls_list: list[dict[str, Any]] = []
         for block in regular_blocks:
-            block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", "")
+            block_type = (
+                block.get("type") if isinstance(block, dict) else getattr(block, "type", "")
+            )
             if block_type == "tool_use":
                 if isinstance(block, dict):
                     # ShortTermMemory stores tool_use blocks with an "id" key
-                    blk_id = block.get("id") or block.get("tool_use_id") or f"call_{uuid.uuid4().hex[:16]}"
+                    blk_id = (
+                        block.get("id")
+                        or block.get("tool_use_id")
+                        or f"call_{uuid.uuid4().hex[:16]}"
+                    )
                     blk_name = block.get("name", "")
                     blk_input = block.get("input", {})
                 else:
@@ -241,7 +248,9 @@ def _tool_choice_to_openai(tool_choice: ToolChoice) -> Any:
     return {"type": "function", "function": {"name": tool_choice.name or ""}}
 
 
-def _parse_stop_reason(raw: str | None) -> Literal["end_turn", "tool_use", "max_tokens", "stop_sequence"]:
+def _parse_stop_reason(
+    raw: str | None,
+) -> Literal["end_turn", "tool_use", "max_tokens", "stop_sequence"]:
     """Normalise OpenAI finish_reason to canonical stop reasons.
 
     :param raw: The OpenAI ``finish_reason`` string.
@@ -366,9 +375,13 @@ class OpenAITransport:
         if isinstance(exc, _openai.APIStatusError):
             code = status_code or 0
             if code in (429,):
-                return TransientTransportError(str(exc), status_code=code, provider="openai", cause=exc)
+                return TransientTransportError(
+                    str(exc), status_code=code, provider="openai", cause=exc
+                )
             if code >= 500:
-                return TransientTransportError(str(exc), status_code=code, provider="openai", cause=exc)
+                return TransientTransportError(
+                    str(exc), status_code=code, provider="openai", cause=exc
+                )
             if code in (401, 403):
                 return AuthTransportError(str(exc), status_code=code, provider="openai", cause=exc)
             return TransportError(str(exc), status_code=code, provider="openai", cause=exc)
@@ -522,7 +535,7 @@ class OpenAITransport:
                 if classified is not None:
                     if isinstance(classified, TransientTransportError) and attempt < max_retries:
                         last_exc = classified
-                        wait = (2 ** attempt) * 0.5
+                        wait = (2**attempt) * 0.5
                         await asyncio.sleep(wait)
                         continue
                     raise classified from exc
@@ -613,7 +626,7 @@ class OpenAITransport:
             # Partial tool call accumulation state.
             _tool_call_state: dict[int, dict[str, Any]] = {}  # index -> {id, name, args}
 
-            async with (await client.chat.completions.create(**call_kwargs)) as stream:
+            async with await client.chat.completions.create(**call_kwargs) as stream:
                 async for chunk in stream:
                     choices = getattr(chunk, "choices", [])
                     usage_obj = getattr(chunk, "usage", None)
@@ -714,10 +727,7 @@ class OpenAITransport:
             kwargs["dimensions"] = dimensions
         try:
             response = await client.embeddings.create(**kwargs)
-            return [
-                Embedding(index=item.index, vector=item.embedding)
-                for item in response.data
-            ]
+            return [Embedding(index=item.index, vector=item.embedding) for item in response.data]
         except Exception as exc:  # noqa: BLE001
             classified = self._classify_exception(exc)
             if classified is not None:
@@ -753,7 +763,9 @@ class OpenAITransport:
             total += max(1, len(system) // 4)
         if tools:
             for t in tools:
-                total += max(1, (len(t.name) + len(t.description) + len(json.dumps(t.input_schema))) // 4)
+                total += max(
+                    1, (len(t.name) + len(t.description) + len(json.dumps(t.input_schema))) // 4
+                )
         for msg in messages:
             if isinstance(msg.content, str):
                 total += max(1, len(msg.content) // 4)

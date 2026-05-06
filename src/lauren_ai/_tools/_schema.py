@@ -56,6 +56,7 @@ class _InputSchema(TypedDict, total=False):
 # Docstring parser
 # ---------------------------------------------------------------------------
 
+
 def _parse_docstring(doc: str) -> tuple[str, dict[str, str]]:
     """Parse a docstring into ``(description, param_descriptions)``.
 
@@ -189,6 +190,7 @@ def _parse_docstring(doc: str) -> tuple[str, dict[str, str]]:
 # ---------------------------------------------------------------------------
 # Type → JSON Schema conversion
 # ---------------------------------------------------------------------------
+
 
 def type_to_json_schema(ann: Any, *, depth: int = 0) -> dict[str, Any]:
     """Convert a Python type annotation to a JSON Schema dict.
@@ -328,6 +330,7 @@ def type_to_json_schema(ann: Any, *, depth: int = 0) -> dict[str, Any]:
 # Main schema generator
 # ---------------------------------------------------------------------------
 
+
 def generate_tool_schema(
     func_or_class: Any,
     *,
@@ -362,9 +365,7 @@ def generate_tool_schema(
     if is_class:
         entry_fn: Any = getattr(func_or_class, "run", None)
         if entry_fn is None:
-            raise ValueError(
-                f"Class-form tool {func_or_class!r} must define a 'run' method."
-            )
+            raise ValueError(f"Class-form tool {func_or_class!r} must define a 'run' method.")
         # Description from class docstring; fallback to run() docstring
         raw_doc = inspect.getdoc(func_or_class) or inspect.getdoc(entry_fn) or ""
     else:

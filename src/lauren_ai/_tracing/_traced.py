@@ -107,7 +107,9 @@ def traced(
             decorator_name="traced",
         )
 
-    def decorator(fn: Callable[_P, Coroutine[Any, Any, _R]]) -> Callable[_P, Coroutine[Any, Any, _R]]:
+    def decorator(
+        fn: Callable[_P, Coroutine[Any, Any, _R]],
+    ) -> Callable[_P, Coroutine[Any, Any, _R]]:
         span_name = name or fn.__name__
 
         @functools.wraps(fn)
@@ -153,9 +155,8 @@ def traced(
                         for exporter in getattr(store, "_exporters", []):
                             try:
                                 import asyncio
-                                asyncio.get_event_loop().create_task(
-                                    exporter.export(trace)
-                                )
+
+                                asyncio.get_event_loop().create_task(exporter.export(trace))
                             except Exception:
                                 pass
 

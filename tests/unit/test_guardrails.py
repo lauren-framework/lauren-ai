@@ -1,4 +1,5 @@
 """Unit tests for guardrails."""
+
 from __future__ import annotations
 
 import pytest
@@ -68,6 +69,7 @@ class TestUseGuardrailsDecorator:
 
     def test_bare_usage_raises(self):
         with pytest.raises(DecoratorUsageError, match="parentheses"):
+
             @use_guardrails
             class Bad:
                 pass
@@ -154,12 +156,14 @@ class TestGuardrailClassDecorator:
 
     def test_bare_usage_raises(self):
         with pytest.raises(DecoratorUsageError, match="parentheses"):
+
             @guardrail
             class Bad:
                 pass
 
     def test_returns_same_class_identity_attributes(self):
         """Decorated class preserves its own attributes."""
+
         @guardrail()
         class MyFilter:
             threshold = 0.9
@@ -205,6 +209,7 @@ class TestGuardrailClassDecorator:
 
     def test_does_not_affect_use_guardrails_sentinel(self):
         """@guardrail() on a provider class must NOT set USE_GUARDRAILS_META."""
+
         @guardrail()
         class MyFilter:
             pass
@@ -261,9 +266,7 @@ class TestTopicFilter:
 class TestPIIRedactor:
     async def test_redacts_email(self):
         guard = PIIRedactor(entities=["EMAIL"])
-        decision = await guard.check(
-            "Contact alice@example.com for info.", make_ctx()
-        )
+        decision = await guard.check("Contact alice@example.com for info.", make_ctx())
         assert decision.action == "modify"
         assert "alice@example.com" not in (decision.modified_content or "")
         assert "[REDACTED]" in (decision.modified_content or "")

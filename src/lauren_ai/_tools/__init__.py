@@ -42,6 +42,7 @@ _T = TypeVar("_T")
 # Schema type
 # ---------------------------------------------------------------------------
 
+
 class ToolSchema(TypedDict, total=False):
     """JSON Schema object for a tool's input parameters.
 
@@ -61,6 +62,7 @@ class ToolSchema(TypedDict, total=False):
 # ---------------------------------------------------------------------------
 # ToolContext
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class ToolContext:
@@ -113,6 +115,7 @@ class ToolContext:
 # ---------------------------------------------------------------------------
 # ToolResult
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class ToolResult:
@@ -176,6 +179,7 @@ class ToolResult:
 # ---------------------------------------------------------------------------
 # ToolMeta
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class ToolMeta:
@@ -251,6 +255,7 @@ TOOL_META: str = "__lauren_ai_tool__"
 # Tool map helper
 # ---------------------------------------------------------------------------
 
+
 def _add_to_tool_map(
     tool_map: dict,
     tool_or_cls: Any,
@@ -275,7 +280,11 @@ def _add_to_tool_map(
     :raises ValueError: When the object has no ``TOOL_META`` or a name
         collision is detected.
     """
-    _cls = tool_or_cls if inspect.isclass(tool_or_cls) else (type(instance) if instance is not None else None)
+    _cls = (
+        tool_or_cls
+        if inspect.isclass(tool_or_cls)
+        else (type(instance) if instance is not None else None)
+    )
     if _cls is not None and TOOL_META not in _cls.__dict__:
         _base = next((b for b in _cls.__mro__[1:] if TOOL_META in b.__dict__), None)
         if _base is not None:
@@ -312,6 +321,7 @@ def _add_to_tool_map(
 # ---------------------------------------------------------------------------
 # @tool() decorator
 # ---------------------------------------------------------------------------
+
 
 # Import lazily to avoid circular dependency at module initialisation time.
 # _schema is a sibling module inside this package.
@@ -372,6 +382,7 @@ def _build_meta(
         sig = inspect.signature(entry)
         import sys as _sys
         import typing as _typing
+
         _entry_module = _sys.modules.get(entry.__module__)
         _globalns = vars(_entry_module) if _entry_module is not None else {}
         try:
@@ -484,9 +495,7 @@ def tool(
     if args and callable(args[0]):
         from lauren.exceptions import DecoratorUsageError  # noqa: PLC0415
 
-        raise DecoratorUsageError(
-            "@tool must be used with parentheses: @tool()"
-        )
+        raise DecoratorUsageError("@tool must be used with parentheses: @tool()")
 
     def decorator(fn_or_cls: _T) -> _T:
         meta = _build_meta(

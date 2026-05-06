@@ -1,4 +1,5 @@
 """Unit tests for the workflow primitives."""
+
 from __future__ import annotations
 
 import pytest

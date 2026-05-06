@@ -178,8 +178,12 @@ class PricingTable:
         return CostEstimate(
             input_usd=usage.input_tokens * pricing.input_per_m / 1_000_000,
             output_usd=usage.output_tokens * pricing.output_per_m / 1_000_000,
-            cache_read_usd=getattr(usage, "cache_read_tokens", 0) * pricing.cache_read_per_m / 1_000_000,
-            cache_write_usd=getattr(usage, "cache_write_tokens", 0) * pricing.cache_write_per_m / 1_000_000,
+            cache_read_usd=getattr(usage, "cache_read_tokens", 0)
+            * pricing.cache_read_per_m
+            / 1_000_000,
+            cache_write_usd=getattr(usage, "cache_write_tokens", 0)
+            * pricing.cache_write_per_m
+            / 1_000_000,
         )
 
     def get(self, model: str) -> ModelPricing | None:
@@ -198,28 +202,38 @@ class PricingTable:
 
 def default_pricing_table() -> PricingTable:
     """Return the built-in pricing table with current model prices."""
-    return PricingTable(models={
-        # Anthropic Claude
-        "claude-haiku-4-5": ModelPricing(
-            input_per_m=0.80, output_per_m=4.00,
-            cache_read_per_m=0.08, cache_write_per_m=1.00,
-        ),
-        "claude-haiku-4-5-20251001": ModelPricing(
-            input_per_m=0.80, output_per_m=4.00,
-            cache_read_per_m=0.08, cache_write_per_m=1.00,
-        ),
-        "claude-sonnet-4-6": ModelPricing(
-            input_per_m=3.00, output_per_m=15.00,
-            cache_read_per_m=0.30, cache_write_per_m=3.75,
-        ),
-        "claude-opus-4-6": ModelPricing(
-            input_per_m=15.00, output_per_m=75.00,
-            cache_read_per_m=1.50, cache_write_per_m=18.75,
-        ),
-        # OpenAI
-        "gpt-4o": ModelPricing(input_per_m=5.00, output_per_m=15.00),
-        "gpt-4o-mini": ModelPricing(input_per_m=0.15, output_per_m=0.60),
-        "gpt-4-turbo": ModelPricing(input_per_m=10.00, output_per_m=30.00),
-        "o1": ModelPricing(input_per_m=15.00, output_per_m=60.00),
-        "o3-mini": ModelPricing(input_per_m=1.10, output_per_m=4.40),
-    })
+    return PricingTable(
+        models={
+            # Anthropic Claude
+            "claude-haiku-4-5": ModelPricing(
+                input_per_m=0.80,
+                output_per_m=4.00,
+                cache_read_per_m=0.08,
+                cache_write_per_m=1.00,
+            ),
+            "claude-haiku-4-5-20251001": ModelPricing(
+                input_per_m=0.80,
+                output_per_m=4.00,
+                cache_read_per_m=0.08,
+                cache_write_per_m=1.00,
+            ),
+            "claude-sonnet-4-6": ModelPricing(
+                input_per_m=3.00,
+                output_per_m=15.00,
+                cache_read_per_m=0.30,
+                cache_write_per_m=3.75,
+            ),
+            "claude-opus-4-6": ModelPricing(
+                input_per_m=15.00,
+                output_per_m=75.00,
+                cache_read_per_m=1.50,
+                cache_write_per_m=18.75,
+            ),
+            # OpenAI
+            "gpt-4o": ModelPricing(input_per_m=5.00, output_per_m=15.00),
+            "gpt-4o-mini": ModelPricing(input_per_m=0.15, output_per_m=0.60),
+            "gpt-4-turbo": ModelPricing(input_per_m=10.00, output_per_m=30.00),
+            "o1": ModelPricing(input_per_m=15.00, output_per_m=60.00),
+            "o3-mini": ModelPricing(input_per_m=1.10, output_per_m=4.40),
+        }
+    )

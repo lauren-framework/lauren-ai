@@ -312,9 +312,7 @@ class TestToolCallSignals:
         mock = MockTransport()
         tools = _make_tool_map(boom_tool)
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(
-            transport=mock, tools=tools, config=config, signals=bus
-        )
+        runner = AgentRunner(transport=mock, tools=tools, config=config, signals=bus)
 
         @agent(model="mock-model")
         @use_tools(boom_tool)

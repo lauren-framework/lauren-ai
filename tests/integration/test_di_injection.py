@@ -493,9 +493,7 @@ class TestInjectsBreaksCircularDependency:
         loop = asyncio.new_event_loop()
         try:
             sr = loop.run_until_complete(app.container.resolve(SpecialistRunner))
-            ar = loop.run_until_complete(
-                app.container.resolve(OrchestratorMod.runner_class)
-            )
+            ar = loop.run_until_complete(app.container.resolve(OrchestratorMod.runner_class))
         finally:
             loop.close()
         assert isinstance(sr, SpecialistRunner)
@@ -657,3 +655,157 @@ class TestGenericAliasToolEndToEnd:
         # Two separate tool instances (one per alias token)
         assert len(instances) == 2
         assert instances[0] != instances[1]
+
+
+# ---------------------------------------------------------------------------
+# TestSharedTools
+# ---------------------------------------------------------------------------
+
+
+class TestSharedTools:
+    """shared_tools= injects DI-owned tool instances into a borrowing AgentModule.
+
+    Pattern mirrors the banking chatbot: a plain ``@module`` (CheckAuthModule)
+    owns and exports the tool; each AgentModule imports it and lists it in
+    ``shared_tools=`` so the runner receives the singleton instance without
+    re-registering the tool as a provider.
+    """
+
+    def _make_shared_tool(self):
+        """Return (SharedTool class, OwnerModule, calls list) with no-dep tool."""
+        calls: list[str] = []
+
+        @tool()
+        class SharedTool:
+            """Echo a greeting. Args: name: The name to greet."""
+
+            async def run(self, name: str) -> dict:
+                calls.append(name)
+                return {"greeting": f"hello {name}"}
+
+        @module(providers=[SharedTool], exports=[SharedTool])
+        class OwnerModule: ...
+
+        return SharedTool, OwnerModule, calls
+
+    def test_shared_tool_in_runner_tools(self):
+        """shared_tools instance lands in runner._tools under the correct key."""
+        import asyncio
+
+        SharedTool, OwnerModule, _ = self._make_shared_tool()
+
+        @agent(model=None)
+        class BorrowerAgent: ...
+
+        cfg, mock = LLMConfig.for_testing()
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        BorrowerMod = AgentModule.for_root(
+            agents=[BorrowerAgent],
+            imports=[LLMProv, OwnerModule],
+            shared_tools=[SharedTool],
+        )
+
+        @module(imports=[LLMProv, OwnerModule, BorrowerMod])
+        class AppModule: ...
+
+        app = LaurenFactory.create(AppModule)
+        loop = asyncio.new_event_loop()
+        try:
+            runner = loop.run_until_complete(app.container.resolve(BorrowerMod.runner_class))
+        finally:
+            loop.close()
+
+        assert "shared_tool" in runner._tools
+
+    def test_shared_tool_no_duplicate_provider_error(self):
+        """shared_tools= does not re-register the tool, so no DuplicateBindingError."""
+        SharedTool, OwnerModule, _ = self._make_shared_tool()
+
+        @agent(model=None)
+        class BorrowerAgent2: ...
+
+        cfg, mock = LLMConfig.for_testing()
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        BorrowerMod = AgentModule.for_root(
+            agents=[BorrowerAgent2],
+            imports=[LLMProv, OwnerModule],
+            shared_tools=[SharedTool],
+        )
+
+        @module(imports=[LLMProv, OwnerModule, BorrowerMod])
+        class AppModule: ...
+
+        app = LaurenFactory.create(AppModule)
+        assert app is not None
+
+    def test_shared_tool_instance_is_the_di_singleton(self):
+        """The instance in runner._tools is the same object the container returns."""
+        import asyncio
+
+        SharedTool, OwnerModule, _ = self._make_shared_tool()
+
+        @agent(model=None)
+        class BorrowerAgent3: ...
+
+        cfg, mock = LLMConfig.for_testing()
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        BorrowerMod = AgentModule.for_root(
+            agents=[BorrowerAgent3],
+            imports=[LLMProv, OwnerModule],
+            shared_tools=[SharedTool],
+        )
+
+        @module(imports=[LLMProv, OwnerModule, BorrowerMod])
+        class AppModule: ...
+
+        app = LaurenFactory.create(AppModule)
+        loop = asyncio.new_event_loop()
+        try:
+            runner = loop.run_until_complete(app.container.resolve(BorrowerMod.runner_class))
+            di_instance = loop.run_until_complete(app.container.resolve(SharedTool))
+        finally:
+            loop.close()
+
+        tool_instance, _ = runner._tools["shared_tool"]
+        assert tool_instance is di_instance
+
+    def test_shared_tool_agent_can_call_it(self):
+        """An agent can invoke a shared_tools tool during a run and get its result."""
+        SharedTool, OwnerModule, calls = self._make_shared_tool()
+
+        @agent(model="mock-model")
+        @use_tools(SharedTool)
+        class BorrowerAgent4: ...
+
+        @controller("/borrow")
+        class BorrowController:
+            def __init__(self, runner: AgentRunner, ai: BorrowerAgent4) -> None:
+                self._runner = runner
+                self._ai = ai
+
+            @post("/chat")
+            async def chat(self, body: Json[dict]) -> dict:
+                r = await self._runner.run(self._ai, body["message"])
+                return {"content": r.content}
+
+        cfg, mock = LLMConfig.for_testing()
+        mock.queue_tool_use("shared_tool", {"name": "world"})
+        mock.queue_response(_text("hello world", id="c2"))
+
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        BorrowerMod = AgentModule.for_root(
+            agents=[BorrowerAgent4],
+            imports=[LLMProv, OwnerModule],
+            shared_tools=[SharedTool],
+        )
+
+        @module(imports=[LLMProv, OwnerModule, BorrowerMod], controllers=[BorrowController])
+        class AppModule: ...
+
+        r = TestClient(LaurenFactory.create(AppModule)).post(
+            "/borrow/chat", json={"message": "Say hello."}
+        )
+
+        assert r.status_code == 200
+        assert r.json()["content"] == "hello world"
+        assert calls == ["world"]

@@ -59,6 +59,7 @@ class RateLimiter:
             ),
         )
     """
+
     requests_per_minute: int | None = None
     tokens_per_minute: int | None = None
     max_retries: int = 5
@@ -107,7 +108,7 @@ class RateLimiter:
         """Compute sleep duration for a retry attempt."""
         if retry_after is not None:
             return retry_after
-        base = min(self.initial_backoff_s * (2 ** attempt), self.max_backoff_s)
+        base = min(self.initial_backoff_s * (2**attempt), self.max_backoff_s)
         if self.jitter:
-            base *= (0.5 + random.random() * 0.5)
+            base *= 0.5 + random.random() * 0.5
         return base

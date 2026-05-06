@@ -9,6 +9,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 @dataclass
 class GuardrailDecision:
     """Result of a guardrail check."""
+
     action: Literal["pass", "block", "modify"]
     modified_content: str | None = None
     violation: str | None = None
@@ -18,6 +19,7 @@ class GuardrailDecision:
 @dataclass
 class GuardrailContext:
     """Per-call context passed to each guardrail check."""
+
     agent_name: str = ""
     conversation_id: str | None = None
     user_id: str | None = None
@@ -27,6 +29,7 @@ class GuardrailContext:
 @dataclass
 class GuardrailViolated:
     """Signal emitted when a guardrail fires."""
+
     guardrail_name: str = ""
     phase: Literal["input", "output"] = "input"
     action: Literal["block", "modify"] = "block"

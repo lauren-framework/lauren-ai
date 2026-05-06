@@ -1,4 +1,5 @@
 """Extended unit tests for _module.py — LLMService, EmbedService, LLMModule, AgentModule."""
+
 from __future__ import annotations
 
 import pytest
@@ -80,8 +81,11 @@ class TestLLMService:
         service = LLMService(transport=mock, config=cfg)
         mock.queue_response(
             Completion(
-                id="c1", model="mock", content="Hi",
-                tool_calls=[], stop_reason="end_turn",
+                id="c1",
+                model="mock",
+                content="Hi",
+                tool_calls=[],
+                stop_reason="end_turn",
                 usage=TokenUsage(input_tokens=5, output_tokens=3),
             )
         )
@@ -104,8 +108,11 @@ class TestLLMService:
         service = LLMService(transport=mock, config=cfg)
         mock.queue_response(
             Completion(
-                id="c1", model="mock", content="Hi",
-                tool_calls=[], stop_reason="end_turn",
+                id="c1",
+                model="mock",
+                content="Hi",
+                tool_calls=[],
+                stop_reason="end_turn",
                 usage=TokenUsage(input_tokens=5, output_tokens=3),
             )
         )
@@ -125,8 +132,11 @@ class TestLLMService:
         service, mock = self._make_service()
         mock.queue_response(
             Completion(
-                id="c1", model="mock", content="OK",
-                tool_calls=[], stop_reason="end_turn",
+                id="c1",
+                model="mock",
+                content="OK",
+                tool_calls=[],
+                stop_reason="end_turn",
                 usage=TokenUsage(input_tokens=5, output_tokens=2),
             )
         )
@@ -139,8 +149,11 @@ class TestLLMService:
         service, mock = self._make_service()
         mock.queue_response(
             Completion(
-                id="c1", model="mock", content="OK",
-                tool_calls=[], stop_reason="end_turn",
+                id="c1",
+                model="mock",
+                content="OK",
+                tool_calls=[],
+                stop_reason="end_turn",
                 usage=TokenUsage(input_tokens=5, output_tokens=2),
             )
         )
@@ -154,8 +167,11 @@ class TestLLMService:
         service, mock = self._make_service()
         mock.queue_response(
             Completion(
-                id="c1", model="mock", content="Streamed",
-                tool_calls=[], stop_reason="end_turn",
+                id="c1",
+                model="mock",
+                content="Streamed",
+                tool_calls=[],
+                stop_reason="end_turn",
                 usage=TokenUsage(input_tokens=5, output_tokens=2),
             )
         )
@@ -167,6 +183,7 @@ class TestLLMService:
     async def test_embed_delegates_to_transport(self):
         service, mock = self._make_service()
         from lauren_ai._transport import Embedding
+
         mock.queue_embed([Embedding(index=0, vector=[0.1, 0.2, 0.3])])
         embeddings = await service.embed(["hello world"])
         assert len(embeddings) == 1
@@ -183,6 +200,7 @@ class TestLLMService:
         )
         service = LLMService(transport=mock, config=cfg)
         from lauren_ai._transport import Embedding
+
         mock.queue_embed([Embedding(index=0, vector=[0.0])])
         await service.embed(["test"])
         # embed_model should be used (not main model)
@@ -212,9 +230,11 @@ class TestLLMService:
     @pytest.mark.asyncio
     async def test_count_tokens_fallback_heuristic(self):
         """Test the heuristic fallback when transport has no count_tokens method."""
+
         class MinimalTransport:
             async def complete(self, *args, **kwargs):
                 pass
+
             async def embed(self, *args, **kwargs):
                 return []
 
@@ -233,6 +253,7 @@ class TestLLMService:
         class MinimalTransport:
             async def complete(self, *args, **kwargs):
                 pass
+
             async def embed(self, *args, **kwargs):
                 return []
 
@@ -256,6 +277,7 @@ class TestEmbedService:
         llm = LLMService(transport=mock, config=cfg)
         embed_svc = EmbedService(llm_service=llm)
         from lauren_ai._transport import Embedding
+
         mock.queue_embed([Embedding(index=0, vector=[1.0, 2.0])])
         result = await embed_svc.embed(["test"])
         assert len(result) == 1
@@ -291,6 +313,7 @@ class TestBuildTransportExtended:
         )
         try:
             import httpx  # noqa: F401
+
             # httpx present — OllamaTransport can be built, test different path
             # or just skip if we can't trigger the ImportError
             pytest.skip("httpx is installed, can't test missing-package path")
@@ -308,6 +331,7 @@ class TestBuildTransportExtended:
         )
         try:
             import litellm  # noqa: F401
+
             pytest.skip("litellm is installed, can't test missing-package path")
         except ImportError:
             with pytest.raises(AgentConfigError) as exc_info:
@@ -327,13 +351,17 @@ class TestLLMServiceExtended:
         service, mock = self._make_service()
         mock.queue_response(
             Completion(
-                id="c1", model="mock", content="OK",
-                tool_calls=[], stop_reason="end_turn",
+                id="c1",
+                model="mock",
+                content="OK",
+                tool_calls=[],
+                stop_reason="end_turn",
                 usage=TokenUsage(input_tokens=5, output_tokens=2),
             )
         )
         # Use a simple dict as tool_choice to trigger the tool_choice kwarg path
         from lauren_ai._transport import ToolChoice
+
         await service.complete(
             [Message.user("Hi")],
             tool_choice=ToolChoice(type="auto"),
@@ -718,7 +746,9 @@ class TestAgentModuleGenericAliasTools:
         mod_b = AgentModule.for_root(agents=[_AgentB], tools=[FlexTool[MarkerB]])
 
         def _alias_tokens(mod):
-            return {p.provide for p in mod.__lauren_module__.providers if isinstance(p, CustomProvider)}
+            return {
+                p.provide for p in mod.__lauren_module__.providers if isinstance(p, CustomProvider)
+            }
 
         tokens_a = _alias_tokens(mod_a)
         tokens_b = _alias_tokens(mod_b)

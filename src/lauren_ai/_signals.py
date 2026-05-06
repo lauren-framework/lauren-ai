@@ -227,7 +227,7 @@ class AgentTurnComplete(LifecycleEvent):  # type: ignore[misc,valid-type]
     agent_id: str = ""
     agent_class: type | None = None
     turn: int = 0
-    turn_usage: Any = None    # TokenUsage
+    turn_usage: Any = None  # TokenUsage
     cumulative_usage: Any = None  # TokenUsage
 
 
@@ -333,9 +333,8 @@ class SignalBus:
             unchanged.
         :rtype: Callable
         """
-        def decorator(
-            handler: Callable[..., Awaitable[None]]
-        ) -> Callable[..., Awaitable[None]]:
+
+        def decorator(handler: Callable[..., Awaitable[None]]) -> Callable[..., Awaitable[None]]:
             if event_type not in self._handlers:
                 self._handlers[event_type] = []
             self._handlers[event_type].append(handler)
@@ -361,6 +360,7 @@ class SignalBus:
         for result in results:
             if isinstance(result, Exception):
                 import sys  # noqa: PLC0415
+
                 print(
                     f"SignalBus: handler raised {type(result).__name__}: {result}",
                     file=sys.stderr,

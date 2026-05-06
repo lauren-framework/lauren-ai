@@ -1,4 +1,5 @@
 """Unit tests for transport types and MockTransport."""
+
 from __future__ import annotations
 
 import pytest
@@ -49,6 +50,7 @@ class TestMessage:
 
     def test_tool_result_content_block(self):
         from lauren_ai._transport import ContentBlock
+
         block = ContentBlock.tool_result_block(tool_use_id="tc1", content="result")
         assert block.type == "tool_result"
         assert block.tool_use_id == "tc1"
@@ -103,8 +105,11 @@ class TestMockTransport:
         mock = MockTransport()
         mock.queue_response(
             Completion(
-                id="c1", model="mock", content="Hi",
-                tool_calls=[], stop_reason="end_turn",
+                id="c1",
+                model="mock",
+                content="Hi",
+                tool_calls=[],
+                stop_reason="end_turn",
                 usage=TokenUsage(input_tokens=5, output_tokens=3),
             )
         )
@@ -127,8 +132,11 @@ class TestMockTransport:
         mock = MockTransport()
         mock.queue_response(
             Completion(
-                id="c1", model="mock", content="x",
-                tool_calls=[], stop_reason="end_turn",
+                id="c1",
+                model="mock",
+                content="x",
+                tool_calls=[],
+                stop_reason="end_turn",
                 usage=TokenUsage(input_tokens=1, output_tokens=1),
             )
         )

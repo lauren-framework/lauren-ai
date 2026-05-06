@@ -1,5 +1,6 @@
 """Extended unit tests for _middleware.py — BudgetUsage, InMemoryRateLimitStore,
 ai_rate_limit, conversation_middleware fallback path."""
+
 from __future__ import annotations
 
 import time
@@ -276,7 +277,9 @@ class TestConversationMiddleware:
     @pytest.mark.asyncio
     async def test_returns_class_without_store(self):
         # Should not raise during class creation
-        cls = conversation_middleware(store=None, header="x-conv-id", cookie=None, auto_create=False)
+        cls = conversation_middleware(
+            store=None, header="x-conv-id", cookie=None, auto_create=False
+        )
         assert cls is not None
 
 

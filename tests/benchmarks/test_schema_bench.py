@@ -4,6 +4,7 @@ Run with::
 
     pytest tests/benchmarks/ -m benchmark --benchmark-autosave
 """
+
 from __future__ import annotations
 
 import pytest

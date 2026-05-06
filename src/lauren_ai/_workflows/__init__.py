@@ -361,8 +361,7 @@ class Workflow:
             step_results.append(result)
             if result.error:
                 raise WorkflowError(
-                    f"Workflow {self.name!r} failed at step {result.name!r}: "
-                    f"{result.error}",
+                    f"Workflow {self.name!r} failed at step {result.name!r}: {result.error}",
                     cause=result.error,
                 )
             if result.output is not None:

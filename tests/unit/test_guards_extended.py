@@ -1,5 +1,6 @@
 """Extended unit tests for _guards.py — covers BudgetUsage.reset,
 is_window_expired, safety_guard dispatch and log paths."""
+
 from __future__ import annotations
 
 import time

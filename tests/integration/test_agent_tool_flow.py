@@ -216,7 +216,9 @@ class TestMultiTurnToolFlow:
         mock.queue_response(text_completion("Madrid weather and forecast: warm.", id="c3"))
 
         instance = MultiToolAgent()
-        response = await runner.run(instance, "Give me current weather and 3-day forecast for Madrid.")
+        response = await runner.run(
+            instance, "Give me current weather and 3-day forecast for Madrid."
+        )
 
         assert response.stop_reason == "end_turn"
         assert response.turns == 3

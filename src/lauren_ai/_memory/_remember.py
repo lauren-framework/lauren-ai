@@ -21,7 +21,7 @@ class MemoryConfigError(LaurenAIError):
 class RememberMeta:
     """Metadata attached by @remember() to an @agent() class."""
 
-    store_token: str | None   # DI token name; None = inject UserMemoryStore directly
+    store_token: str | None  # DI token name; None = inject UserMemoryStore directly
     extract: bool
     inject: bool
     top_k: int
@@ -58,9 +58,7 @@ def remember(
     """
     if args:
         # Bare @remember usage without parentheses — provide helpful error
-        raise MemoryConfigError(
-            "@remember must be called with parentheses: @remember()"
-        )
+        raise MemoryConfigError("@remember must be called with parentheses: @remember()")
 
     def _apply(cls: C) -> C:
         meta = RememberMeta(
@@ -116,7 +114,7 @@ async def extract_facts(
     # Try to parse JSON from response
     import re
 
-    json_match = re.search(r'\[.*\]', text, re.DOTALL)
+    json_match = re.search(r"\[.*\]", text, re.DOTALL)
     if json_match:
         try:
             return json.loads(json_match.group())
@@ -131,6 +129,8 @@ def build_memory_context(facts: list[Any]) -> str:
         return ""
     lines = ["## What I remember about you:"]
     for f in facts:
-        confidence_label = "high" if f.confidence >= 0.8 else "medium" if f.confidence >= 0.5 else "low"
+        confidence_label = (
+            "high" if f.confidence >= 0.8 else "medium" if f.confidence >= 0.5 else "low"
+        )
         lines.append(f"- {f.content} (confidence: {confidence_label})")
     return "\n".join(lines)

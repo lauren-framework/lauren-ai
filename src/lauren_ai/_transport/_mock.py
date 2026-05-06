@@ -267,9 +267,7 @@ class MockTransport:
         import json  # noqa: PLC0415
 
         input_data: dict[str, Any] = (
-            instance.model_dump()
-            if hasattr(instance, "model_dump")
-            else vars(instance)
+            instance.model_dump() if hasattr(instance, "model_dump") else vars(instance)
         )
         tc = ToolCall(
             tool_use_id="struct_001",
@@ -435,10 +433,7 @@ class MockTransport:
             return self._embed_responses.popleft()
         # Default: zero vectors.
         dim = dimensions or 1536
-        return [
-            Embedding(index=i, vector=[0.0] * dim)
-            for i in range(len(inputs))
-        ]
+        return [Embedding(index=i, vector=[0.0] * dim) for i in range(len(inputs))]
 
     async def count_tokens(
         self,
@@ -512,7 +507,9 @@ def _aggregate_chunks(
     tool_calls: list[ToolCall] = []
     for tool_use_id, data in _tool_calls.items():
         try:
-            parsed_input: dict[str, Any] = json.loads(data["input_json"]) if data["input_json"] else {}
+            parsed_input: dict[str, Any] = (
+                json.loads(data["input_json"]) if data["input_json"] else {}
+            )
         except json.JSONDecodeError:
             parsed_input = {"_raw": data["input_json"]}
         tool_calls.append(

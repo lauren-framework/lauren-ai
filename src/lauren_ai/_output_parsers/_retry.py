@@ -148,8 +148,7 @@ class RetryOutputParser:
                 messages.append(Message(role="assistant", content=completion.content))  # type: ignore[arg-type]
 
         raise MaxRetryError(
-            f"Failed to parse after {self._max_retries + 1} attempts. "
-            f"Last error: {last_error}",
+            f"Failed to parse after {self._max_retries + 1} attempts. Last error: {last_error}",
             attempts=self._max_retries + 1,
         )
 

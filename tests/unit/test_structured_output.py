@@ -1,4 +1,5 @@
 """Unit tests for StructuredLLM and with_structured_output."""
+
 from __future__ import annotations
 
 from pydantic import BaseModel
@@ -56,9 +57,11 @@ class TestStructuredLLM:
 
     async def test_pipe_with_chain(self):
         from lauren_ai._prompts import PromptTemplate
+
         llm, transport = self._make_llm()
         transport.queue_structured(SentimentResult(sentiment="neutral", confidence=0.5))
         structured = llm.with_structured_output(SentimentResult)
         from lauren_ai._chains import Chain
+
         chain = PromptTemplate(template="{text}") | structured
         assert isinstance(chain, Chain)

@@ -1,4 +1,5 @@
 """Unit tests for cost tracking, budgets, and rate limiting."""
+
 from __future__ import annotations
 
 import pytest
@@ -12,9 +13,11 @@ from lauren_ai._transport import TokenUsage
 
 class TestPricingTable:
     def test_estimate_known_model(self):
-        table = PricingTable(models={
-            "claude-haiku-4-5": ModelPricing(input_per_m=0.80, output_per_m=4.00),
-        })
+        table = PricingTable(
+            models={
+                "claude-haiku-4-5": ModelPricing(input_per_m=0.80, output_per_m=4.00),
+            }
+        )
         usage = TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000)
         estimate = table.estimate("claude-haiku-4-5", usage)
         assert estimate.input_usd == pytest.approx(0.80)
@@ -44,24 +47,32 @@ class TestPricingTable:
         assert c.total_usd == pytest.approx(4.0)
 
     def test_estimate_with_cache_tokens(self):
-        table = PricingTable(models={
-            "claude-haiku-4-5": ModelPricing(
-                input_per_m=0.80, output_per_m=4.00,
-                cache_read_per_m=0.08, cache_write_per_m=1.00,
-            ),
-        })
+        table = PricingTable(
+            models={
+                "claude-haiku-4-5": ModelPricing(
+                    input_per_m=0.80,
+                    output_per_m=4.00,
+                    cache_read_per_m=0.08,
+                    cache_write_per_m=1.00,
+                ),
+            }
+        )
         usage = TokenUsage(
-            input_tokens=0, output_tokens=0,
-            cache_read_tokens=1_000_000, cache_write_tokens=1_000_000,
+            input_tokens=0,
+            output_tokens=0,
+            cache_read_tokens=1_000_000,
+            cache_write_tokens=1_000_000,
         )
         estimate = table.estimate("claude-haiku-4-5", usage)
         assert estimate.cache_read_usd == pytest.approx(0.08)
         assert estimate.cache_write_usd == pytest.approx(1.00)
 
     def test_pricing_table_contains(self):
-        table = PricingTable(models={
-            "my-model": ModelPricing(input_per_m=1.0, output_per_m=2.0),
-        })
+        table = PricingTable(
+            models={
+                "my-model": ModelPricing(input_per_m=1.0, output_per_m=2.0),
+            }
+        )
         assert "my-model" in table
         assert "other-model" not in table
 
@@ -190,6 +201,7 @@ class TestTokenBudget:
 
     def test_budget_exceeded_error_is_lauren_ai_error(self):
         from lauren_ai._exceptions import LaurenAIError
+
         budget = TokenBudget(max_tokens_per_conversation=10)
         with pytest.raises(LaurenAIError):
             budget.check(current_tokens=5, estimated_tokens=10)
@@ -227,6 +239,7 @@ class TestRateLimiter:
 
     def test_rate_limit_exhausted_error_is_lauren_ai_error(self):
         from lauren_ai._exceptions import LaurenAIError
+
         err = RateLimitExhaustedError("rate limit exhausted")
         assert isinstance(err, LaurenAIError)
 
@@ -323,9 +336,11 @@ class TestCostEstimateFromUsage:
         assert via_classmethod.total_usd == pytest.approx(via_method.total_usd)
 
     def test_from_usage_haiku_input_cost(self):
-        table = PricingTable(models={
-            "my-model": ModelPricing(input_per_m=1.0, output_per_m=2.0),
-        })
+        table = PricingTable(
+            models={
+                "my-model": ModelPricing(input_per_m=1.0, output_per_m=2.0),
+            }
+        )
         usage = TokenUsage(input_tokens=1_000_000, output_tokens=0)
         estimate = CostEstimate.from_usage(usage, "my-model", table)
         assert estimate.input_usd == pytest.approx(1.0)
@@ -373,5 +388,6 @@ class TestRateLimitExhaustedErrorFields:
 
     def test_is_lauren_ai_error(self):
         from lauren_ai._exceptions import LaurenAIError
+
         err = RateLimitExhaustedError("exhausted", limit=10, retry_after=2.5)
         assert isinstance(err, LaurenAIError)

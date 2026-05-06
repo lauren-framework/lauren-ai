@@ -67,9 +67,7 @@ def team(
     def _apply(cls: C) -> C:
         effective_name = name or cls.__name__
         if mode not in VALID_MODES:
-            raise TeamConfigError(
-                f"@team() mode must be one of {VALID_MODES}, got {mode!r}"
-            )
+            raise TeamConfigError(f"@team() mode must be one of {VALID_MODES}, got {mode!r}")
         meta = TeamMeta(
             name=effective_name,
             mode=mode,

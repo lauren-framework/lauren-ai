@@ -1,5 +1,6 @@
 """Extended tests for _transport/_mock.py — covers streaming, chunk aggregation,
 embed queuing, and token counting."""
+
 from __future__ import annotations
 
 import pytest
@@ -52,20 +53,20 @@ class TestMessagesTokenCount:
 
     def test_with_tools(self):
         msgs = [Message(role="user", content="Hi")]
-        tools = [ToolSchema(
-            name="search",
-            description="Search the web",
-            input_schema={"type": "object", "properties": {}},
-        )]
+        tools = [
+            ToolSchema(
+                name="search",
+                description="Search the web",
+                input_schema={"type": "object", "properties": {}},
+            )
+        ]
         count = _messages_token_count(msgs, system=None, tools=tools)
         assert count > 0
 
     def test_with_content_blocks(self):
         from lauren_ai._transport import ContentBlock
-        msgs = [Message(
-            role="user",
-            content=[ContentBlock(type="text", text="Hello there")]
-        )]
+
+        msgs = [Message(role="user", content=[ContentBlock(type="text", text="Hello there")])]
         count = _messages_token_count(msgs, system=None, tools=None)
         assert count >= 1
 
@@ -127,7 +128,9 @@ class TestAggregateChunks:
         chunks = [
             CompletionChunk(delta="Hello "),
             CompletionChunk(delta="world"),
-            CompletionChunk(delta="", stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=2)),
+            CompletionChunk(
+                delta="", stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=2)
+            ),
         ]
         completion = _aggregate_chunks(chunks, model="test-model")
         assert completion.content == "Hello world"
@@ -137,6 +140,7 @@ class TestAggregateChunks:
 
     def test_tool_call_aggregation(self):
         from lauren_ai._transport import ToolCallDelta
+
         chunks = [
             CompletionChunk(
                 delta="",
@@ -144,7 +148,7 @@ class TestAggregateChunks:
                     tool_use_id="tc1",
                     name="search",
                     input_delta='{"query": "',
-                )
+                ),
             ),
             CompletionChunk(
                 delta="",
@@ -152,7 +156,7 @@ class TestAggregateChunks:
                     tool_use_id="tc1",
                     name=None,
                     input_delta='hello"}',
-                )
+                ),
             ),
             CompletionChunk(delta="", stop_reason="tool_use"),
         ]
@@ -165,14 +169,15 @@ class TestAggregateChunks:
 
     def test_invalid_json_in_tool_call(self):
         from lauren_ai._transport import ToolCallDelta
+
         chunks = [
             CompletionChunk(
                 delta="",
                 tool_call_delta=ToolCallDelta(
                     tool_use_id="tc1",
                     name="tool",
-                    input_delta='not valid json',
-                )
+                    input_delta="not valid json",
+                ),
             ),
             CompletionChunk(delta="", stop_reason="tool_use"),
         ]
@@ -224,11 +229,17 @@ class TestMockTransportExtended:
     @pytest.mark.asyncio
     async def test_streaming_with_chunklist(self):
         mock = MockTransport()
-        mock.queue_stream([
-            CompletionChunk(delta="Hello "),
-            CompletionChunk(delta="world"),
-            CompletionChunk(delta="", stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=2)),
-        ])
+        mock.queue_stream(
+            [
+                CompletionChunk(delta="Hello "),
+                CompletionChunk(delta="world"),
+                CompletionChunk(
+                    delta="",
+                    stop_reason="end_turn",
+                    usage=TokenUsage(input_tokens=5, output_tokens=2),
+                ),
+            ]
+        )
         stream = await mock.complete(
             [Message.user("Hi")],
             model="mock",
@@ -244,11 +255,17 @@ class TestMockTransportExtended:
     async def test_aggregate_stream_to_completion(self):
         """Test that a queued stream is aggregated when stream=False."""
         mock = MockTransport()
-        mock.queue_stream([
-            CompletionChunk(delta="Hello "),
-            CompletionChunk(delta="world"),
-            CompletionChunk(delta="", stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=2)),
-        ])
+        mock.queue_stream(
+            [
+                CompletionChunk(delta="Hello "),
+                CompletionChunk(delta="world"),
+                CompletionChunk(
+                    delta="",
+                    stop_reason="end_turn",
+                    usage=TokenUsage(input_tokens=5, output_tokens=2),
+                ),
+            ]
+        )
         result = await mock.complete(
             [Message.user("Hi")],
             model="mock",
@@ -274,10 +291,12 @@ class TestMockTransportExtended:
     @pytest.mark.asyncio
     async def test_embed_with_queued_response(self):
         mock = MockTransport()
-        mock.queue_embed([
-            Embedding(index=0, vector=[0.1, 0.2]),
-            Embedding(index=1, vector=[0.3, 0.4]),
-        ])
+        mock.queue_embed(
+            [
+                Embedding(index=0, vector=[0.1, 0.2]),
+                Embedding(index=1, vector=[0.3, 0.4]),
+            ]
+        )
         result = await mock.embed(["hello", "world"], model="test-embed")
         assert len(result) == 2
         assert result[0].vector == [0.1, 0.2]
@@ -325,8 +344,11 @@ class TestMockTransportExtended:
         for i in range(3):
             mock.queue_response(
                 Completion(
-                    id=f"c{i}", model="mock", content=f"Response {i}",
-                    tool_calls=[], stop_reason="end_turn",
+                    id=f"c{i}",
+                    model="mock",
+                    content=f"Response {i}",
+                    tool_calls=[],
+                    stop_reason="end_turn",
                     usage=TokenUsage(input_tokens=5, output_tokens=3),
                 )
             )
@@ -338,8 +360,11 @@ class TestMockTransportExtended:
         mock = MockTransport()
         mock.queue_response(
             Completion(
-                id="c1", model="mock", content="x",
-                tool_calls=[], stop_reason="end_turn",
+                id="c1",
+                model="mock",
+                content="x",
+                tool_calls=[],
+                stop_reason="end_turn",
                 usage=TokenUsage(input_tokens=1, output_tokens=1),
             )
         )
@@ -352,11 +377,13 @@ class TestMockTransportExtended:
     @pytest.mark.asyncio
     async def test_count_tokens_with_system_and_tools(self):
         mock = MockTransport()
-        tools = [ToolSchema(
-            name="search",
-            description="Search the web",
-            input_schema={"type": "object"},
-        )]
+        tools = [
+            ToolSchema(
+                name="search",
+                description="Search the web",
+                input_schema={"type": "object"},
+            )
+        ]
         count = await mock.count_tokens(
             [Message.user("Hello")],
             model="mock",
@@ -370,8 +397,11 @@ class TestMockTransportExtended:
         mock = MockTransport()
         mock.queue_response(
             Completion(
-                id="c1", model="mock", content="OK",
-                tool_calls=[], stop_reason="end_turn",
+                id="c1",
+                model="mock",
+                content="OK",
+                tool_calls=[],
+                stop_reason="end_turn",
                 usage=TokenUsage(input_tokens=5, output_tokens=2),
             )
         )

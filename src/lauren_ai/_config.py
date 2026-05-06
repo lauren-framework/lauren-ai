@@ -286,9 +286,7 @@ class AgentConfig:
     memory_window_tokens: int = field(default=40_000)
     max_cost_usd: float | None = field(default=None)
     parallel_tool_calls: bool = field(default=False)
-    tool_error_policy: Literal["raise", "return_error", "skip"] = field(
-        default="return_error"
-    )
+    tool_error_policy: Literal["raise", "return_error", "skip"] = field(default="return_error")
     # Extended thinking (Anthropic)
     thinking: bool = field(default=False)
     thinking_budget_tokens: int = field(default=8_000)

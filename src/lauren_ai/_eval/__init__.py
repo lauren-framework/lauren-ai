@@ -175,11 +175,7 @@ class EvalReport:
         assert actual >= min_pass_rate, (
             f"Pass rate {actual:.1%} is below the minimum {min_pass_rate:.1%}. "
             f"Failed examples: "
-            + "; ".join(
-                f"[{r.example.input[:40]!r}]"
-                for r in self.results
-                if not r.passed
-            )
+            + "; ".join(f"[{r.example.input[:40]!r}]" for r in self.results if not r.passed)
         )
 
     def summary(self) -> str:
@@ -323,8 +319,7 @@ class TrajectoryEval:
                 else:
                     resp = await agent_client(ex.input)
                 actual_tools = [
-                    getattr(tc, "name", str(tc))
-                    for tc in getattr(resp, "tool_calls_made", [])
+                    getattr(tc, "name", str(tc)) for tc in getattr(resp, "tool_calls_made", [])
                 ]
             except Exception as exc:
                 error = exc
@@ -406,18 +401,14 @@ class PerformanceEval:
                 actual = getattr(resp, "content", str(resp))
                 usage = getattr(resp, "total_usage", None)
                 if usage:
-                    total_tokens = (
-                        getattr(usage, "input_tokens", 0)
-                        + getattr(usage, "output_tokens", 0)
+                    total_tokens = getattr(usage, "input_tokens", 0) + getattr(
+                        usage, "output_tokens", 0
                     )
             except Exception as exc:
                 error = exc
 
             latency = (time.monotonic() - start) * 1000.0
-            passed = (
-                error is None
-                and (self._max_latency is None or latency <= self._max_latency)
-            )
+            passed = error is None and (self._max_latency is None or latency <= self._max_latency)
             results.append(
                 EvalResult(
                     example=ex,

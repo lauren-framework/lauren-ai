@@ -96,9 +96,7 @@ class TextLoader:
             else:
                 text = self._source
         except OSError as exc:
-            raise KnowledgeLoadError(
-                f"Cannot read {self._source!r}: {exc}", cause=exc
-            ) from exc
+            raise KnowledgeLoadError(f"Cannot read {self._source!r}: {exc}", cause=exc) from exc
 
         return [Document(content=text, metadata={"source": self._source})]
 
@@ -267,6 +265,7 @@ class KnowledgeBase:
         if hasattr(self._store, "search"):
             # Support both (k=, filter=) and (top_k=, filter_metadata=) signatures
             import inspect  # noqa: PLC0415
+
             sig = inspect.signature(self._store.search)
             if "k" in sig.parameters:
                 kwargs["k"] = top_k
@@ -309,10 +308,7 @@ class KnowledgeBase:
             Returns a list of relevant text snippets.
             """
             results = await kb_ref.search(query, top_k=_top_k)
-            return [
-                {"content": r.content, "score": r.score, **r.metadata}
-                for r in results
-            ]
+            return [{"content": r.content, "score": r.score, **r.metadata} for r in results]
 
         return _kb_search
 

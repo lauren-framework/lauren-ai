@@ -1,4 +1,5 @@
 """Unit tests for output parsers."""
+
 from __future__ import annotations
 
 import pytest
@@ -45,7 +46,7 @@ class TestJSONOutputParser:
         assert result == {"key": 42}
 
     def test_strips_markdown_fence(self):
-        text = "```json\n{\"a\": 1}\n```"
+        text = '```json\n{"a": 1}\n```'
         assert JSONOutputParser().parse(text) == {"a": 1}
 
     def test_invalid_json_raises(self):
@@ -160,9 +161,7 @@ class TestRetryOutputParser:
 
         transport = MockTransport()
         # Queue a valid response for the correction turn
-        transport.queue_response(
-            _make_completion('{"name": "Bob", "age": 20}')
-        )
+        transport.queue_response(_make_completion('{"name": "Bob", "age": 20}'))
         config, _ = LLMConfig.for_testing()
         llm = LLMService(transport=transport, config=config)
         parser = RetryOutputParser(

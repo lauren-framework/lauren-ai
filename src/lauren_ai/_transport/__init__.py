@@ -486,9 +486,7 @@ class Completion:
     tool_calls: list[ToolCall]
     stop_reason: Literal["end_turn", "tool_use", "max_tokens", "stop_sequence"]
     usage: TokenUsage
-    thinking_blocks: list[ThinkingBlock | RedactedThinkingBlock] = field(
-        default_factory=list
-    )
+    thinking_blocks: list[ThinkingBlock | RedactedThinkingBlock] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

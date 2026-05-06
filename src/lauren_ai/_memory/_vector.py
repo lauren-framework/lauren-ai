@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 try:
     import numpy as np  # type: ignore[import]
+
     _HAS_NUMPY = True
 except ImportError:
     _HAS_NUMPY = False
@@ -87,6 +88,7 @@ def _term_frequency(tokens: list[str]) -> dict[str, float]:
 # ---------------------------------------------------------------------------
 # InMemoryVectorStore
 # ---------------------------------------------------------------------------
+
 
 class InMemoryVectorStore:
     """In-memory vector store using TF-IDF cosine similarity.
@@ -217,12 +219,14 @@ class InMemoryVectorStore:
         output: list[MemoryResult] = []
         for score, doc_id in results[:k]:
             content, meta, _ = self._documents[doc_id]
-            output.append(MemoryResult(
-                id=doc_id,
-                content=content,
-                score=float(score),
-                metadata=dict(meta),
-            ))
+            output.append(
+                MemoryResult(
+                    id=doc_id,
+                    content=content,
+                    score=float(score),
+                    metadata=dict(meta),
+                )
+            )
         return output
 
     async def get(self, id: str) -> MemoryResult | None:

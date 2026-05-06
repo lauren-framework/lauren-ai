@@ -134,12 +134,41 @@ Returns a `Completion` (when `stream=False`) or an `AsyncIterator[CompletionChun
 ```python
 result = await llm.complete([Message.user("Hello")])
 
-result.content       # str — the model's text response
-result.tool_calls    # list[ToolCall] — tool calls requested by the model
-result.stop_reason   # "end_turn" | "tool_use" | "max_tokens" | "stop_sequence"
-result.usage         # TokenUsage(input_tokens, output_tokens)
+result.content          # str — the model's text response
+result.tool_calls       # list[ToolCall] — tool calls requested by the model
+result.stop_reason      # "end_turn" | "tool_use" | "max_tokens" | "stop_sequence"
+result.usage            # TokenUsage(input_tokens, output_tokens)
 result.usage.cost_usd("claude-opus-4-6")  # estimated cost in USD
+result.thinking_blocks  # list[ThinkingBlock | RedactedThinkingBlock] — Anthropic only
 ```
+
+### Completion with extended thinking
+
+Pass `thinking=True` to let the model reason internally before responding.
+`thinking_budget_tokens` controls the token ceiling for the reasoning phase:
+
+```python
+from lauren_ai._transport import ThinkingBlock, RedactedThinkingBlock
+
+result = await llm.complete(
+    [Message.user("Explain the trade-offs between SQL and NoSQL.")],
+    thinking=True,
+    thinking_budget_tokens=8_000,
+)
+
+for block in result.thinking_blocks:
+    if isinstance(block, ThinkingBlock):
+        print("THINKING:", block.thinking)
+    elif isinstance(block, RedactedThinkingBlock):
+        print("REDACTED:", block.data[:40])
+
+print("ANSWER:", result.content)
+```
+
+> **Temperature is incompatible with extended thinking.**  When `thinking=True`
+> is passed, the temperature parameter is omitted from the API call automatically.
+
+See the [extended thinking guide](extended-thinking.md) for the full reference.
 
 ---
 

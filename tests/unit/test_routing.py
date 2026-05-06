@@ -1,4 +1,5 @@
 """Unit tests for SemanticRouter."""
+
 from __future__ import annotations
 
 import pytest
@@ -50,13 +51,15 @@ class TestSemanticRouter:
     async def test_route_matches_by_embedding(self):
         weather_vec = [1.0, 0.0, 0.0]
         travel_vec = [0.0, 1.0, 0.0]
-        query_vec = [0.95, 0.05, 0.0]   # close to weather
+        query_vec = [0.95, 0.05, 0.0]  # close to weather
 
-        embed_fn = make_embed_fn({
-            "Will it rain tomorrow?": query_vec,
-            "Questions about weather forecasts and temperature": weather_vec,
-            "Travel planning and trip itineraries": travel_vec,
-        })
+        embed_fn = make_embed_fn(
+            {
+                "Will it rain tomorrow?": query_vec,
+                "Questions about weather forecasts and temperature": weather_vec,
+                "Travel planning and trip itineraries": travel_vec,
+            }
+        )
 
         router = SemanticRouter(
             routes=[
@@ -73,11 +76,13 @@ class TestSemanticRouter:
         assert match.confidence > 0.5
 
     async def test_low_confidence_returns_default(self):
-        embed_fn = make_embed_fn({
-            "Tell me a joke": [0.5, 0.5, 0.0],
-            "desc_a": [1.0, 0.0, 0.0],
-            "desc_b": [0.0, 1.0, 0.0],
-        })
+        embed_fn = make_embed_fn(
+            {
+                "Tell me a joke": [0.5, 0.5, 0.0],
+                "desc_a": [1.0, 0.0, 0.0],
+                "desc_b": [0.0, 1.0, 0.0],
+            }
+        )
         router = SemanticRouter(
             routes=[
                 Route("a", "desc_a"),
@@ -94,11 +99,13 @@ class TestSemanticRouter:
 
     async def test_dispatch_calls_correct_handler(self):
         weather_vec = [1.0, 0.0, 0.0]
-        embed_fn = make_embed_fn({
-            "Weather query": [0.99, 0.01, 0.0],
-            "desc_weather": weather_vec,
-            "desc_other": [0.0, 1.0, 0.0],
-        })
+        embed_fn = make_embed_fn(
+            {
+                "Weather query": [0.99, 0.01, 0.0],
+                "desc_weather": weather_vec,
+                "desc_other": [0.0, 1.0, 0.0],
+            }
+        )
         router = SemanticRouter(
             routes=[
                 Route("weather", "desc_weather"),
@@ -120,19 +127,24 @@ class TestSemanticRouter:
             called_with.append(f"other:{q}")
             return "other"
 
-        result = await router.dispatch("Weather query", {
-            "weather": weather_handler,
-            "other": other_handler,
-        })
+        result = await router.dispatch(
+            "Weather query",
+            {
+                "weather": weather_handler,
+                "other": other_handler,
+            },
+        )
         assert result == "sunny"
         assert called_with == ["Weather query"]
 
     async def test_compile_with_examples(self):
-        embed_fn = make_embed_fn({
-            "Will it rain?": [1.0, 0.0],
-            "Hot today?": [0.9, 0.1],
-            "Trip to Rome": [0.0, 1.0],
-        })
+        embed_fn = make_embed_fn(
+            {
+                "Will it rain?": [1.0, 0.0],
+                "Hot today?": [0.9, 0.1],
+                "Trip to Rome": [0.0, 1.0],
+            }
+        )
         router = SemanticRouter(
             routes=[
                 Route("weather", "Weather", examples=["Will it rain?", "Hot today?"]),
@@ -245,9 +257,11 @@ class TestSemanticRouterAddRoute:
     """SemanticRouter.add_route marks router as uncompiled."""
 
     async def test_add_route_marks_uncompiled(self):
-        embed_fn = make_embed_fn({
-            "weather desc": [1.0, 0.0],
-        })
+        embed_fn = make_embed_fn(
+            {
+                "weather desc": [1.0, 0.0],
+            }
+        )
         router = SemanticRouter(
             routes=[Route("weather", "weather desc")],
             embed_fn=embed_fn,
@@ -264,12 +278,14 @@ class TestSemanticRouterAddRoute:
         travel_vec = [0.0, 1.0]
         extra_vec = [0.5, 0.5]
 
-        embed_fn = make_embed_fn({
-            "weather desc": weather_vec,
-            "travel desc": travel_vec,
-            "extra desc": extra_vec,
-            "query": [0.9, 0.1],
-        })
+        embed_fn = make_embed_fn(
+            {
+                "weather desc": weather_vec,
+                "travel desc": travel_vec,
+                "extra desc": extra_vec,
+                "query": [0.9, 0.1],
+            }
+        )
         router = SemanticRouter(
             routes=[Route("weather", "weather desc")],
             embed_fn=embed_fn,
@@ -298,11 +314,13 @@ class TestSemanticRouterRouteMatchIntegration:
 
     async def test_high_confidence_match_has_matched_true(self):
         weather_vec = [1.0, 0.0, 0.0]
-        embed_fn = make_embed_fn({
-            "rain": [0.99, 0.01, 0.0],
-            "weather desc": weather_vec,
-            "travel desc": [0.0, 1.0, 0.0],
-        })
+        embed_fn = make_embed_fn(
+            {
+                "rain": [0.99, 0.01, 0.0],
+                "weather desc": weather_vec,
+                "travel desc": [0.0, 1.0, 0.0],
+            }
+        )
         router = SemanticRouter(
             routes=[
                 Route("weather", "weather desc"),
@@ -317,11 +335,13 @@ class TestSemanticRouterRouteMatchIntegration:
         assert match.route == "weather"
 
     async def test_low_confidence_match_has_matched_false(self):
-        embed_fn = make_embed_fn({
-            "joke": [0.5, 0.5, 0.0],
-            "weather desc": [1.0, 0.0, 0.0],
-            "travel desc": [0.0, 1.0, 0.0],
-        })
+        embed_fn = make_embed_fn(
+            {
+                "joke": [0.5, 0.5, 0.0],
+                "weather desc": [1.0, 0.0, 0.0],
+                "travel desc": [0.0, 1.0, 0.0],
+            }
+        )
         router = SemanticRouter(
             routes=[
                 Route("weather", "weather desc"),

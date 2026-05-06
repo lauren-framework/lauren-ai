@@ -289,9 +289,7 @@ class TestKnowledgeAgentIntegration:
             pass
 
         mock.queue_tool_use("empty_kb_search", {"query": "anything"})
-        mock.queue_response(
-            text_completion("I could not find relevant documentation.", id="c2")
-        )
+        mock.queue_response(text_completion("I could not find relevant documentation.", id="c2"))
 
         instance = EmptyKbAgent()
         response = await runner.run(instance, "Find info on something.")

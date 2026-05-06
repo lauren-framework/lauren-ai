@@ -64,9 +64,7 @@ class TeamRunner:
     ) -> None:
         meta = getattr(team_cls, TEAM_META, None)
         if meta is None:
-            raise TeamConfigError(
-                f"{team_cls.__name__} is not decorated with @team()"
-            )
+            raise TeamConfigError(f"{team_cls.__name__} is not decorated with @team()")
         self._team_cls = team_cls
         self._meta = meta
         self._llm = llm
@@ -166,12 +164,10 @@ class TeamRunner:
         """
         from lauren_ai._transport import Completion, Message  # noqa: PLC0415
 
-        worker_desc = "\n".join(
-            f"- {name}: A specialist agent" for name in self._worker_names
+        worker_desc = "\n".join(f"- {name}: A specialist agent" for name in self._worker_names)
+        prior = (
+            "\n".join(f"{name}: {output}" for name, output in worker_outputs.items()) or "None yet."
         )
-        prior = "\n".join(
-            f"{name}: {output}" for name, output in worker_outputs.items()
-        ) or "None yet."
 
         prompt_template = self._meta.coordinator_prompt or _DEFAULT_COORDINATOR_PROMPT
         prompt = prompt_template.format(
@@ -293,9 +289,7 @@ class TeamRunner:
         """
         for round_num in range(self._meta.max_rounds):
             action, content = await self._coordinator_decide(task, worker_outputs, round_num)
-            yield TeamCoordinatorDecision(
-                decision=f"{action}: {content}", round=round_num
-            )
+            yield TeamCoordinatorDecision(decision=f"{action}: {content}", round=round_num)
             if action == "DONE":
                 yield TeamFinalAnswer(content=content, rounds=round_num + 1)
                 return
@@ -330,19 +324,14 @@ class TeamRunner:
             output = await self._call_worker(worker_name, task)
             worker_outputs[worker_name] = output
             await memory.set(worker_name, output)
-            yield TeamWorkerFinished(
-                worker_name=worker_name, result_content=output, round=i
-            )
+            yield TeamWorkerFinished(worker_name=worker_name, result_content=output, round=i)
 
-        synthesis_prompt = (
-            f"Synthesise: {task}\n\n"
-            + "\n\n".join(f"{k}:\n{v}" for k, v in worker_outputs.items())
+        synthesis_prompt = f"Synthesise: {task}\n\n" + "\n\n".join(
+            f"{k}:\n{v}" for k, v in worker_outputs.items()
         )
         from lauren_ai._transport import Completion, Message  # noqa: PLC0415
 
-        result = await self._llm.complete(
-            [Message(role="user", content=synthesis_prompt)]
-        )
+        result = await self._llm.complete([Message(role="user", content=synthesis_prompt)])
         if isinstance(result, Completion):
             final = result.content
         else:

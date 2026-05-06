@@ -1,4 +1,5 @@
 """Extended tests for _eval/__init__.py — covers missing branches."""
+
 from __future__ import annotations
 
 import pytest
@@ -103,6 +104,7 @@ class TestAccuracyEvalExtended:
     @pytest.mark.asyncio
     async def test_callable_agent_client(self):
         """Test with a direct coroutine function as agent_client."""
+
         async def agent_fn(message: str) -> str:
             return f"Response to: {message}"
 
@@ -114,6 +116,7 @@ class TestAccuracyEvalExtended:
     @pytest.mark.asyncio
     async def test_sync_callable_agent_client(self):
         """Test with a sync callable."""
+
         def sync_agent(message: str) -> str:
             return "fixed response"
 
@@ -125,6 +128,7 @@ class TestAccuracyEvalExtended:
     @pytest.mark.asyncio
     async def test_agent_with_sync_run_method(self):
         """Test with a client that has a sync run() method."""
+
         class SyncClient:
             def run(self, message: str):
                 return "sync result"
@@ -213,16 +217,17 @@ class TestTrajectoryEvalExtended:
             async def run(self, message: str):
                 class FakeToolCall:
                     name = "search"
+
                 class FakeToolCall2:
                     name = "summarise"
+
                 class FakeResp:
                     tool_calls_made = [FakeToolCall(), FakeToolCall2()]
+
                 return FakeResp()
 
         evaluator = TrajectoryEval(strict_order=False)
-        dataset = EvalDataset([
-            EvalExample(input="q", expected_tools=["search"])
-        ])
+        dataset = EvalDataset([EvalExample(input="q", expected_tools=["search"])])
         report = await evaluator.run(AgentClient(), dataset)
         assert report.pass_rate == 1.0
 
@@ -232,6 +237,7 @@ class TestTrajectoryEvalExtended:
             async def run(self, message: str):
                 class FakeResp:
                     tool_calls_made = []
+
                 return FakeResp()
 
         evaluator = TrajectoryEval()
@@ -244,6 +250,7 @@ class TestTrajectoryEvalExtended:
         async def agent_fn(message: str):
             class FakeResp:
                 tool_calls_made = []
+
             return FakeResp()
 
         evaluator = TrajectoryEval()
@@ -272,8 +279,10 @@ class TestTrajectoryEvalExtended:
             async def run(self, message: str):
                 class TC:
                     name = "tool_a"
+
                 class FakeResp:
                     tool_calls_made = [TC()]
+
                 return FakeResp()
 
         evaluator = TrajectoryEval(strict_order=True)
@@ -287,8 +296,10 @@ class TestTrajectoryEvalExtended:
             async def run(self, message: str):
                 class TC:
                     pass  # No name attr
+
                 class FakeResp:
                     tool_calls_made = [TC()]
+
                 return FakeResp()
 
         evaluator = TrajectoryEval(strict_order=True)
@@ -310,6 +321,7 @@ class TestPerformanceEval:
                 class FakeResp:
                     content = "ok"
                     total_usage = None
+
                 return FakeResp()
 
         evaluator = PerformanceEval(max_latency_ms=10000)  # Very generous
@@ -324,6 +336,7 @@ class TestPerformanceEval:
                 class FakeResp:
                     content = "ok"
                     total_usage = None
+
                 return FakeResp()
 
         evaluator = PerformanceEval(max_latency_ms=None)
@@ -342,6 +355,7 @@ class TestPerformanceEval:
                 class FakeResp:
                     content = "ok"
                     total_usage = FakeUsage()
+
                 return FakeResp()
 
         evaluator = PerformanceEval(max_latency_ms=None)
@@ -368,6 +382,7 @@ class TestPerformanceEval:
             class FakeResp:
                 content = "ok"
                 total_usage = None
+
             return FakeResp()
 
         evaluator = PerformanceEval(max_latency_ms=None)
@@ -382,6 +397,7 @@ class TestPerformanceEval:
                 class FakeResp:
                     content = "ok"
                     total_usage = None
+
                 return FakeResp()
 
         evaluator = PerformanceEval(max_latency_ms=None)
@@ -396,6 +412,7 @@ class TestPerformanceEval:
                 class FakeResp:
                     content = "ok"
                     total_usage = None
+
                 return FakeResp()
 
         evaluator = PerformanceEval(max_latency_ms=None)

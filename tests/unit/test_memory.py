@@ -1,4 +1,5 @@
 """Unit tests for memory subsystem."""
+
 from __future__ import annotations
 
 import pytest
@@ -25,8 +26,11 @@ class TestShortTermMemory:
         mem = ShortTermMemory()
         mem.add_user("Hello")
         completion = Completion(
-            id="c1", model="mock", content="Hi there!",
-            tool_calls=[], stop_reason="end_turn",
+            id="c1",
+            model="mock",
+            content="Hi there!",
+            tool_calls=[],
+            stop_reason="end_turn",
             usage=TokenUsage(input_tokens=5, output_tokens=3),
         )
         mem.add_assistant(completion)

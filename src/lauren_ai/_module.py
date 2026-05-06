@@ -384,15 +384,9 @@ class LLMModule:
 
         # Register pre-built singletons via use_value providers so the DI
         # container hands out the same instances on every resolve.
-        _llm_service_provider = use_value(
-            provide=LLMService, value=llm_service
-        )
-        _embed_service_provider = use_value(
-            provide=EmbedService, value=embed_service
-        )
-        _config_provider = use_value(
-            provide=LLMConfig, value=config
-        )
+        _llm_service_provider = use_value(provide=LLMService, value=llm_service)
+        _embed_service_provider = use_value(provide=EmbedService, value=embed_service)
+        _config_provider = use_value(provide=LLMConfig, value=config)
 
         providers = [
             _llm_service_provider,
@@ -405,9 +399,7 @@ class LLMModule:
         try:
             from lauren_ai._transport import Transport as _Transport  # noqa: PLC0415
 
-            _transport_provider = use_value(
-                provide=_Transport, value=transport
-            )
+            _transport_provider = use_value(provide=_Transport, value=transport)
             providers.insert(0, _transport_provider)
             exports.insert(0, _Transport)
         except ImportError:
@@ -596,12 +588,14 @@ class AgentModule:
                 return  # deduplicate across shared + per-agent lists
             _seen_tool_names.add(meta.name)
             if _inspect.isclass(_lookup):
-                if _lookup not in _shared_tools_set:   # owned by an imported module; skip re-registration
-                    _class_tools.append(tool_item)     # keep alias as DI token
+                if (
+                    _lookup not in _shared_tools_set
+                ):  # owned by an imported module; skip re-registration
+                    _class_tools.append(tool_item)  # keep alias as DI token
             else:
                 _fn_tools.append(tool_item)
 
-        for tool_item in (tools or []):
+        for tool_item in tools or []:
             _categorize(tool_item)
 
         for agent_cls in agents:
@@ -661,20 +655,25 @@ class AgentModule:
         try:
             from lauren_ai._transport import Transport as _Transport  # noqa: PLC0415
 
-            if _class_tools:
-                # Class-form tools need DI resolution.  The runner factory
-                # receives the DI-resolved instances positionally:
-                #   args = (transport, *class_instances, config)
+            if _class_tools or shared_tools:
+                # Class-form tools and/or shared tools need DI resolution.
+                # The runner factory receives DI-resolved instances positionally:
+                #   args = (transport, *class_instances, *shared_instances, config)
                 _num_class_tools = len(_class_tools)
                 _captured_fn_tools = list(_fn_tools)
+                _captured_shared_tools = list(shared_tools or [])
+                _num_shared_tools = len(_captured_shared_tools)
                 _captured_signals_ref = _captured_signals
                 _captured_tool_cache_ref = _captured_tool_cache
                 _captured_conv_store_ref = _captured_conversation_store
 
                 def _build_runner_with_classes(*args: Any) -> AgentRunner:
                     transport = args[0]
-                    class_instances = args[1:1 + _num_class_tools]
-                    cfg = args[1 + _num_class_tools]
+                    class_instances = args[1 : 1 + _num_class_tools]
+                    shared_instances = args[
+                        1 + _num_class_tools : 1 + _num_class_tools + _num_shared_tools
+                    ]
+                    cfg = args[1 + _num_class_tools + _num_shared_tools]
                     tools: dict = {}
                     for fn_tool in _captured_fn_tools:
                         try:
@@ -694,6 +693,15 @@ class AgentModule:
                                 instance,
                                 exc,
                             )
+                    for instance in shared_instances:
+                        try:
+                            _add_to_tool_map(tools, type(instance), instance=instance)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "lauren_ai.AgentModule: could not add shared tool instance %r: %s",
+                                instance,
+                                exc,
+                            )
                     return _runner_cls(
                         transport=transport,
                         tools=tools,
@@ -706,11 +714,11 @@ class AgentModule:
                 _runner_provider = use_factory(
                     provide=_runner_cls,
                     factory=_build_runner_with_classes,
-                    injects=[_Transport, *_class_tools, LLMConfig],
+                    injects=[_Transport, *_class_tools, *_captured_shared_tools, LLMConfig],
                     scope=_effective_scope,
                 )
             else:
-                # No class-form tools — build the tools dict eagerly.
+                # No class-form tools and no shared tools — build eagerly.
                 _eager_tools = {}
                 for fn_tool in _fn_tools:
                     try:
@@ -761,7 +769,7 @@ class AgentModule:
 
         # Register any additional provider classes from ``injects=``.  These are
         # not exported; they are purely internal to this module.
-        for _inj_cls in (injects or []):
+        for _inj_cls in injects or []:
             if _inj_cls not in providers:
                 providers.append(_inj_cls)
 

@@ -299,7 +299,10 @@ class AgentRunnerBase(AgentRunner):
                             agent_class=ctx.agent_class,
                         )
 
-                if completion.stop_reason == "end_turn" or completion.stop_reason == "stop_sequence":
+                if (
+                    completion.stop_reason == "end_turn"
+                    or completion.stop_reason == "stop_sequence"
+                ):
                     stop_reason = "end_turn"
                     break
 
@@ -577,7 +580,7 @@ class AgentRunnerBase(AgentRunner):
             accumulated_usage: TokenUsage | None = None
             accumulated_tool_calls: list[ToolCall] = []
             partial_tool_inputs: dict[str, str] = {}  # tool_use_id -> input_json
-            partial_tool_names: dict[str, str] = {}   # tool_use_id -> name
+            partial_tool_names: dict[str, str] = {}  # tool_use_id -> name
 
             async for chunk in stream:
                 # Accumulate text delta
@@ -732,10 +735,7 @@ class AgentRunnerBase(AgentRunner):
         :rtype: list[ToolResult]
         """
         if ctx.config.parallel_tool_calls and len(tool_calls) > 1:
-            coros = [
-                self._execute_single_tool(tc, ctx=ctx, agent=agent)
-                for tc in tool_calls
-            ]
+            coros = [self._execute_single_tool(tc, ctx=ctx, agent=agent) for tc in tool_calls]
             results = list(await asyncio.gather(*coros, return_exceptions=False))
         else:
             results = []
@@ -882,9 +882,7 @@ class AgentRunnerBase(AgentRunner):
                 exc_info=True,
             )
 
-    async def _call_hook_with_return(
-        self, agent: Any, hook_name: str, *args: Any
-    ) -> Any:
+    async def _call_hook_with_return(self, agent: Any, hook_name: str, *args: Any) -> Any:
         """Invoke an optional lifecycle hook and return its result.
 
         Same class-vs-instance handling as :meth:`_call_hook`.

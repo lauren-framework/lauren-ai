@@ -1,4 +1,5 @@
 """Unit tests for _agents/_compile.py — validate_agent_class and validate_tool."""
+
 from __future__ import annotations
 
 import pytest
@@ -123,8 +124,9 @@ class TestValidateTool:
 
     def test_ctx_param_skipped(self):
         """ctx parameter should not require annotation."""
+
         @tool()
-        async def tool_with_ctx(query: str, ctx: ToolContext=None) -> str:
+        async def tool_with_ctx(query: str, ctx: ToolContext = None) -> str:
             """A tool. Args: query: The query."""
             return query
 
@@ -134,6 +136,7 @@ class TestValidateTool:
 
     def test_varargs_skipped(self):
         """*args and **kwargs should not require annotation."""
+
         @tool()
         async def variadic_tool(name: str, *args, **kwargs) -> str:
             """A tool. Args: name: The name."""
@@ -273,6 +276,7 @@ class TestValidateAgentClass:
 
     def test_none_tool_skipped(self):
         """None entries in USE_TOOLS_META should be silently skipped."""
+
         @agent()
         class AgentWithNoneTool:
             pass
@@ -284,6 +288,7 @@ class TestValidateAgentClass:
 
     def test_vararg_hooks_count_correctly(self):
         """*args and **kwargs in hooks shouldn't count toward positional params."""
+
         @agent()
         class AgentWithVarKwargs:
             async def on_start(self, ctx, **kwargs):  # ctx + kwargs → 1 positional

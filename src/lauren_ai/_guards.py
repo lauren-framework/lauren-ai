@@ -178,6 +178,7 @@ def token_budget_guard(
 
     try:
         from lauren import Scope, injectable
+
         HAS_LAUREN = True
     except ImportError:
         HAS_LAUREN = False
@@ -400,8 +401,7 @@ def safety_guard(
             if text and not policy.is_safe(text):
                 if on_violation == "block":
                     raise PermissionError(
-                        "Request blocked by safety policy. "
-                        "The content violates usage guidelines."
+                        "Request blocked by safety policy. The content violates usage guidelines."
                     )
                 else:
                     logger.warning(

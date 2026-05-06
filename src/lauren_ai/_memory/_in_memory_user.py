@@ -26,10 +26,11 @@ class InMemoryUserMemoryStore:
     async def search(self, user_id: str, query: str, top_k: int = 10) -> list[MemoryFact]:
         query_lower = query.lower()
         results = [
-            f for f in self._facts.values()
-            if f.user_id == user_id and (
-                query_lower in f.content.lower()
-                or any(query_lower in t.lower() for t in f.topics)
+            f
+            for f in self._facts.values()
+            if f.user_id == user_id
+            and (
+                query_lower in f.content.lower() or any(query_lower in t.lower() for t in f.topics)
             )
         ]
         # Sort by confidence descending
@@ -43,7 +44,9 @@ class InMemoryUserMemoryStore:
         results.sort(key=lambda f: f.last_seen_at, reverse=True)
         return results
 
-    async def update(self, memory_id: str, *, content: str | None = None, confidence: float | None = None) -> None:
+    async def update(
+        self, memory_id: str, *, content: str | None = None, confidence: float | None = None
+    ) -> None:
         fact = self._facts.get(memory_id)
         if fact is None:
             return

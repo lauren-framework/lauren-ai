@@ -40,6 +40,7 @@ from typing import Any, Protocol, runtime_checkable
 # Shared result type
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class MemoryResult:
     """A single result returned by ``MemoryStore.search()``.
@@ -64,6 +65,7 @@ class MemoryResult:
 # ---------------------------------------------------------------------------
 # MemoryStore protocol
 # ---------------------------------------------------------------------------
+
 
 @runtime_checkable
 class MemoryStore(Protocol):
@@ -149,6 +151,7 @@ class MemoryStore(Protocol):
 # ConversationStore protocol
 # ---------------------------------------------------------------------------
 
+
 @runtime_checkable
 class ConversationStore(Protocol):
     """Protocol for persisting and retrieving full conversation histories.
@@ -192,6 +195,7 @@ class ConversationStore(Protocol):
 # ---------------------------------------------------------------------------
 # ShortTermMemory
 # ---------------------------------------------------------------------------
+
 
 def _estimate_content_length(content: Any) -> int:
     """Heuristic character count for a message content value.
@@ -325,12 +329,14 @@ class ShortTermMemory:
                 tc_id = getattr(tc, "tool_use_id", getattr(tc, "id", ""))
                 tc_name = getattr(tc, "name", "")
                 tc_input = getattr(tc, "input", {})
-                blocks.append({
-                    "type": "tool_use",
-                    "id": tc_id,
-                    "name": tc_name,
-                    "input": tc_input,
-                })
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": tc_id,
+                        "name": tc_name,
+                        "input": tc_input,
+                    }
+                )
             self._messages.append({"role": "assistant", "content": blocks})
         else:
             self._messages.append({"role": "assistant", "content": content})
@@ -351,15 +357,19 @@ class ShortTermMemory:
         content = getattr(result, "content", "")
         is_error = getattr(result, "is_error", False)
 
-        self._messages.append({
-            "role": "user",
-            "content": [{
-                "type": "tool_result",
-                "tool_use_id": tool_use_id,
-                "content": content,
-                "is_error": is_error,
-            }],
-        })
+        self._messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": content,
+                        "is_error": is_error,
+                    }
+                ],
+            }
+        )
 
     # ------------------------------------------------------------------
     # Retrieval

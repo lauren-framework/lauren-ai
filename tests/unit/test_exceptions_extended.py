@@ -1,4 +1,5 @@
 """Extended unit tests for the exception hierarchy — covers all __str__ methods."""
+
 from __future__ import annotations
 
 import pytest
@@ -216,9 +217,7 @@ class TestAgentBudgetExceededErrorStr:
         assert "tokens" in s
 
     def test_attributes(self):
-        exc = AgentBudgetExceededError(
-            "x", budget_type="cost_usd", limit=1.0, used=2.0
-        )
+        exc = AgentBudgetExceededError("x", budget_type="cost_usd", limit=1.0, used=2.0)
         assert exc.budget_type == "cost_usd"
         assert exc.limit == pytest.approx(1.0)
         assert exc.used == pytest.approx(2.0)
@@ -317,18 +316,14 @@ class TestToolConfirmationRejectedErrorStr:
         assert "too dangerous" in s
 
     def test_str_without_reason(self):
-        exc = ToolConfirmationRejectedError(
-            "rejected", tool_name="delete_file", tool_use_id="tc1"
-        )
+        exc = ToolConfirmationRejectedError("rejected", tool_name="delete_file", tool_use_id="tc1")
         s = str(exc)
         assert "delete_file" in s
         # reason should not appear
         assert "Reason" not in s
 
     def test_attributes(self):
-        exc = ToolConfirmationRejectedError(
-            "x", tool_name="t", tool_use_id="u", reason="r"
-        )
+        exc = ToolConfirmationRejectedError("x", tool_name="t", tool_use_id="u", reason="r")
         assert exc.tool_name == "t"
         assert exc.tool_use_id == "u"
         assert exc.reason == "r"

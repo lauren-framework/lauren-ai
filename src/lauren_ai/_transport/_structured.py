@@ -90,18 +90,15 @@ class StructuredLLM(Generic[T]):
                 try:
                     return self._model_cls(**tc.input)  # type: ignore[return-value]
                 except Exception as e:
-                    raise OutputParserError(
-                        f"Structured output validation failed: {e}"
-                    ) from e
+                    raise OutputParserError(f"Structured output validation failed: {e}") from e
             # Fallback: try to parse content as JSON
             import json
+
             try:
                 data = json.loads(result.content)
                 return self._model_cls(**data)  # type: ignore[return-value]
             except Exception as e:
-                raise OutputParserError(
-                    f"Could not extract structured output: {e}"
-                ) from e
+                raise OutputParserError(f"Could not extract structured output: {e}") from e
         else:
             # AsyncIterator — collect all chunks and parse
             chunks = []
@@ -109,13 +106,12 @@ class StructuredLLM(Generic[T]):
                 if chunk.delta:
                     chunks.append(chunk.delta)
             import json
+
             try:
                 data = json.loads("".join(chunks))
                 return self._model_cls(**data)  # type: ignore[return-value]
             except Exception as e:
-                raise OutputParserError(
-                    f"Structured output from stream failed: {e}"
-                ) from e
+                raise OutputParserError(f"Structured output from stream failed: {e}") from e
 
     def __or__(self, other: Any) -> Any:
         """Compose this structured LLM into a :class:`~lauren_ai._chains.Chain`.

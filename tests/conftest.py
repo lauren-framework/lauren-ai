@@ -1,4 +1,5 @@
 """Shared pytest fixtures for lauren-ai tests."""
+
 from __future__ import annotations
 
 import pytest

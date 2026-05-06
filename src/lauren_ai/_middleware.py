@@ -151,9 +151,7 @@ class RateLimitStore:
         """
         raise NotImplementedError
 
-    async def increment(
-        self, key: str, *, tokens: int = 0, window_seconds: int
-    ) -> BudgetUsage:
+    async def increment(self, key: str, *, tokens: int = 0, window_seconds: int) -> BudgetUsage:
         """Increment usage and return updated snapshot.
 
         :param key: The rate limit key.

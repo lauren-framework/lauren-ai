@@ -280,7 +280,9 @@ class TestFunctionFormTools:
         """Agent calls two tools in separate turns then finishes."""
         _, mock = LLMConfig.for_testing()
         mock.queue_tool_use("get_weather", {"city": "New York"})
-        mock.queue_tool_use("convert_currency", {"amount": 100.0, "from_ccy": "USD", "to_ccy": "EUR"})
+        mock.queue_tool_use(
+            "convert_currency", {"amount": 100.0, "from_ccy": "USD", "to_ccy": "EUR"}
+        )
         mock.queue_response(_completion("NYC sunny; €92 for $100.", id="c3"))
 
         app = self._make_app(mock)
@@ -854,18 +856,20 @@ class TestSSEStreaming:
 
         cfg, mock = LLMConfig.for_testing()
         # Turn 1: streaming tool-use chunks so _stream_loop can accumulate and execute
-        mock.queue_stream([
-            CompletionChunk(
-                tool_call_delta=ToolCallDelta(
-                    tool_use_id="tc1", name="lookup_tool", input_delta='{"q":"x"}'
-                )
-            ),
-            CompletionChunk(
-                delta="",
-                stop_reason="tool_use",
-                usage=TokenUsage(input_tokens=10, output_tokens=5),
-            ),
-        ])
+        mock.queue_stream(
+            [
+                CompletionChunk(
+                    tool_call_delta=ToolCallDelta(
+                        tool_use_id="tc1", name="lookup_tool", input_delta='{"q":"x"}'
+                    )
+                ),
+                CompletionChunk(
+                    delta="",
+                    stop_reason="tool_use",
+                    usage=TokenUsage(input_tokens=10, output_tokens=5),
+                ),
+            ]
+        )
         # Turn 2: streaming final answer
         mock.queue_stream(_chunks("Found: result:x"))
 

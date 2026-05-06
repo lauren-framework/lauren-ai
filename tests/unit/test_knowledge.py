@@ -1,4 +1,5 @@
 """Unit tests for knowledge base and chunkers."""
+
 from __future__ import annotations
 
 import pytest
@@ -24,6 +25,7 @@ class TestTextLoader:
     @pytest.mark.asyncio
     async def test_load_missing_file_raises(self):
         from lauren_ai._exceptions import KnowledgeLoadError
+
         loader = TextLoader("/nonexistent/file.txt", is_file=True)
         with pytest.raises(KnowledgeLoadError):
             await loader.load()
@@ -72,7 +74,9 @@ class TestKnowledgeBase:
     async def test_load_and_search(self):
         store = InMemoryVectorStore()
         kb = KnowledgeBase(store=store)
-        loader = TextLoader("Paris is the capital of France. Python is a programming language.", is_file=False)
+        loader = TextLoader(
+            "Paris is the capital of France. Python is a programming language.", is_file=False
+        )
         count = await kb.load(loader)
         assert count >= 1
 
@@ -85,4 +89,5 @@ class TestKnowledgeBase:
         kb = KnowledgeBase(store=store)
         search_tool = kb.as_tool()
         from lauren_ai._tools import TOOL_META
+
         assert hasattr(search_tool, TOOL_META)

@@ -141,8 +141,7 @@ def guardrail(
     """
     if args:
         raise DecoratorUsageError(
-            "@guardrail must be called with parentheses: "
-            "@guardrail() or @guardrail(kind='input')"
+            "@guardrail must be called with parentheses: @guardrail() or @guardrail(kind='input')"
         )
 
     def _apply(cls: C) -> C:
