@@ -29,7 +29,7 @@ PEP 563 lazy evaluation converts all annotations to strings, breaking schema
 generation silently.  Add this comment at the top of every tool file:
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 # The @tool() decorator uses inspect.signature() at decoration time to build
 # the JSON schema, and PEP 563 lazy evaluation breaks that introspection.
 ```
@@ -41,7 +41,7 @@ generation silently.  Add this comment at the top of every tool file:
 The simplest form: an `async def` decorated with `@tool()`.
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 from lauren_ai import tool
 
 @tool()
@@ -97,7 +97,7 @@ Use a class when the tool needs injected dependencies or persistent state.
 because no callable entry point is found.
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 from lauren_ai import tool, ToolContext
 
 @tool()
@@ -134,7 +134,7 @@ automatically.  Register the tool class as a provider and let the container
 instantiate it:
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 from lauren import injectable, Scope
 from lauren_ai import tool, ToolContext
 from app.db import Database
@@ -201,7 +201,7 @@ before executing.  The pattern uses a `runner.approve_tool()` / `runner.reject_t
 call from your controller or UI layer:
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 from lauren_ai import tool, ToolContext
 
 @tool()

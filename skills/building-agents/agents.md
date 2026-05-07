@@ -182,7 +182,7 @@ keeps all delegation decisions visible in conversation history and is easier
 to audit and debug.
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 from lauren_ai import AgentRunner, tool, ToolContext
 
 @tool()

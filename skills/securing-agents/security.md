@@ -151,7 +151,7 @@ value if a developer constructs it manually.
 Extract a helper in the tool file so the pattern is written once:
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 # The @tool() decorator uses inspect.signature() at decoration time to build
 # the JSON schema, and PEP 563 lazy evaluation breaks that introspection.
 from lauren_ai import ToolContext, tool
@@ -217,7 +217,7 @@ When a tool delegates to a sub-agent, forward `ctx.execution_context` verbatim
 so the sub-agent's tools can also read the verified identity:
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 from lauren import injectable, Scope
 from lauren_ai import tool, ToolContext, AgentRunnerBase
 

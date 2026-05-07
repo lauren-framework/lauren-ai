@@ -16,7 +16,7 @@ annotations to plain strings, silently breaking schema generation.
 Add this comment at the top of every tool file:
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 # The @tool() decorator uses inspect.signature() at decoration time to build
 # the JSON schema, and PEP 563 lazy evaluation breaks that introspection.
 ```
@@ -26,7 +26,7 @@ Add this comment at the top of every tool file:
 ## Quick start — function-form tool
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 from lauren_ai import tool
 
 @tool()
@@ -58,7 +58,7 @@ named `run()` — not `__call__()`.  The `@tool()` decorator looks for `run`;
 a `__call__` is silently ignored and the decorator will raise `ValueError`.
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 from lauren_ai import tool, ToolContext
 
 @tool()

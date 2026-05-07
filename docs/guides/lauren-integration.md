@@ -137,7 +137,7 @@ operations.  When a tool needs a database client, HTTP session, or any other
 service, use the class form — the DI container handles construction:
 
 ```python title="app/ai/banking_tools.py"
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 # The @tool() decorator uses inspect.signature() at decoration time to build
 # the JSON schema, and PEP 563 lazy evaluation breaks that introspection.
 from lauren_ai import ToolContext, tool
@@ -396,7 +396,7 @@ DI token generated automatically by `AgentModule.for_root()`.  No named
 `DelegateToBankingTransfer` injects `AgentRunner[BankingTransferAgent]`:
 
 ```python title="app/ai/banking_delegation.py"
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 from lauren_ai import AgentRunner, ToolContext, tool
 
 @tool()

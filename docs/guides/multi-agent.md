@@ -20,7 +20,7 @@ delegation appears in the tool call log, and the result flows back through the
 normal tool result channel.
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 from lauren_ai import tool, agent, use_tools, AgentRunnerBase
 from lauren_ai._tools import ToolContext
 from lauren import injectable, Scope

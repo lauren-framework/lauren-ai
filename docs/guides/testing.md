@@ -140,7 +140,7 @@ client.reset()  # reset the mock (clear queue + call history)
 Test a tool function without involving the agent runner:
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 import pytest
 from my_app.tools import get_weather
 from lauren_ai._tools import ToolContext, ToolResult

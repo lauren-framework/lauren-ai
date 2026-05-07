@@ -11,7 +11,7 @@ LLM.
 > this comment to the top of tool files as a reminder:
 >
 > ```python
-> # NOTE: Do NOT add `from __future__ import annotations` to this file.
+> 
 > ```
 
 ---
@@ -21,7 +21,7 @@ LLM.
 The simplest form — a plain async function decorated with `@tool()`:
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 from lauren_ai import tool
 
 @tool()
@@ -47,7 +47,7 @@ Use the class form when the tool needs constructor-injected dependencies (a
 database client, an HTTP client, etc.):
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 from lauren_ai import tool
 from lauren import Scope, injectable
 
@@ -85,7 +85,7 @@ execution time.  `ToolContext` is **never** included in the JSON schema sent
 to the LLM — it is injected internally by `ToolExecutor`.
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to this file.
+
 from lauren_ai import tool
 from lauren_ai._tools import ToolContext
 
