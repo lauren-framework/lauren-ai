@@ -536,25 +536,52 @@ class TestAgentModule:
             cls = AgentModule.for_root(agents=[AgentX], tools=[collision_tool, collision_tool2])
         assert cls is not None
 
-    def test_for_root_with_memory_and_conversation(self):
+    def test_for_root_no_longer_accepts_memory_or_conversation_store_kwargs(self):
+        """Hard break: ``memory=`` and ``conversation_store=`` were removed from
+        ``for_root``.  Per-agent state lives on ``@agent(memory=…, conversation_store=…)``.
+        """
         from lauren_ai._agents import agent
 
         @agent()
         class AgentY:
             """Y."""
 
-        class FakeMemory:
+        class FakeStore:
             pass
 
-        class FakeConvStore:
-            pass
+        with pytest.raises(TypeError, match="memory"):
+            AgentModule.for_root(agents=[AgentY], memory=FakeStore())  # type: ignore[call-arg]
+        with pytest.raises(TypeError, match="conversation_store"):
+            AgentModule.for_root(agents=[AgentY], conversation_store=FakeStore())  # type: ignore[call-arg]
 
-        cls = AgentModule.for_root(
-            agents=[AgentY],
-            memory=FakeMemory(),
-            conversation_store=FakeConvStore(),
-        )
-        assert cls is not None
+    def test_for_root_default_fills_conversation_store_per_agent(self):
+        """Agents without ``@agent(conversation_store=…)`` get an
+        ``InMemoryConversationStore`` injected by ``for_root``."""
+        from lauren_ai._agents import AGENT_META, agent
+        from lauren_ai._memory._stores import InMemoryConversationStore
+
+        @agent()
+        class AgentDefaultStore:
+            """."""
+
+        AgentModule.for_root(agents=[AgentDefaultStore])
+        meta = getattr(AgentDefaultStore, AGENT_META)
+        assert isinstance(meta.conversation_store, InMemoryConversationStore)
+
+    def test_for_root_resets_runner_class_on_each_call(self):
+        """Multi-app: two for_root calls must not share runner_class state."""
+        from lauren_ai._agents import AGENT_META, agent
+
+        @agent()
+        class AgentMultiApp:
+            """."""
+
+        AgentModule.for_root(agents=[AgentMultiApp])
+        first_runner = getattr(AgentMultiApp, AGENT_META).runner_class
+        AgentModule.for_root(agents=[AgentMultiApp])
+        second_runner = getattr(AgentMultiApp, AGENT_META).runner_class
+        # Each for_root() generates its own dynamic subclass.
+        assert first_runner is not second_runner
 
     def test_for_root_with_tool_cache(self):
         from lauren_ai._agents import agent

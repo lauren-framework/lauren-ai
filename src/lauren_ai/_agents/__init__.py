@@ -23,11 +23,13 @@ from __future__ import annotations
 
 __all__ = [
     "AGENT_META",
+    "USE_KB_SOURCES_META",
     "USE_TOOLS_META",
     "AgentMeta",
     "AgentContext",
     "AgentResponse",
     "agent",
+    "use_knowledge_sources",
     "use_tools",
 ]
 
@@ -53,6 +55,12 @@ AGENT_META: str = "__lauren_ai_agent__"
 
 #: Attribute name set by ``@use_tools()`` to store attached tool classes.
 USE_TOOLS_META: str = "__lauren_ai_tools__"
+
+#: Attribute name set by ``@use_knowledge_sources()`` to store the tool names
+#: of the KnowledgeSources visible to the decorated agent.  Stored as a
+#: ``tuple[str, ...]``.  Absence (or own ``__dict__`` lacking the key) means
+#: the agent has **no** knowledge-source tools — opt-in only.
+USE_KB_SOURCES_META: str = "__lauren_ai_knowledge_sources__"
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +88,29 @@ class AgentMeta:
     :param name: Human-readable agent name.  Defaults to the decorated class
         name when not supplied explicitly to ``@agent()``.
     :type name: str
+    :param memory: Per-agent memory instance supplied via
+        ``@agent(memory=…)``.  When set, the **same instance is reused
+        across every** :meth:`~lauren_ai._agents._runner.AgentRunnerBase.run`
+        **call** — that is what "agent memory" means.  When ``None`` the
+        runner builds a fresh
+        :class:`~lauren_ai._memory.ShortTermMemory` per turn.
+    :type memory: Any | None
+    :param conversation_store: Per-agent conversation store supplied via
+        ``@agent(conversation_store=…)``.  When ``None``,
+        :meth:`AgentModule.for_root` auto-creates an
+        :class:`~lauren_ai._memory.InMemoryConversationStore` and writes it
+        back here.
+    :type conversation_store: Any | None
+    :param knowledge_source_filter: Tuple of tool names from
+        ``@use_knowledge_sources(…)``.  ``None`` means **no KB tools** for
+        this agent — opt-in only.  Set during ``AgentModule.for_root`` from
+        the decorated class's ``__dict__`` (strict-inheritance — never
+        inherited from parent classes).
+    :type knowledge_source_filter: tuple[str, ...] | None
+    :param runner_class: The concrete ``AgentRunnerBase`` subclass for the
+        :class:`~lauren_ai._module.AgentModule` this agent belongs to.  Set
+        by ``AgentModule.for_root``.  Used by ``AgentRunner[X]`` resolution.
+    :type runner_class: type | None
     """
 
     model: str | None
@@ -87,6 +118,10 @@ class AgentMeta:
     config: AgentConfig
     tool_classes: tuple[Any, ...] = field(default_factory=tuple)
     name: str = ""
+    memory: Any | None = None
+    conversation_store: Any | None = None
+    knowledge_source_filter: tuple[str, ...] | None = None
+    runner_class: type | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +277,8 @@ def agent(
     system: str | None = None,
     max_turns: int | None = None,
     temperature: float | None = None,
+    memory: Any | None = None,
+    conversation_store: Any | None = None,
     **config_kwargs: Any,
 ) -> Callable[[type[C]], type[C]]:
     """Decorator that marks a class as an AI agent.
@@ -289,6 +326,18 @@ def agent(
     :param temperature: Sampling temperature override.  Forwarded to
         :class:`~lauren_ai._config.AgentConfig`.
     :type temperature: float | None
+    :param memory: Per-agent memory instance.  When set, the **same
+        instance is reused across every** :meth:`run` **call** — that is
+        what "agent memory" means semantically.  When ``None`` the runner
+        builds a fresh :class:`~lauren_ai._memory.ShortTermMemory` per
+        turn.  Per-call ``runner.run(agent, …, memory=…)`` always wins.
+    :type memory: Any | None
+    :param conversation_store: Per-agent conversation store.  When
+        ``None``, :meth:`AgentModule.for_root` auto-creates an
+        :class:`~lauren_ai._memory.InMemoryConversationStore` and writes
+        it back to AgentMeta.  Per-call ``runner.run(agent, …,
+        conversation_store=…)`` always wins.
+    :type conversation_store: Any | None
     :param config_kwargs: Additional keyword arguments forwarded to
         :class:`~lauren_ai._config.AgentConfig`.
     :return: A class decorator.
@@ -336,6 +385,8 @@ def agent(
             config=cfg,
             tool_classes=raw_tools,
             name=effective_name,
+            memory=memory,
+            conversation_store=conversation_store,
         )
         setattr(cls, AGENT_META, meta)
 
@@ -387,3 +438,92 @@ def use_tools(*tools: Any) -> Callable[[type[C]], type[C]]:
         return cls
 
     return decorator  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
+# @use_knowledge_sources() decorator
+# ---------------------------------------------------------------------------
+
+
+def use_knowledge_sources(*sources: Any) -> Callable[[type[C]], type[C]]:
+    """Restrict an agent's knowledge-base tool visibility to the listed sources.
+
+    Without this decorator an agent has **no** knowledge-base tools — KB
+    visibility is **opt-in** even when the enclosing
+    :class:`~lauren_ai._module.AgentModule` declares ``knowledge=[…]``.
+    With it, only the listed :class:`~lauren_ai._knowledge.KnowledgeSource`
+    instances are attached to the agent's tool schema at runtime.
+
+    Stores the *tool names* (strings) on the class, not the
+    ``KnowledgeSource`` instances — matching against the module's declared
+    sources is a string-set comparison at module-build time.
+
+    Stacking is allowed (decorator concatenates names with any already
+    present), and **strict-inheritance applies** (mirrors Lauren's
+    framework golden-rule #3): a subclass that inherits the metadata from
+    a parent without redeclaring ``@use_knowledge_sources`` raises
+    :class:`~lauren_ai._exceptions.MetadataInheritanceError` at module
+    construction time.
+
+    Typically stacked above ``@agent()``::
+
+        from app.knowledge_sources import PUBLIC_KB_SOURCE
+
+        @use_knowledge_sources(PUBLIC_KB_SOURCE)
+        @agent(name="UnauthCRM", model="...")
+        class UnauthenticatedCRMAgent: ...
+
+    The :meth:`AgentModule.for_root` validation step checks every name
+    here against the module's ``knowledge=`` list and raises
+    :class:`~lauren_ai._exceptions.DecoratorUsageError` if any source is
+    not declared at module level.
+
+    :param sources: One or more :class:`KnowledgeSource` instances.  Their
+        ``tool_name`` strings are stored on the class.
+    :type sources: KnowledgeSource
+    :return: A class decorator.
+    :rtype: Callable[[type], type]
+    :raises DecoratorUsageError: When called with no sources.
+    """
+    if not sources:
+        from lauren_ai._exceptions import DecoratorUsageError  # noqa: PLC0415
+
+        raise DecoratorUsageError(
+            "@use_knowledge_sources requires at least one KnowledgeSource",
+            decorator_name="use_knowledge_sources",
+        )
+
+    def decorator(cls: type[C]) -> type[C]:
+        names: tuple[str, ...] = tuple(s.tool_name for s in sources)
+        # Strict inheritance — read own ``__dict__`` directly so we never
+        # inherit from a parent class.  Stacking rule: concatenate.
+        existing: tuple[str, ...] = cls.__dict__.get(USE_KB_SOURCES_META, ())
+        setattr(cls, USE_KB_SOURCES_META, existing + names)
+        return cls
+
+    return decorator  # type: ignore[return-value]
+
+
+def _check_no_inherited_kb_sources(cls: type) -> None:
+    """Raise ``MetadataInheritanceError`` if a parent class has
+    :data:`USE_KB_SOURCES_META` set but ``cls.__dict__`` does not.
+
+    Mirrors Lauren's strict-inheritance rule for ``@injectable`` /
+    ``@controller``: subclasses must redeclare metadata-attaching
+    decorators or remove the inheritance.
+
+    Called by :meth:`AgentModule.for_root` at module-build time so the
+    failure surfaces during ``LaurenFactory.create``, not at runtime.
+    """
+    if USE_KB_SOURCES_META in cls.__dict__:
+        return
+    for base in cls.__mro__[1:]:
+        if USE_KB_SOURCES_META in base.__dict__:
+            from lauren.exceptions import MetadataInheritanceError  # noqa: PLC0415
+
+            raise MetadataInheritanceError(
+                f"{cls.__name__} inherits @use_knowledge_sources from "
+                f"{base.__name__} but does not redeclare it.  Re-apply "
+                f"@use_knowledge_sources(...) on {cls.__name__} or remove "
+                f"the inheritance."
+            )

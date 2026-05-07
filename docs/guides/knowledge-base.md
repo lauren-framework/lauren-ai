@@ -156,11 +156,17 @@ keys.
 
 ### Attaching via `AgentModule.for_root(knowledge=...)`
 
-For module-level wiring, pass `KnowledgeSource` instances (or bare
-`KnowledgeBase`s) to `AgentModule.for_root` via the `knowledge=`
-parameter.  The framework calls `kb.as_tool()` internally and
-auto-attaches the resulting tool to **every** agent in the module —
-no `@use_tools()` declaration needed.
+For module-level wiring, pass `KnowledgeSource` instances to
+`AgentModule.for_root` via the `knowledge=` parameter.  Bare
+`KnowledgeBase` instances are rejected — every entry must be a
+`KnowledgeSource(kb=..., tool_name=...)`.
+
+**Visibility is opt-in per agent.**  Each agent that needs a KB tool
+declares it with ``@use_knowledge_sources(KS, ...)``.  Agents without
+that decorator see **no** KB tools — even when the module's
+``knowledge=`` list declares them.  This makes RAG access auditable
+from the agent's source: read the agent class, see every KB it can
+call.
 
 When a `KnowledgeSource` ships `loaders=[…]`, the framework also
 generates a `Scope.SINGLETON` `@post_construct` hook per source.  At
@@ -169,37 +175,58 @@ iterates the loaders and populates each KB via `await kb.load(loader)`
 — **the user never calls `await` themselves**.
 
 ```python
-from lauren_ai import AgentModule, LLMModule
+from lauren_ai import AgentModule, LLMModule, agent, use_knowledge_sources
 from lauren_ai._knowledge import (
     KnowledgeBase, KnowledgeSource, SentenceChunker, TextLoader,
 )
 from lauren_ai._memory._vector import InMemoryVectorStore
 
+# Hoist the KnowledgeSource so the agent file can reference it.
+PRODUCT_MANUAL = KnowledgeSource(
+    kb=KnowledgeBase(
+        store=InMemoryVectorStore(),
+        chunker=SentenceChunker(),
+    ),
+    tool_name="search_manual",
+    top_k=3,
+    loaders=[TextLoader("docs/product_manual.txt")],
+)
+
+@use_knowledge_sources(PRODUCT_MANUAL)
 @agent(model="claude-opus-4-6", system="Answer using the product manual.")
-class ManualAgent: ...                                # NO @use_tools needed
+class ManualAgent: ...
 
 LLMProvider = LLMModule.for_root(LLMConfig.for_anthropic())
 
 AIModule = AgentModule.for_root(
     agents=[ManualAgent],
     imports=LLMProvider,
-    knowledge=[
-        KnowledgeSource(
-            # KB is empty here; the framework populates it at startup
-            kb=KnowledgeBase(
-                store=InMemoryVectorStore(),
-                chunker=SentenceChunker(),
-            ),
-            tool_name="search_manual",
-            top_k=3,
-            loaders=[TextLoader("docs/product_manual.txt")],
-        ),
-    ],
+    knowledge=[PRODUCT_MANUAL],
 )
 # Loading happens at app startup via a generated @post_construct hook —
 # no asyncio.run at module-import time, safe inside any async context
 # (uvicorn, pytest-asyncio mode=auto, Modal).
 ```
+
+#### `KnowledgeSource` is `@injectable`
+
+`KnowledgeSource` itself is decorated with
+`@injectable(scope=Scope.SINGLETON)` and `for_root` registers each
+instance via `use_value(provide=type(ks), value=ks)`.  Any DI consumer
+can `Inject(KnowledgeSource)` (or your subclass) to retrieve the
+configured instance.
+
+To override the scope, subclass and redecorate:
+
+```python
+from lauren import Scope, injectable
+
+@injectable(scope=Scope.REQUEST)
+class PerRequestKB(KnowledgeSource): ...
+```
+
+Strict-inheritance applies (Lauren framework golden rule #3) — the
+subclass MUST redeclare `@injectable`.
 
 For multiple KBs in the same module, give each a distinct `tool_name`:
 
@@ -230,15 +257,15 @@ module-build time so the collision is caught before the first request.
 #### Pre-populated KB (no loaders)
 
 If you've already loaded the KB elsewhere (e.g. fetching from a
-remote source asynchronously before app construction), pass the bare
-populated KB and omit `loaders=`:
+remote source asynchronously before app construction), wrap the
+populated KB in a `KnowledgeSource` and omit `loaders=`:
 
 ```python
 # Caller has already done: await kb.load(TextLoader(...))
 AIModule = AgentModule.for_root(
     agents=[ManualAgent],
     imports=LLMProvider,
-    knowledge=[kb],          # bare KnowledgeBase; default tool name
+    knowledge=[KnowledgeSource(kb=kb, tool_name="search_manual")],
 )
 ```
 

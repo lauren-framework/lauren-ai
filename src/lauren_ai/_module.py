@@ -515,8 +515,6 @@ class AgentModule:
         tools: list[Any] | None = None,
         imports: Any | None = None,
         signals: Any | None = None,
-        memory: Any | None = None,
-        conversation_store: Any | None = None,
         config: AgentConfig | None = None,
         tool_cache: Any | None = None,
         knowledge: list[Any] | None = None,
@@ -545,25 +543,26 @@ class AgentModule:
             into the :class:`~lauren_ai._agents._runner.AgentRunner` so it emits
             ``ModelCallComplete`` / ``AgentRunComplete`` events.
         :type signals: Any | None
-        :param memory: Long-term memory store instance.
-        :type memory: Any | None
-        :param conversation_store: Conversation history store instance.
-        :type conversation_store: Any | None
         :param config: Default :class:`~lauren_ai._config.AgentConfig`.
         :type config: AgentConfig | None
         :param tool_cache: Cache backend for tool result caching.
         :type tool_cache: Any | None
-        :param knowledge: Knowledge bases to expose as retrieval tools.  Each
-            entry is either a bare :class:`~lauren_ai._knowledge.KnowledgeBase`
-            (registered under the default tool name ``"search_knowledge_base"``)
-            or a :class:`~lauren_ai._knowledge.KnowledgeSource` with custom
-            ``tool_name`` and ``top_k`` overrides.  Each KB is converted to a
-            ``@tool()`` via ``KnowledgeBase.as_tool()`` and added to every
-            agent in this module's tool map.  Pre-populate the KB via
-            ``await kb.load(loader)`` *before* passing it in — this method
-            does not load.  Two KBs with the same tool name raise
+        :param knowledge: List of :class:`~lauren_ai._knowledge.KnowledgeSource`
+            instances declared at module scope.  Each is converted to a
+            ``@tool()`` via ``KnowledgeBase.as_tool()`` and registered as a
+            DI provider via ``use_value(provide=type(ks), value=ks)``.
+
+            **Visibility is opt-in.**  Agents must declare
+            ``@use_knowledge_sources(...)`` to attach a source's tool to
+            their schema.  An agent without that decorator sees **no** KB
+            tools (its ``meta.knowledge_source_filter`` is ``None``).
+
+            Bare :class:`KnowledgeBase` instances are rejected with
+            ``TypeError`` — wrap in
+            ``KnowledgeSource(kb=..., tool_name=...)``.  Two sources with
+            the same tool name raise
             :class:`~lauren_ai._exceptions.DecoratorUsageError`.
-        :type knowledge: list[KnowledgeBase | KnowledgeSource] | None
+        :type knowledge: list[KnowledgeSource] | None
         :param runner: Optional named :class:`~lauren_ai._agents._runner.AgentRunnerBase`
             subclass to use as this module's runner DI token.
 
@@ -605,8 +604,14 @@ class AgentModule:
         """
         import inspect as _inspect  # noqa: PLC0415
 
-        from lauren_ai._agents import USE_TOOLS_META  # noqa: PLC0415
-        from lauren_ai._agents._runner import AgentRunnerBase  # noqa: PLC0415
+        from lauren_ai._agents import (  # noqa: PLC0415
+            AGENT_META,
+            USE_KB_SOURCES_META,
+            USE_TOOLS_META,
+            _check_no_inherited_kb_sources,
+        )
+        from lauren_ai._agents._runner import AgentRunner, AgentRunnerBase  # noqa: PLC0415
+        from lauren_ai._memory._stores import InMemoryConversationStore  # noqa: PLC0415
         from lauren_ai._tools import TOOL_META, _add_to_tool_map  # noqa: PLC0415
 
         if runner is not None:
@@ -620,9 +625,32 @@ class AgentModule:
             _runner_name = "".join(a.__name__ for a in agents) + "Runner"
             _runner_cls = type(_runner_name, (AgentRunnerBase,), {})
 
+        # Reset-then-default-fill AgentMeta state.  This runs every for_root
+        # call so multi-app test setups (two LaurenFactory.create() calls
+        # back-to-back) don't share the first app's defaulted state.  User-
+        # supplied ``@agent(memory=…, conversation_store=…)`` values are
+        # preserved; only framework-defaulted slots are filled.
+        for _agent_cls in agents:
+            _meta = getattr(_agent_cls, AGENT_META, None)
+            if _meta is None:
+                raise AgentConfigError(
+                    f"AgentModule.for_root: {_agent_cls.__name__} has no "
+                    f"AgentMeta.  Decorate with @agent(...) first.",
+                    agent_class=_agent_cls,
+                )
+            _meta.runner_class = _runner_cls
+            if _meta.conversation_store is None:
+                _meta.conversation_store = InMemoryConversationStore()
+            # Strict-inheritance check — mirrors framework rule for
+            # @injectable / @controller subclasses.
+            _check_no_inherited_kb_sources(_agent_cls)
+            # Mirror @use_knowledge_sources tuple onto AgentMeta for runner
+            # lookup at schema build time.  Read own __dict__ directly so
+            # the rule "metadata is never inherited" is enforced uniformly.
+            _meta.knowledge_source_filter = _agent_cls.__dict__.get(USE_KB_SOURCES_META)
+
         _captured_tool_cache = tool_cache
         _captured_signals = signals
-        _captured_conversation_store = conversation_store
 
         _fn_tools: list[Any] = []
         _class_tools: list[Any] = []
@@ -678,39 +706,39 @@ class AgentModule:
         # the duplicate (its dedup logic uses ``_seen_tool_names``).
         _kb_tool_names: set[str] = set()
         _kb_loader_classes: list[type] = []
+        _kb_value_providers: list[Any] = []
         for ks in knowledge or []:
-            if isinstance(ks, KnowledgeSource):
-                _name = ks.tool_name
-            elif isinstance(ks, KnowledgeBase):
-                _name = "search_knowledge_base"
-            else:
+            if not isinstance(ks, KnowledgeSource):
                 raise TypeError(
                     f"AgentModule.for_root(knowledge=...): each entry must be "
-                    f"a KnowledgeBase or KnowledgeSource instance; got "
-                    f"{type(ks).__name__!r}"
+                    f"a KnowledgeSource instance; got {type(ks).__name__!r}.  "
+                    f"Wrap a bare KnowledgeBase as "
+                    f"KnowledgeSource(kb=..., tool_name=...)."
                 )
+            _name = ks.tool_name
             if _name in _kb_tool_names:
                 raise DecoratorUsageError(
                     f"Duplicate knowledge-base tool name {_name!r} in "
-                    f"AgentModule.for_root(knowledge=...).  Use "
-                    f"KnowledgeSource(kb=..., tool_name=...) to give each "
-                    f"KnowledgeBase a unique tool name.",
+                    f"AgentModule.for_root(knowledge=...).  Give each "
+                    f"KnowledgeSource a unique tool_name.",
                     decorator_name=None,
                 )
             _kb_tool_names.add(_name)
 
-            if isinstance(ks, KnowledgeSource):
-                kb_tool = ks.kb.as_tool(name=ks.tool_name, top_k=ks.top_k)
-            else:
-                kb_tool = ks.as_tool()
+            kb_tool = ks.kb.as_tool(name=ks.tool_name, top_k=ks.top_k)
             _categorize(kb_tool)
+
+            # Per-source DI registration.  ``type(ks)`` is ``KnowledgeSource``
+            # for the default class, the user's ``@injectable`` subclass
+            # otherwise — each becomes its own DI token bound via use_value.
+            _kb_value_providers.append(use_value(provide=type(ks), value=ks))
 
             # Generate the per-source loader-injectable if the user
             # supplied loaders.  Each call creates a fresh class so the
             # closure captures THIS source's kb / loaders / name (NOT
             # the loop variables, which would alias to the last
             # iteration).
-            if isinstance(ks, KnowledgeSource) and ks.loaders:
+            if ks.loaders:
                 _kb_loader_classes.append(
                     _make_kb_loader_class(
                         kb=ks.kb,
@@ -743,6 +771,12 @@ class AgentModule:
         # startup and populate each KB before the first request lands.
         for _kb_loader_cls in _kb_loader_classes:
             providers.append(_kb_loader_cls)
+
+        # KnowledgeSource ``use_value`` providers — one per source.  Lets DI
+        # consumers ``Inject(KnowledgeSource)`` (or your subclass) to retrieve
+        # the configured instance.
+        for _kb_value_provider in _kb_value_providers:
+            providers.append(_kb_value_provider)
 
         # Add class-form tools as DI providers only — they are module-internal
         # and resolved by the AgentRunner factory.  Exporting them would cause
@@ -788,7 +822,6 @@ class AgentModule:
                 _num_shared_tools = len(_captured_shared_tools)
                 _captured_signals_ref = _captured_signals
                 _captured_tool_cache_ref = _captured_tool_cache
-                _captured_conv_store_ref = _captured_conversation_store
                 _captured_kb_tool_names = frozenset(_kb_tool_names)
 
                 def _build_runner_with_classes(*args: Any) -> AgentRunner:
@@ -832,7 +865,6 @@ class AgentModule:
                         config=cfg,
                         signals=_captured_signals_ref,
                         cache_backend=_captured_tool_cache_ref,
-                        conversation_store=_captured_conv_store_ref,
                         knowledge_tool_names=set(_captured_kb_tool_names),
                     )
 
@@ -857,7 +889,6 @@ class AgentModule:
                 _captured_eager_tools = _eager_tools
                 _captured_signals_ref = _captured_signals
                 _captured_tool_cache_ref = _captured_tool_cache
-                _captured_conv_store_ref = _captured_conversation_store
                 _captured_runner_cls = _runner_cls
                 _captured_kb_tool_names_eager = frozenset(_kb_tool_names)
 
@@ -869,7 +900,6 @@ class AgentModule:
                         config=cfg,
                         signals=_captured_signals_ref,
                         cache_backend=_captured_tool_cache_ref,
-                        conversation_store=_captured_conv_store_ref,
                         knowledge_tool_names=set(_captured_kb_tool_names_eager),
                     ),
                     injects=[_Transport, LLMConfig],
@@ -878,6 +908,30 @@ class AgentModule:
 
             providers.append(_runner_provider)
             exports.append(_runner_cls)
+
+            # ── Per-agent ``AgentRunner[X]`` aliases ───────────────────
+            # For every agent in this module, bind ``AgentRunner[AgentX]``
+            # to this module's runner singleton.  Two agents in the same
+            # module share the runner instance (correct — the runner
+            # consults each agent's AgentMeta on every call).
+            #
+            # Use ``use_factory`` rather than ``use_existing`` so the
+            # provider's ``cls`` is the factory callable (not a type) and
+            # the bare ``AgentRunner`` Protocol scan
+            # (``_structural_protocol_providers``) doesn't pick the alias
+            # rows up alongside the real runner — that would raise
+            # ``ProtocolAmbiguityError`` for ``runner: AgentRunner``.
+            for _agent_cls in agents:
+                _parameterized = AgentRunner[_agent_cls]
+                providers.append(
+                    use_factory(
+                        provide=_parameterized,
+                        factory=lambda r: r,
+                        injects=[_runner_cls],
+                        scope=Scope.SINGLETON,
+                    )
+                )
+                exports.append(_parameterized)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "lauren_ai.AgentModule: could not build AgentRunner use_factory "
@@ -885,6 +939,23 @@ class AgentModule:
                 "time): %s.  AgentRunner will need to be wired manually.",
                 exc,
             )
+
+        # Validate ``@use_knowledge_sources`` against the module's declared
+        # ``knowledge=`` list.  Unknown source tool names ⇒ DecoratorUsageError
+        # at module-build time so typos surface during ``LaurenFactory.create``,
+        # not at runtime.
+        for _agent_cls in agents:
+            _meta = getattr(_agent_cls, AGENT_META)
+            if _meta.knowledge_source_filter is None:
+                continue
+            _unknown = set(_meta.knowledge_source_filter) - _kb_tool_names
+            if _unknown:
+                raise DecoratorUsageError(
+                    f"@use_knowledge_sources on {_agent_cls.__name__} references "
+                    f"{sorted(_unknown)} but the module's knowledge= list only "
+                    f"declares {sorted(_kb_tool_names)}",
+                    decorator_name="use_knowledge_sources",
+                )
 
         # Normalise the imports argument: None → [], single class → [cls], list → list.
         if imports is None:

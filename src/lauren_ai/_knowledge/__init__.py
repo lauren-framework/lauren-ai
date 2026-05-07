@@ -28,6 +28,8 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
+from lauren import Scope, injectable
+
 from lauren_ai._memory import MemoryResult, MemoryStore
 
 __all__ = [
@@ -319,16 +321,18 @@ class KnowledgeBase:
 # ---------------------------------------------------------------------------
 
 
+@injectable(scope=Scope.SINGLETON)
 @dataclass(frozen=True)
 class KnowledgeSource:
     """Pair a :class:`KnowledgeBase` with retrieval-tool configuration
     and (optionally) document loaders.
 
-    Pass a list of these (or bare :class:`KnowledgeBase` instances) to
+    Pass a list of these to
     :meth:`AgentModule.for_root(knowledge=...)
-    <lauren_ai._module.AgentModule.for_root>` to expose the KB as a
-    ``@tool()``-backed retrieval tool that every agent in the module can
-    call.
+    <lauren_ai._module.AgentModule.for_root>`.  Each agent in the module
+    can opt-in to specific sources via
+    :func:`~lauren_ai._agents.use_knowledge_sources`; agents without that
+    decorator have **no** KB tools.
 
     Three reasons to wrap a ``KnowledgeBase`` in a ``KnowledgeSource``:
 
@@ -345,6 +349,23 @@ class KnowledgeSource:
       (``LifecycleScheduler.run_post_construct``).  The user never has
       to call ``await kb.load(...)`` themselves; the KB starts empty
       and is populated before the first request lands.
+
+    DI scope
+    --------
+    ``KnowledgeSource`` itself is decorated with
+    ``@injectable(scope=Scope.SINGLETON)``.  ``AgentModule.for_root``
+    registers each instance via ``use_value(provide=type(ks), value=ks)``
+    so any DI consumer can ``Inject(KnowledgeSource)`` (or your subclass)
+    to retrieve it.
+
+    To override the scope, **subclass and redecorate**::
+
+        @injectable(scope=Scope.REQUEST)
+        class PerRequestKB(KnowledgeSource): ...
+
+    Lauren-framework's strict-inheritance rule (``MetadataInheritanceError``)
+    means subclasses MUST redeclare ``@injectable`` — inheriting it
+    silently is forbidden.
 
     :param kb:        The knowledge base.  May be empty when ``loaders``
                       is supplied — the framework populates it at startup.

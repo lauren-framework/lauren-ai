@@ -75,6 +75,7 @@ __all__ = [
     # Decorators
     "agent",
     "use_tools",
+    "use_knowledge_sources",
     "tool",
     # Agent types
     "AgentMeta",
@@ -226,6 +227,7 @@ from lauren_ai._agents import (
     AgentMeta,
     AgentResponse,
     agent,
+    use_knowledge_sources,
     use_tools,
 )
 

@@ -381,8 +381,9 @@ class TestKnowledgeParameter:
 
     @pytest.mark.asyncio
     async def test_attaches_search_tool_to_runner(self):
-        """A bare KnowledgeBase shows up as ``search_knowledge_base`` in the runner."""
+        """A KnowledgeSource shows up as ``search_knowledge_base`` in the runner."""
         kb = await _populated_kb()
+        ks = KnowledgeSource(kb=kb)
 
         @agent(model=None)
         class SearchAgent: ...
@@ -392,7 +393,7 @@ class TestKnowledgeParameter:
         AIMod = AgentModule.for_root(
             agents=[SearchAgent],
             imports=[LLMProv],
-            knowledge=[kb],
+            knowledge=[ks],
         )
 
         @module(imports=[LLMProv, AIMod])
@@ -405,9 +406,13 @@ class TestKnowledgeParameter:
 
     @pytest.mark.asyncio
     async def test_appears_in_agent_schema(self):
-        """The KB tool is in the schema list the runner sends the LLM."""
-        kb = await _populated_kb()
+        """The KB tool is in the schema list when the agent opts-in via @use_knowledge_sources."""
+        from lauren_ai._agents import use_knowledge_sources  # noqa: PLC0415
 
+        kb = await _populated_kb()
+        ks = KnowledgeSource(kb=kb)
+
+        @use_knowledge_sources(ks)
         @agent(model=None)
         class SchemaAgent: ...
 
@@ -416,7 +421,7 @@ class TestKnowledgeParameter:
         AIMod = AgentModule.for_root(
             agents=[SchemaAgent],
             imports=[LLMProv],
-            knowledge=[kb],
+            knowledge=[ks],
         )
 
         @module(imports=[LLMProv, AIMod])
@@ -457,7 +462,7 @@ class TestKnowledgeParameter:
 
     @pytest.mark.asyncio
     async def test_two_kbs_with_default_name_collision_raises(self):
-        """Two bare KBs both default to ``search_knowledge_base`` — must raise."""
+        """Two KnowledgeSources sharing the default name — must raise."""
         kb_a = await _populated_kb("Document A.")
         kb_b = await _populated_kb("Document B.")
 
@@ -470,7 +475,7 @@ class TestKnowledgeParameter:
             AgentModule.for_root(
                 agents=[CollideAgent],
                 imports=[LLMProv],
-                knowledge=[kb_a, kb_b],
+                knowledge=[KnowledgeSource(kb=kb_a), KnowledgeSource(kb=kb_b)],
             )
 
     @pytest.mark.asyncio
@@ -504,14 +509,14 @@ class TestKnowledgeParameter:
 
     @pytest.mark.asyncio
     async def test_unsupported_entry_type_raises(self):
-        """Anything other than KnowledgeBase / KnowledgeSource raises TypeError."""
+        """Anything other than KnowledgeSource raises TypeError (bare KBs forbidden)."""
 
         @agent(model=None)
         class BadEntryAgent: ...
 
         cfg, mock = LLMConfig.for_testing()
         LLMProv = LLMModule.for_root(cfg, transport_override=mock)
-        with pytest.raises(TypeError, match="KnowledgeBase or KnowledgeSource"):
+        with pytest.raises(TypeError, match="must be a KnowledgeSource"):
             AgentModule.for_root(
                 agents=[BadEntryAgent],
                 imports=[LLMProv],

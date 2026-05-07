@@ -26,7 +26,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from lauren_ai._agents import AGENT_META, AgentContext, AgentMeta, AgentResponse
 from lauren_ai._config import AgentConfig, LLMConfig
@@ -42,16 +42,107 @@ from lauren_ai._transport import Completion, CompletionChunk, TokenUsage, ToolCa
 logger = logging.getLogger(__name__)
 
 
+# Module-level cache for ``AgentRunner[X]`` parameterizations.  Hoisted out
+# of the Protocol class body so non-method members don't break
+# ``issubclass()`` against the Protocol (which the structural-Protocol
+# fallback in lauren-framework's DI uses).
+_AGENT_RUNNER_PARAM_CACHE: dict[type, type] = {}
+
+
+class _AgentRunnerParam:
+    """Base for ``AgentRunner[X]`` parameterizations.
+
+    Deliberately **not** a subclass of :class:`AgentRunner` (the Protocol).
+    If it were, every ``AgentRunner[X]`` token registered as a DI provider
+    would also satisfy ``issubclass(cls, AgentRunner)`` — and the
+    structural-Protocol fallback in lauren-framework would pick all of
+    them up alongside the real runner, raising
+    ``ProtocolAmbiguityError`` for plain ``runner: AgentRunner``.
+
+    These classes are used purely as DI tokens — the resolver finds an
+    explicit provider for each ``AgentRunner[X]`` and never hits the
+    structural fallback.  The actual instance handed to the consumer is a
+    concrete ``AgentRunnerBase`` subclass (the module's runner singleton).
+    """
+
+    _agent_param: type | None = None
+
+
+def _agent_runner_class_getitem(cls: type, agent_cls: type) -> type:
+    """Return a cached real class bound to *agent_cls*, suitable as a DI token.
+
+    Mirrors the :class:`HandoffTo` / :class:`HandoffBackTo` precedent —
+    parameterized form is a real class (not ``_GenericAlias``), so
+    lauren-framework's DI compiler accepts it as a constructor annotation.
+
+    :raises TypeError: When *agent_cls* is not a class or is not
+        ``@agent()``-decorated.
+    """
+    if not isinstance(agent_cls, type):
+        raise TypeError(f"AgentRunner[X] requires X to be a class; got {agent_cls!r}")
+    if not hasattr(agent_cls, AGENT_META):
+        raise TypeError(
+            f"AgentRunner[{agent_cls.__name__}] — {agent_cls.__name__} "
+            f"is not @agent-decorated.  Decorate it with @agent(...) first."
+        )
+    cached = _AGENT_RUNNER_PARAM_CACHE.get(agent_cls)
+    if cached is not None:
+        return cached
+    new_cls = type(
+        f"AgentRunner[{agent_cls.__name__}]",
+        (_AgentRunnerParam,),
+        {"_agent_param": agent_cls},
+    )
+    _AGENT_RUNNER_PARAM_CACHE[agent_cls] = new_cls
+    return new_cls
+
+
 @runtime_checkable
 class AgentRunner(Protocol):
     """Structural interface for agent runner implementations.
 
-    Declare ``runner: AgentRunner`` in any service or tool and the DI
-    container will inject the module's runner automatically — no concrete
-    class name required.  Each :meth:`~lauren_ai._module.AgentModule.for_root`
-    call generates a unique :class:`AgentRunnerBase` subclass that satisfies
-    this Protocol.
+    In-module DI
+    ------------
+    Declare ``runner: AgentRunner`` in any service or tool inside the same
+    :class:`~lauren_ai._module.AgentModule` and the DI container injects
+    that module's runner automatically.
+
+    Cross-module DI — ``AgentRunner[AgentX]``
+    -----------------------------------------
+    For controllers in other modules that need a *specific* agent's
+    runner, subscript ``AgentRunner`` with the agent class:
+
+        class MyController:
+            def __init__(
+                self,
+                unauth_runner: AgentRunner[UnauthenticatedCRMAgent],
+                auth_runner:   AgentRunner[AuthenticatedCRMAgent],
+            ): ...
+
+    ``AgentRunner[X]`` returns a fresh, **cached** real subclass — so
+    ``AgentRunner[X] is AgentRunner[X]`` and the parameterized form is a
+    valid DI token.  ``AgentModule.for_root`` registers
+    ``use_existing(provide=AgentRunner[agent_cls],
+    existing=<module's runner>)`` for every agent in ``agents=``, so the
+    container can resolve cross-module references by agent class.
+
+    The mechanism mirrors :class:`HandoffTo` / :class:`HandoffBackTo`'s
+    ``__class_getitem__`` precedent — the parameterized form is a real
+    class (not ``_GenericAlias``), so the framework's ``_looks_injectable``
+    check accepts it as a constructor annotation.
+
+    Static-typing note
+    ------------------
+    Because subscript returns a real subclass via ``__class_getitem__``,
+    static type-checkers (mypy, pyright) see ``AgentRunner[X]`` as bare
+    ``AgentRunner`` — the type parameter ``X`` is *not* preserved for
+    static analysis.  This is the same limitation as ``HandoffTo[X, Y]``.
+    Runtime DI resolution is unaffected.
     """
+
+    # Method-only Protocol body so ``issubclass(p.cls, AgentRunner)`` keeps
+    # working (the structural-Protocol fallback in lauren-framework's DI
+    # uses it).  ``__class_getitem__`` is bound below, after class creation.
 
     async def run(
         self,
@@ -84,6 +175,13 @@ class AgentRunner(Protocol):
     ) -> None: ...
 
 
+# Attach ``__class_getitem__`` after the Protocol body so it doesn't appear in
+# the typing.Protocol member scan (which would treat it as a non-method member
+# and break ``issubclass()`` matching).  Type-ignored because mypy doesn't
+# know about the class object's attribute slot.
+AgentRunner.__class_getitem__ = classmethod(_agent_runner_class_getitem)  # type: ignore[attr-defined,assignment]
+
+
 class AgentRunnerBase(AgentRunner):
     """Concrete implementation of the :class:`AgentRunner` Protocol.
 
@@ -113,19 +211,17 @@ class AgentRunnerBase(AgentRunner):
         config: LLMConfig,
         signals: Any | None = None,
         cache_backend: CacheBackend | None = None,
-        conversation_store: Any | None = None,
         knowledge_tool_names: set[str] | None = None,
     ) -> None:
         self._transport = transport
         self._tools = tools
         self._config = config
         self._signals = signals
-        self._conversation_store = conversation_store
-        # Tool names auto-attached at the module level via
-        # ``AgentModule.for_root(knowledge=...)``.  These are added to
-        # every agent's schema list in ``_get_tool_schemas`` so the LLM
-        # sees them even when the agent's ``@use_tools`` decoration
-        # didn't list them explicitly.
+        # Tool names declared at the module level via
+        # ``AgentModule.for_root(knowledge=...)``.  Each agent opts in via
+        # ``@use_knowledge_sources(...)`` — the runner's
+        # :meth:`_get_tool_schemas` filters this set against the agent's
+        # ``meta.knowledge_source_filter`` (``None`` = no KB tools).
         self._knowledge_tool_names: set[str] = set(knowledge_tool_names or ())
         self._executor = ToolExecutor(
             tools=tools,
@@ -149,6 +245,8 @@ class AgentRunnerBase(AgentRunner):
         request: Any | None = None,
         execution_context: Any | None = None,
         run_id: str | None = None,
+        conversation_store: Any | None = None,
+        memory: Any | None = None,
     ) -> AgentResponse:
         """Run an ``@agent()``-decorated instance through the agentic loop.
 
@@ -162,8 +260,8 @@ class AgentRunnerBase(AgentRunner):
         :param message: The initial user message to seed the conversation.
         :type message: str
         :param conversation_id: Optional conversation session identifier.
-            When provided, initial history may be loaded from a
-            ``ConversationStore`` (if configured on the agent).
+            When provided, initial history is loaded from the effective
+            conversation store.
         :type conversation_id: str | None
         :param metadata: Additional key-value metadata injected into
             :class:`~lauren_ai._agents.AgentContext`.
@@ -177,6 +275,14 @@ class AgentRunnerBase(AgentRunner):
         :param run_id: Optional explicit run identifier.  A random hex string
             is generated when ``None``.
         :type run_id: str | None
+        :param conversation_store: Per-request override of the agent's
+            conversation store.  Wins over ``meta.conversation_store``.
+        :type conversation_store: Any | None
+        :param memory: Per-request override of the agent's memory instance.
+            Wins over ``meta.memory``.  When neither is supplied, a fresh
+            :class:`~lauren_ai._memory.ShortTermMemory` is constructed for
+            this turn.
+        :type memory: Any | None
         :return: The aggregated result of the agentic run.
         :rtype: AgentResponse
         :raises AgentConfigError: When *agent* is not decorated with
@@ -191,11 +297,22 @@ class AgentRunnerBase(AgentRunner):
         agent_run_id = run_id or uuid.uuid4().hex
         agent_id = uuid.uuid4().hex
 
-        # Short-term memory for this run — seeded with prior history when a
-        # conversation_store is configured and a conversation_id is provided.
-        memory = ShortTermMemory(max_tokens=effective_config.memory_window_tokens)
-        if conversation_id and self._conversation_store is not None:
-            prior = await self._conversation_store.load(conversation_id)
+        # Resolve per-run state from AgentMeta with per-request overrides.
+        # The store / memory live with the agent class (set via @agent(...))
+        # so two agents in the same module never share state by default.
+        # Use explicit ``is None`` checks — ShortTermMemory has ``__len__``
+        # so an empty memory is falsy under ``or``.
+        effective_store = (
+            conversation_store if conversation_store is not None else meta.conversation_store
+        )
+        if memory is None:
+            memory = (
+                meta.memory
+                if meta.memory is not None
+                else ShortTermMemory(max_tokens=effective_config.memory_window_tokens)
+            )
+        if conversation_id and effective_store is not None:
+            prior = await effective_store.load(conversation_id)
             if prior:
                 memory.restore(prior)
         memory.add_user(message)
@@ -364,8 +481,8 @@ class AgentRunnerBase(AgentRunner):
         await self._call_hook(agent, "on_finish", response, ctx)
 
         # Persist conversation history for the next turn
-        if conversation_id and self._conversation_store is not None:
-            await self._conversation_store.save(conversation_id, memory.snapshot())
+        if conversation_id and effective_store is not None:
+            await effective_store.save(conversation_id, memory.snapshot())
 
         # Signal: AgentRunComplete
         await self._emit(
@@ -391,6 +508,8 @@ class AgentRunnerBase(AgentRunner):
         request: Any | None = None,
         execution_context: Any | None = None,
         run_id: str | None = None,
+        conversation_store: Any | None = None,
+        memory: Any | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         """Run an agent with streaming output.
 
@@ -402,7 +521,8 @@ class AgentRunnerBase(AgentRunner):
         hooks (``on_start`` / ``on_turn_complete`` / ``on_finish``), emits the
         same signals (``ModelCallStarted``, ``ModelCallComplete``,
         ``AgentTurnComplete``, ``ToolCall*``, ``AgentRunComplete``), enforces
-        ``max_cost_usd``, and loads / saves conversation history.
+        ``max_cost_usd``, and loads / saves conversation history through the
+        agent's ``meta.conversation_store`` (with per-request override).
 
         Usage::
 
@@ -414,8 +534,6 @@ class AgentRunnerBase(AgentRunner):
         :param message: The initial user message.
         :type message: str
         :param conversation_id: Optional conversation session identifier.
-            When provided, history is loaded from the configured
-            ``ConversationStore`` and saved back when the loop ends naturally.
         :type conversation_id: str | None
         :param metadata: Additional key-value metadata for the context.
         :type metadata: dict[str, Any] | None
@@ -428,6 +546,12 @@ class AgentRunnerBase(AgentRunner):
         :type execution_context: Any | None
         :param run_id: Optional explicit run identifier.
         :type run_id: str | None
+        :param conversation_store: Per-request override of the agent's
+            conversation store.  Wins over ``meta.conversation_store``.
+        :type conversation_store: Any | None
+        :param memory: Per-request override of the agent's memory instance.
+            Wins over ``meta.memory``.
+        :type memory: Any | None
         :return: An async iterator of completion chunks.
         :rtype: AsyncIterator[CompletionChunk]
         """
@@ -436,11 +560,20 @@ class AgentRunnerBase(AgentRunner):
         agent_run_id = run_id or uuid.uuid4().hex
         agent_id = uuid.uuid4().hex
 
-        # Short-term memory — seeded with prior history when a conversation
-        # store is configured and a conversation_id is provided.
-        memory = ShortTermMemory(max_tokens=effective_config.memory_window_tokens)
-        if conversation_id and self._conversation_store is not None:
-            prior = await self._conversation_store.load(conversation_id)
+        # Resolve per-run state from AgentMeta with per-request overrides.
+        # Use explicit ``is None`` checks — ShortTermMemory has ``__len__``
+        # so an empty memory is falsy under ``or``.
+        effective_store = (
+            conversation_store if conversation_store is not None else meta.conversation_store
+        )
+        if memory is None:
+            memory = (
+                meta.memory
+                if meta.memory is not None
+                else ShortTermMemory(max_tokens=effective_config.memory_window_tokens)
+            )
+        if conversation_id and effective_store is not None:
+            prior = await effective_store.load(conversation_id)
             if prior:
                 memory.restore(prior)
         memory.add_user(message)
@@ -485,6 +618,7 @@ class AgentRunnerBase(AgentRunner):
             effective_config=effective_config,
             agent_run_id=agent_run_id,
             conversation_id=conversation_id,
+            conversation_store=effective_store,
         )
 
     async def approve_tool(self, agent_run_id: str, tool_use_id: str) -> None:
@@ -546,6 +680,7 @@ class AgentRunnerBase(AgentRunner):
         effective_config: AgentConfig,
         agent_run_id: str,
         conversation_id: str | None = None,
+        conversation_store: Any | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         """Internal generator that drives the streaming agentic loop.
 
@@ -736,8 +871,8 @@ class AgentRunnerBase(AgentRunner):
 
         await self._call_hook(agent, "on_finish", response, ctx)
 
-        if conversation_id and self._conversation_store is not None:
-            await self._conversation_store.save(conversation_id, memory.snapshot())
+        if conversation_id and conversation_store is not None:
+            await conversation_store.save(conversation_id, memory.snapshot())
 
         await self._emit(
             "AgentRunComplete",
@@ -791,17 +926,25 @@ class AgentRunnerBase(AgentRunner):
 
         * Tools the agent declared via ``@use_tools(...)`` (from
           ``meta.tool_classes``).
-        * Tools auto-attached at the module level via
-          ``AgentModule.for_root(knowledge=...)`` (from
-          ``self._knowledge_tool_names``) — every agent in the module
-          sees these regardless of its ``@use_tools`` declaration.
+        * Knowledge-base tools the agent opted into via
+          ``@use_knowledge_sources(...)`` — only the names listed in
+          ``meta.knowledge_source_filter`` are attached.  Without that
+          decorator, ``meta.knowledge_source_filter is None`` and **no**
+          KB tools are attached (opt-in).
 
         :param meta: The agent's ``AgentMeta``.
         :type meta: AgentMeta
         :return: List of JSON schema dicts suitable for passing to the transport.
         :rtype: list[Any]
         """
-        if not meta.tool_classes and not self._knowledge_tool_names:
+        # Effective KB tool names for this agent.
+        # ``None`` filter ⇒ no KB tools.  Set filter ⇒ only those names that
+        # are also declared by the module's ``knowledge=`` list.
+        if meta.knowledge_source_filter is None:
+            allowed_kb: set[str] = set()
+        else:
+            allowed_kb = self._knowledge_tool_names & set(meta.knowledge_source_filter)
+        if not meta.tool_classes and not allowed_kb:
             return []
         schemas: list[Any] = []
         seen_names: set[str] = set()
@@ -820,8 +963,8 @@ class AgentRunnerBase(AgentRunner):
                 continue
             schemas.append(tool_meta.parameters)
             seen_names.add(tool_meta.name)
-        # Module-level knowledge tools — auto-attached to every agent
-        for kb_tool_name in self._knowledge_tool_names:
+        # Knowledge-base tools — opt-in via @use_knowledge_sources.
+        for kb_tool_name in allowed_kb:
             if kb_tool_name in seen_names:
                 continue
             entry = self._tools.get(kb_tool_name)

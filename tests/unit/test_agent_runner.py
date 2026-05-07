@@ -219,8 +219,14 @@ def _compl(content: str, *, n: int = 1) -> Completion:
 
 
 def make_runner_with_store(mock: MockTransport, store: InMemoryConversationStore) -> AgentRunner:
+    """Configure ``_MemAgent``'s AgentMeta with *store* and return a runner.
+
+    Stores live on AgentMeta now (set by ``@agent(conversation_store=…)`` or
+    written here for testing).  The runner consults AgentMeta on every call.
+    """
     config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, tools={}, config=config, conversation_store=store)
+    _MemAgent.__lauren_ai_agent__.conversation_store = store
+    return AgentRunner(transport=mock, tools={}, config=config)
 
 
 @agent(model="mock-model")
@@ -288,6 +294,8 @@ class TestAgentRunnerConversationMemory:
     @pytest.mark.asyncio
     async def test_no_store_runs_normally(self, mock):
         """Runner without a store behaves exactly as before — no regression."""
+        # Reset class-level meta in case a sibling test set it.
+        _MemAgent.__lauren_ai_agent__.conversation_store = None
         runner = make_runner(mock)  # no conversation_store
         mock.queue_response(_compl("Fine", n=1))
 
@@ -401,7 +409,8 @@ class TestRunStreamParity:
         """run_stream loads prior history and saves the new turn back."""
         store = InMemoryConversationStore()
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, tools={}, config=config, conversation_store=store)
+        _MemAgent.__lauren_ai_agent__.conversation_store = store
+        runner = AgentRunner(transport=mock, tools={}, config=config)
 
         mock.queue_stream(_stream_chunks("First reply"))
         async for _ in await runner.run_stream(_MemAgent(), "Hi", conversation_id="sess"):
