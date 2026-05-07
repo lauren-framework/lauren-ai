@@ -33,7 +33,6 @@ from lauren_ai._config import AgentConfig, LLMConfig
 from lauren_ai._exceptions import (
     AgentBudgetExceededError,
     AgentConfigError,
-    DelegateToAgent,
 )
 from lauren_ai._memory import ShortTermMemory
 from lauren_ai._tools import TOOL_META, ToolContext, ToolMeta, ToolResult
@@ -74,6 +73,7 @@ class AgentRunner(Protocol):
         conversation_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         request: Any | None = None,
+        execution_context: Any | None = None,
         run_id: str | None = None,
     ) -> AsyncIterator[CompletionChunk]: ...
 
@@ -220,8 +220,7 @@ class AgentRunnerBase(AgentRunner):
         stop_reason: str = "max_turns"
 
         try:
-            # Lifecycle hook: on_start (inside the delegation-catch block so
-            # that ctx.delegate() called from on_start is properly handled)
+            # Lifecycle hook: on_start
             await self._call_hook(agent, "on_start", ctx)
 
             # Signal: ModelCallStarted
@@ -331,44 +330,6 @@ class AgentRunnerBase(AgentRunner):
                 stop_reason = "end_turn"
                 break
 
-        except DelegateToAgent as delegation:
-            # Multi-agent handoff
-            delegated_agent = delegation.agent
-            delegated_message = delegation.message or (
-                last_completion.content if last_completion else message
-            )
-            delegated_response = await self.run(
-                delegated_agent,
-                delegated_message,
-                conversation_id=conversation_id,
-                metadata=metadata,
-                request=request,
-            )
-            # Wrap as a delegation response
-            response = AgentResponse(
-                content=delegated_response.content,
-                turns=ctx.turn + 1,
-                total_usage=total_usage + delegated_response.total_usage,
-                tool_calls_made=all_tool_calls + delegated_response.tool_calls_made,
-                stop_reason="delegated",
-                metadata={"delegated_to": delegated_agent},
-                reasoning_traces=delegated_response.reasoning_traces,
-            )
-            await self._call_hook(agent, "on_finish", response, ctx)
-            if conversation_id and self._conversation_store is not None:
-                await self._conversation_store.save(conversation_id, memory.snapshot())
-            await self._emit(
-                "AgentRunComplete",
-                agent_id=agent_run_id,
-                agent_class=ctx.agent_class,
-                agent_name=ctx.agent_name,
-                turns=ctx.turn + 1,
-                total_usage=total_usage,
-                total_cost_usd=total_usage.cost_usd(model),
-                stop_reason="delegated",
-            )
-            return response
-
         except AgentBudgetExceededError:
             stop_reason = "budget_exceeded"
             # Build partial response and re-raise so callers can handle it.
@@ -421,6 +382,7 @@ class AgentRunnerBase(AgentRunner):
         conversation_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         request: Any | None = None,
+        execution_context: Any | None = None,
         run_id: str | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         """Run an agent with streaming output.
@@ -429,9 +391,15 @@ class AgentRunnerBase(AgentRunner):
         arrive from the transport.  Tool calls are executed silently between
         turns (their results are **not** yielded to the caller).
 
+        Functionally at parity with :meth:`run` — fires the same lifecycle
+        hooks (``on_start`` / ``on_turn_complete`` / ``on_finish``), emits the
+        same signals (``ModelCallStarted``, ``ModelCallComplete``,
+        ``AgentTurnComplete``, ``ToolCall*``, ``AgentRunComplete``), enforces
+        ``max_cost_usd``, and loads / saves conversation history.
+
         Usage::
 
-            async for chunk in runner.run_stream(agent, "Hello"):
+            async for chunk in await runner.run_stream(agent, "Hello"):
                 print(chunk.delta, end="", flush=True)
 
         :param agent: A resolved ``@agent()``-decorated instance.
@@ -439,11 +407,18 @@ class AgentRunnerBase(AgentRunner):
         :param message: The initial user message.
         :type message: str
         :param conversation_id: Optional conversation session identifier.
+            When provided, history is loaded from the configured
+            ``ConversationStore`` and saved back when the loop ends naturally.
         :type conversation_id: str | None
         :param metadata: Additional key-value metadata for the context.
         :type metadata: dict[str, Any] | None
         :param request: Originating HTTP request, if any.
         :type request: Any | None
+        :param execution_context: The lauren ``ExecutionContext`` (route
+            metadata, handler class/func, authenticated user via
+            ``request.state``) when invoked from a route handler.  Threaded
+            into ``ToolContext.execution_context`` for every tool call.
+        :type execution_context: Any | None
         :param run_id: Optional explicit run identifier.
         :type run_id: str | None
         :return: An async iterator of completion chunks.
@@ -454,7 +429,13 @@ class AgentRunnerBase(AgentRunner):
         agent_run_id = run_id or uuid.uuid4().hex
         agent_id = uuid.uuid4().hex
 
+        # Short-term memory — seeded with prior history when a conversation
+        # store is configured and a conversation_id is provided.
         memory = ShortTermMemory(max_tokens=effective_config.memory_window_tokens)
+        if conversation_id and self._conversation_store is not None:
+            prior = await self._conversation_store.load(conversation_id)
+            if prior:
+                memory.restore(prior)
         memory.add_user(message)
 
         ctx = AgentContext(
@@ -466,6 +447,7 @@ class AgentRunnerBase(AgentRunner):
             turn=0,
             metadata=dict(metadata or {}),
             request=request,
+            execution_context=execution_context,
             signals=self._signals,
         )
 
@@ -474,6 +456,17 @@ class AgentRunnerBase(AgentRunner):
         tool_schemas = self._get_tool_schemas(meta)
 
         await self._call_hook(agent, "on_start", ctx)
+
+        # Mirrors run(): ModelCallStarted fires once before the loop.
+        await self._emit(
+            "ModelCallStarted",
+            model=model,
+            agent_id=agent_run_id,
+            agent_class=ctx.agent_class,
+            agent_name=ctx.agent_name,
+            messages_count=len(memory.messages()),
+            input_tokens_estimate=memory.token_estimate,
+        )
 
         return self._stream_loop(
             agent=agent,
@@ -484,6 +477,7 @@ class AgentRunnerBase(AgentRunner):
             tool_schemas=tool_schemas,
             effective_config=effective_config,
             agent_run_id=agent_run_id,
+            conversation_id=conversation_id,
         )
 
     async def approve_tool(self, agent_run_id: str, tool_use_id: str) -> None:
@@ -544,8 +538,15 @@ class AgentRunnerBase(AgentRunner):
         tool_schemas: list[Any],
         effective_config: AgentConfig,
         agent_run_id: str,
+        conversation_id: str | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         """Internal generator that drives the streaming agentic loop.
+
+        Mirrors the per-turn signal / hook / budget machinery of
+        :meth:`run`.  When the loop ends naturally, fires ``on_finish``,
+        persists conversation history, and emits ``AgentRunComplete``.
+        Caller-cancelled streams (``aclose()`` / ``GeneratorExit``) skip
+        the post-loop cleanup.
 
         :param agent: The agent instance.
         :param ctx: The agent context.
@@ -555,104 +556,194 @@ class AgentRunnerBase(AgentRunner):
         :param tool_schemas: List of tool schemas.
         :param effective_config: The merged agent config.
         :param agent_run_id: The unique run identifier.
+        :param conversation_id: When set with a configured store, history
+            is saved when the loop ends naturally.
         :return: An async generator of completion chunks.
         :rtype: AsyncIterator[CompletionChunk]
         """
         total_usage = TokenUsage(input_tokens=0, output_tokens=0)
+        all_tool_calls: list[ToolCall] = []
+        last_synthetic_completion: Completion | None = None
+        last_thinking_text = ""
+        final_stop_reason: str = "max_turns"
 
-        for _turn in range(effective_config.max_turns):
-            ctx.turn = _turn
-            messages = memory.messages()
+        try:
+            for _turn in range(effective_config.max_turns):
+                ctx.turn = _turn
+                messages = memory.messages()
 
-            stream = await self._transport.complete(
-                messages,
-                model=model,
-                system=system_prompt,
-                tools=tool_schemas if tool_schemas else None,
-                max_tokens=effective_config.max_tokens_per_turn,
-                temperature=effective_config.temperature,
-                stream=True,
-            )
-
-            # Accumulate the full completion while yielding chunks
-            accumulated_text = ""
-            accumulated_stop_reason: str | None = None
-            accumulated_usage: TokenUsage | None = None
-            accumulated_tool_calls: list[ToolCall] = []
-            partial_tool_inputs: dict[str, str] = {}  # tool_use_id -> input_json
-            partial_tool_names: dict[str, str] = {}  # tool_use_id -> name
-
-            async for chunk in stream:
-                # Accumulate text delta
-                if chunk.delta:
-                    accumulated_text += chunk.delta
-
-                # Accumulate tool call deltas
-                if chunk.tool_call_delta is not None:
-                    tcd = chunk.tool_call_delta
-                    tid = tcd.tool_use_id
-                    if tcd.name:
-                        partial_tool_names[tid] = tcd.name
-                    partial_tool_inputs.setdefault(tid, "")
-                    partial_tool_inputs[tid] += tcd.input_delta
-
-                if chunk.stop_reason is not None:
-                    accumulated_stop_reason = chunk.stop_reason
-
-                if chunk.usage is not None:
-                    accumulated_usage = chunk.usage
-
-                yield chunk
-
-            # Build tool calls from accumulated deltas
-            import json  # noqa: PLC0415
-
-            for tid, input_json in partial_tool_inputs.items():
-                try:
-                    parsed_input = json.loads(input_json)
-                except (json.JSONDecodeError, ValueError):
-                    parsed_input = {}
-                accumulated_tool_calls.append(
-                    ToolCall(
-                        tool_use_id=tid,
-                        name=partial_tool_names.get(tid, ""),
-                        input=parsed_input,
-                    )
-                )
-
-            turn_usage = accumulated_usage or TokenUsage(input_tokens=0, output_tokens=0)
-            total_usage = total_usage + turn_usage
-
-            # Build a synthetic Completion for memory purposes
-            synthetic_completion = Completion(
-                id=uuid.uuid4().hex,
-                model=model,
-                content=accumulated_text,
-                tool_calls=accumulated_tool_calls,
-                stop_reason=accumulated_stop_reason or "end_turn",  # type: ignore[arg-type]
-                usage=turn_usage,
-            )
-            memory.add_assistant(synthetic_completion)
-
-            if accumulated_stop_reason in ("end_turn", "stop_sequence", None):
-                break
-
-            if accumulated_stop_reason == "tool_use" and accumulated_tool_calls:
-                # Execute tools silently (do not yield tool results)
-                results = await self._execute_tools(
-                    accumulated_tool_calls,
-                    ctx=ctx,
-                    agent=agent,
+                t0 = time.monotonic()
+                stream = await self._transport.complete(
+                    messages,
                     model=model,
+                    system=system_prompt,
+                    tools=tool_schemas if tool_schemas else None,
+                    max_tokens=effective_config.max_tokens_per_turn,
+                    temperature=effective_config.temperature,
+                    stream=True,
                 )
-                for result in results:
-                    memory.add_tool_result(result)
-                continue
 
-            if accumulated_stop_reason == "max_tokens":
+                # Accumulate the full completion while yielding chunks
+                accumulated_text = ""
+                accumulated_thinking = ""
+                accumulated_stop_reason: str | None = None
+                accumulated_usage: TokenUsage | None = None
+                accumulated_tool_calls: list[ToolCall] = []
+                partial_tool_inputs: dict[str, str] = {}  # tool_use_id -> input_json
+                partial_tool_names: dict[str, str] = {}  # tool_use_id -> name
+
+                async for chunk in stream:
+                    if chunk.delta:
+                        accumulated_text += chunk.delta
+
+                    if chunk.thinking_delta:
+                        accumulated_thinking += chunk.thinking_delta
+
+                    if chunk.tool_call_delta is not None:
+                        tcd = chunk.tool_call_delta
+                        tid = tcd.tool_use_id
+                        if tcd.name:
+                            partial_tool_names[tid] = tcd.name
+                        partial_tool_inputs.setdefault(tid, "")
+                        partial_tool_inputs[tid] += tcd.input_delta
+
+                    if chunk.stop_reason is not None:
+                        accumulated_stop_reason = chunk.stop_reason
+
+                    if chunk.usage is not None:
+                        accumulated_usage = chunk.usage
+
+                    yield chunk
+
+                duration_ms = (time.monotonic() - t0) * 1000
+
+                # Build tool calls from accumulated deltas
+                import json  # noqa: PLC0415
+
+                for tid, input_json in partial_tool_inputs.items():
+                    try:
+                        parsed_input = json.loads(input_json)
+                    except (json.JSONDecodeError, ValueError):
+                        parsed_input = {}
+                    accumulated_tool_calls.append(
+                        ToolCall(
+                            tool_use_id=tid,
+                            name=partial_tool_names.get(tid, ""),
+                            input=parsed_input,
+                        )
+                    )
+
+                turn_usage = accumulated_usage or TokenUsage(input_tokens=0, output_tokens=0)
+                total_usage = total_usage + turn_usage
+
+                synthetic_completion = Completion(
+                    id=uuid.uuid4().hex,
+                    model=model,
+                    content=accumulated_text,
+                    tool_calls=accumulated_tool_calls,
+                    stop_reason=accumulated_stop_reason or "end_turn",  # type: ignore[arg-type]
+                    usage=turn_usage,
+                )
+                memory.add_assistant(synthetic_completion)
+                last_synthetic_completion = synthetic_completion
+                last_thinking_text = accumulated_thinking
+
+                # Per-turn signals + hook (mirrors run() 260–286)
+                await self._emit(
+                    "ModelCallComplete",
+                    model=model,
+                    agent_id=agent_run_id,
+                    agent_class=ctx.agent_class,
+                    agent_name=ctx.agent_name,
+                    usage=turn_usage,
+                    duration_ms=duration_ms,
+                    stop_reason=accumulated_stop_reason,
+                    cost_usd=turn_usage.cost_usd(model),
+                )
+
+                await self._call_hook(agent, "on_turn_complete", synthetic_completion, ctx)
+
+                await self._emit(
+                    "AgentTurnComplete",
+                    agent_id=agent_run_id,
+                    agent_class=ctx.agent_class,
+                    turn=_turn,
+                    turn_usage=turn_usage,
+                    cumulative_usage=total_usage,
+                )
+
+                # Budget check (mirrors run() 289–300)
+                if effective_config.max_cost_usd is not None:
+                    cumulative_cost = total_usage.cost_usd(model)
+                    if cumulative_cost > effective_config.max_cost_usd:
+                        raise AgentBudgetExceededError(
+                            f"Agent exceeded cost budget of ${effective_config.max_cost_usd:.4f} "
+                            f"(used ${cumulative_cost:.4f})",
+                            budget_type="cost_usd",
+                            limit=effective_config.max_cost_usd,
+                            used=cumulative_cost,
+                            agent_class=ctx.agent_class,
+                        )
+
+                if accumulated_stop_reason in ("end_turn", "stop_sequence", None):
+                    final_stop_reason = "end_turn"
+                    break
+
+                if accumulated_stop_reason == "tool_use" and accumulated_tool_calls:
+                    # Execute tools silently (do not yield tool results)
+                    results = await self._execute_tools(
+                        accumulated_tool_calls,
+                        ctx=ctx,
+                        agent=agent,
+                        model=model,
+                    )
+                    all_tool_calls.extend(accumulated_tool_calls)
+                    for result in results:
+                        memory.add_tool_result(result)
+                    continue
+
+                if accumulated_stop_reason == "max_tokens":
+                    final_stop_reason = "max_turns"
+                    break
+
+                final_stop_reason = "end_turn"
                 break
 
-            break
+        except AgentBudgetExceededError:
+            final_stop_reason = "budget_exceeded"
+            # Swallowed — matches run() 372–376; consumers introspect
+            # AgentRunComplete.stop_reason="budget_exceeded".
+
+        # Post-loop cleanup (mirrors run() 378–412).  Skipped on caller
+        # cancellation (GeneratorExit propagates without running this).
+        final_content = (
+            last_synthetic_completion.content if last_synthetic_completion else ""
+        )
+        reasoning_traces: list[str] = [last_thinking_text] if last_thinking_text else []
+        response = AgentResponse(
+            content=final_content,
+            turns=ctx.turn + 1,
+            total_usage=total_usage,
+            tool_calls_made=all_tool_calls,
+            stop_reason=final_stop_reason,  # type: ignore[arg-type]
+            reasoning_traces=reasoning_traces,
+        )
+
+        await self._call_hook(agent, "on_finish", response, ctx)
+
+        if conversation_id and self._conversation_store is not None:
+            await self._conversation_store.save(conversation_id, memory.snapshot())
+
+        await self._emit(
+            "AgentRunComplete",
+            agent_id=agent_run_id,
+            agent_class=ctx.agent_class,
+            agent_name=ctx.agent_name,
+            turns=ctx.turn + 1,
+            total_usage=total_usage,
+            total_cost_usd=total_usage.cost_usd(model),
+            stop_reason=final_stop_reason,
+        )
 
     def _get_meta(self, agent: Any) -> AgentMeta:
         """Extract :class:`AgentMeta` from an agent instance or class.
@@ -870,10 +961,6 @@ class AgentRunnerBase(AgentRunner):
             result = hook(*args)
             if inspect.isawaitable(result):
                 await result
-        except DelegateToAgent:
-            # Re-raise control-flow exceptions so the agentic loop can handle
-            # multi-agent handoffs that originate inside hooks.
-            raise
         except Exception:  # noqa: BLE001
             logger.warning(
                 "lauren_ai.AgentRunner: hook '%s' on %r raised an exception",
@@ -912,8 +999,6 @@ class AgentRunnerBase(AgentRunner):
             if inspect.isawaitable(result):
                 result = await result
             return result
-        except DelegateToAgent:
-            raise
         except Exception:  # noqa: BLE001
             logger.warning(
                 "lauren_ai.AgentRunner: hook '%s' on %r raised an exception",

@@ -133,7 +133,7 @@ response = await runner.run(
 
 print(response.content)       # str — final text output
 print(response.turns)         # int — agentic loop iterations
-print(response.stop_reason)   # "end_turn" | "max_turns" | "budget_exceeded" | "delegated" | "error"
+print(response.stop_reason)   # "end_turn" | "max_turns" | "budget_exceeded" | "error"
 print(response.total_usage)   # TokenUsage — cumulative tokens
 print(response.tool_calls_made)  # list[ToolCall]
 print(response.reasoning_traces) # list[str] — extended thinking traces (Anthropic)

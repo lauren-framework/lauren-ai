@@ -1,42 +1,20 @@
 # Multi-Agent Systems
 
-`lauren-ai` supports two delegation patterns and a full team orchestration
-system.  This page covers the two delegation patterns.  For coordinated teams
-with multiple worker agents see [agent-teams.md](agent-teams.md).
+`lauren-ai` supports tool-based agent delegation and a full team orchestration
+system.  This page covers tool-based delegation.  For coordinated teams with
+multiple worker agents see [agent-teams.md](agent-teams.md).
+
+Agent handoff is **always observable**: every delegation appears in the
+caller's tool-call log, can be traced through `AgentResponse.tool_calls_made`,
+and composes cleanly with `run_stream()`.  Hidden control-flow handoff (the
+old `ctx.delegate()` exception pattern) was removed in favour of this single
+explicit pattern.
 
 ---
 
-## Pattern 1 — ctx.delegate (hook-based)
+## Tool-based delegation (observable)
 
-The simplest way to hand off to another agent is to call `ctx.delegate()` from
-any lifecycle hook.  The runner catches the internal `DelegateToAgent` signal,
-recursively runs the target agent with the supplied message, and returns its
-result with `stop_reason="delegated"`.
-
-```python
-from lauren_ai import agent, AgentContext
-
-@agent(model="claude-opus-4-6", system="You are a routing assistant.")
-class RouterAgent:
-    async def on_start(self, ctx: AgentContext) -> None:
-        message = ctx.memory.messages()[-1]["content"]
-        if "legal" in message.lower():
-            await ctx.delegate(LegalAgent, message)
-        elif "medical" in message.lower():
-            await ctx.delegate(MedicalAgent, message)
-        # Otherwise the router handles it itself
-```
-
-Use this pattern when:
-- The routing decision is simple and deterministic.
-- You do not need the delegation to appear in the model's tool call log.
-- A single handoff is sufficient (no iterative routing).
-
----
-
-## Pattern 2 — tool-based delegation (observable)
-
-For more complex routing, give the coordinator agent a tool that calls
+Give the coordinator agent a tool that calls
 `AgentRunner.run()` directly.  The LLM decides which specialist to call, the
 delegation appears in the tool call log, and the result flows back through the
 normal tool result channel.
@@ -94,16 +72,11 @@ Use this pattern when:
 - You want the delegation visible in `AgentResponse.tool_calls_made`.
 - Multiple rounds of delegation may occur.
 
----
-
-## Choosing a pattern
-
-| | ctx.delegate | Tool-based |
-|---|---|---|
-| Decision made by | Your code | The LLM |
-| Delegation in tool log | No | Yes |
-| Multiple handoffs | One | Many (tool can be called repeatedly) |
-| Complexity | Low | Medium |
+For deterministic routing (where *your code* — not the LLM — decides which
+agent runs), do the dispatch in your own controller / handler before calling
+`runner.run()` or `runner.run_stream()`.  See the banking-chatbot example for
+a controller that polls an `ActiveAgentStore` between turns and emits SSE
+`break` events on each handoff.
 
 ---
 

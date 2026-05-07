@@ -364,7 +364,6 @@ class MyAgent:
 # .execution_context     — lauren ExecutionContext (route/handler metadata), or None
 # .signals               — SignalBus, or None
 # .get_metadata(key, default=None) — convenience accessor for .metadata
-# .delegate(agent, message, *, metadata=None) — raises DelegateToAgent
 ```
 
 ### `AgentResponse`
@@ -375,7 +374,7 @@ class MyAgent:
 # .turns             — int — agentic loop iterations executed
 # .total_usage       — TokenUsage — cumulative tokens across all turns
 # .tool_calls_made   — list[ToolCall] — all tool executions during the run
-# .stop_reason       — "end_turn" | "max_turns" | "budget_exceeded" | "delegated" | "error"
+# .stop_reason       — "end_turn" | "max_turns" | "budget_exceeded" | "error"
 # .metadata          — dict[str, Any]
 # .reasoning_traces  — list[str] — extended thinking traces (Anthropic only)
 # await .as_stream() — AsyncIterator[str] yielding content as a single item
@@ -978,8 +977,7 @@ LaurenAIError
 ├── OutputParserError
 │   └── MaxRetryError
 ├── EmptyQueueError
-├── TracingError
-└── DelegateToAgent   (control-flow exception — caught by AgentRunner)
+└── TracingError
 ```
 
 ---

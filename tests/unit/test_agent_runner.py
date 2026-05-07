@@ -330,3 +330,104 @@ class TestAgentRunnerConversationMemory:
         assert len(history) == 8  # 4 user + 4 assistant
         user_contents = [m["content"] for m in history if m["role"] == "user"]
         assert user_contents == ["Msg 0", "Msg 1", "Msg 2", "Msg 3"]
+
+
+# ---------------------------------------------------------------------------
+# run_stream() parity — budget enforcement, on_finish hook, history persistence
+# ---------------------------------------------------------------------------
+
+from lauren_ai._transport import CompletionChunk  # noqa: E402
+
+
+def _stream_chunks(*parts: str, stop_reason: str = "end_turn") -> list[CompletionChunk]:
+    chunks = [CompletionChunk(delta=p) for p in parts]
+    chunks.append(
+        CompletionChunk(
+            delta="",
+            stop_reason=stop_reason,
+            usage=TokenUsage(input_tokens=10, output_tokens=len(parts) or 1),
+        )
+    )
+    return chunks
+
+
+class TestRunStreamParity:
+    """run_stream() honours budgets, hooks, and conversation persistence."""
+
+    @pytest.mark.asyncio
+    async def test_run_stream_budget_exceeded_swallows_and_yields(self, mock):
+        """Budget breach swallows the exception and ends the stream cleanly."""
+        config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
+        runner = AgentRunner(transport=mock, tools={}, config=config)
+
+        @agent(model="mock-model", max_cost_usd=0.0)
+        class TightBudgetAgent: ...
+
+        mock.queue_stream(_stream_chunks("Hello"))
+
+        # Iterating must NOT raise — the budget exception is swallowed and
+        # the generator ends naturally (matches run() semantics).
+        chunks = []
+        async for chunk in await runner.run_stream(TightBudgetAgent(), "Hi"):
+            chunks.append(chunk)
+
+        # All chunks were yielded before the budget check fired
+        assert len(chunks) >= 1
+
+    @pytest.mark.asyncio
+    async def test_run_stream_calls_on_finish_with_response(self, mock):
+        """on_finish receives an AgentResponse with the streamed content."""
+        captured: list[AgentResponse] = []
+
+        @agent(model="mock-model")
+        class CaptureAgent:
+            async def on_finish(self, response: AgentResponse, ctx) -> None:
+                captured.append(response)
+
+        config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
+        runner = AgentRunner(transport=mock, tools={}, config=config)
+
+        mock.queue_stream(_stream_chunks("Hello", " world", "!"))
+
+        async for _ in await runner.run_stream(CaptureAgent(), "Hi"):
+            pass
+
+        assert len(captured) == 1
+        assert captured[0].content == "Hello world!"
+        assert captured[0].stop_reason == "end_turn"
+
+    @pytest.mark.asyncio
+    async def test_run_stream_persists_conversation_history(self, mock):
+        """run_stream loads prior history and saves the new turn back."""
+        store = InMemoryConversationStore()
+        config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
+        runner = AgentRunner(
+            transport=mock, tools={}, config=config, conversation_store=store
+        )
+
+        mock.queue_stream(_stream_chunks("First reply"))
+        async for _ in await runner.run_stream(_MemAgent(), "Hi", conversation_id="sess"):
+            pass
+
+        saved = await store.load("sess")
+        assert len(saved) == 2
+        assert saved[0] == {"role": "user", "content": "Hi"}
+        assert saved[1]["role"] == "assistant"
+        assert saved[1]["content"] == "First reply"
+
+        # Second run should see the prior exchange
+        captured_messages: list = []
+
+        async def capture_complete(messages, **kwargs):
+            captured_messages.extend(messages)
+            return _stream_chunks("Second reply").__iter__()
+
+        mock.queue_stream(_stream_chunks("Second reply"))
+        async for _ in await runner.run_stream(
+            _MemAgent(), "Follow up", conversation_id="sess"
+        ):
+            pass
+
+        history = await store.load("sess")
+        assert len(history) == 4  # 2 prior + 2 new
+        assert history[2] == {"role": "user", "content": "Follow up"}

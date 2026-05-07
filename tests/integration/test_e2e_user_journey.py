@@ -900,3 +900,85 @@ class TestSSEStreaming:
         assert any("Found" in e.get("data", "") for e in delta_events)
         assert len(done_events) == 1
         assert done_events[0]["data"] == "end_turn"
+
+    def test_run_stream_threads_execution_context_to_tools(self):
+        """run_stream(..., execution_context=...) reaches ToolContext.execution_context."""
+        from lauren_ai._tools import ToolContext
+
+        seen: list = []
+
+        @tool()
+        class IdentityTool:
+            """Read the user_id from the verified server-side context."""
+
+            async def run(self, ctx: ToolContext) -> dict:
+                ec = ctx.execution_context
+                uid = ec.request.state.get("user_id") if ec else None
+                seen.append(uid)
+                return {"user_id": uid}
+
+        @agent(model="mock-model")
+        @use_tools(IdentityTool)
+        class IdentityAgent: ...
+
+        cfg, mock = LLMConfig.for_testing()
+        # Turn 1: tool-use chunk
+        mock.queue_stream(
+            [
+                CompletionChunk(
+                    tool_call_delta=ToolCallDelta(
+                        tool_use_id="tc1", name="identity_tool", input_delta="{}"
+                    )
+                ),
+                CompletionChunk(
+                    delta="",
+                    stop_reason="tool_use",
+                    usage=TokenUsage(input_tokens=10, output_tokens=5),
+                ),
+            ]
+        )
+        mock.queue_stream(_chunks("ok"))
+
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        AIMod = AgentModule.for_root(agents=[IdentityAgent], imports=[LLMProv])
+
+        # Build a fake ExecutionContext with request.state.get("user_id")
+        class _State:
+            def __init__(self, d):
+                self._d = d
+
+            def get(self, key, default=None):
+                return self._d.get(key, default)
+
+        class _Req:
+            def __init__(self, state):
+                self.state = state
+
+        class _ExecCtx:
+            def __init__(self, request):
+                self.request = request
+
+        fake_ctx = _ExecCtx(_Req(_State({"user_id": "alice"})))
+
+        @module(imports=[LLMProv, AIMod])
+        class AppMod: ...
+
+        import asyncio
+
+        app = LaurenFactory.create(AppMod)
+        loop = asyncio.new_event_loop()
+        try:
+            runner = loop.run_until_complete(app.container.resolve(AgentRunner))
+            agent_inst = loop.run_until_complete(app.container.resolve(IdentityAgent))
+
+            async def drain():
+                async for _ in await runner.run_stream(
+                    agent_inst, "Who am I?", execution_context=fake_ctx
+                ):
+                    pass
+
+            loop.run_until_complete(drain())
+        finally:
+            loop.close()
+
+        assert seen == ["alice"]

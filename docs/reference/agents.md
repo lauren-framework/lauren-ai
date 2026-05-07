@@ -127,18 +127,6 @@ Returns the metadata value for `key`, or `default` if absent.
 | `key` | `str` | Metadata key to look up. |
 | `default` | `Any` | Fallback when the key is absent. |
 
-#### `async delegate(agent, message, *, metadata=None)`
-
-Hands off execution to another agent by raising `DelegateToAgent`. The runner catches the exception and calls `AgentRunner.run()` recursively on the target agent, then wraps the result with `stop_reason="delegated"`.
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `agent` | `Any` | The `@agent()`-decorated class or instance to delegate to. |
-| `message` | `str` | Message passed to the delegated agent. |
-| `metadata` | `dict[str, Any] \| None` | Optional additional metadata for the delegated run. |
-
-Raises `DelegateToAgent` — always intercepted by the runner.
-
 ---
 
 ## `AgentResponse`
@@ -164,7 +152,6 @@ The result returned by `AgentRunner.run()` after the agentic loop terminates.
 | `"end_turn"` | Model indicated a natural end of response. |
 | `"max_turns"` | `max_turns` limit was reached. |
 | `"budget_exceeded"` | Cost or token budget was crossed mid-run. |
-| `"delegated"` | Execution was handed off to another agent via `ctx.delegate()`. |
 | `"error"` | An unrecoverable error occurred. |
 
 ### Methods

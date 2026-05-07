@@ -611,3 +611,142 @@ class TestAgentNameInSignals:
 
         assert len(received) == 1
         assert received[0].agent_name == "Named CRM Agent"
+
+
+# ---------------------------------------------------------------------------
+# Tests: parity — run_stream() must emit the same signals as run()
+# ---------------------------------------------------------------------------
+
+
+def _stream_chunks(*parts: str, stop_reason: str = "end_turn"):
+    """Build a list of CompletionChunk objects from text parts."""
+    from lauren_ai._transport import CompletionChunk
+
+    chunks = [CompletionChunk(delta=p) for p in parts]
+    chunks.append(
+        CompletionChunk(
+            delta="",
+            stop_reason=stop_reason,
+            usage=TokenUsage(input_tokens=20, output_tokens=len(parts)),
+        )
+    )
+    return chunks
+
+
+class TestRunStreamSignalParity:
+    """run_stream() emits the same lifecycle signals as run()."""
+
+    @pytest.mark.asyncio
+    async def test_model_call_started_emitted_via_run_stream(self):
+        bus = SignalBus()
+        mock = MockTransport()
+        runner = make_runner_with_signals(mock, bus)
+
+        received: list[ModelCallStarted] = []
+
+        @bus.on(ModelCallStarted)
+        async def capture(event: ModelCallStarted) -> None:
+            received.append(event)
+
+        mock.queue_stream(_stream_chunks("Hi"))
+
+        instance = SimpleSignalAgent()
+        async for _ in await runner.run_stream(instance, "Hello"):
+            pass
+
+        assert len(received) == 1
+        assert received[0].agent_class is SimpleSignalAgent
+
+    @pytest.mark.asyncio
+    async def test_model_call_complete_emitted_via_run_stream(self):
+        bus = SignalBus()
+        mock = MockTransport()
+        runner = make_runner_with_signals(mock, bus)
+
+        received: list[ModelCallComplete] = []
+
+        @bus.on(ModelCallComplete)
+        async def capture(event: ModelCallComplete) -> None:
+            received.append(event)
+
+        mock.queue_stream(_stream_chunks("Hello", " world"))
+
+        instance = SimpleSignalAgent()
+        async for _ in await runner.run_stream(instance, "Hi"):
+            pass
+
+        assert len(received) == 1
+        assert received[0].usage.output_tokens == 2  # number of text parts
+        assert received[0].stop_reason == "end_turn"
+        assert received[0].duration_ms >= 0
+
+    @pytest.mark.asyncio
+    async def test_agent_run_complete_emitted_via_run_stream(self):
+        bus = SignalBus()
+        mock = MockTransport()
+        runner = make_runner_with_signals(mock, bus)
+
+        received: list[AgentRunComplete] = []
+
+        @bus.on(AgentRunComplete)
+        async def capture(event: AgentRunComplete) -> None:
+            received.append(event)
+
+        mock.queue_stream(_stream_chunks("Done"))
+
+        instance = SimpleSignalAgent()
+        async for _ in await runner.run_stream(instance, "Go"):
+            pass
+
+        assert len(received) == 1
+        assert received[0].stop_reason == "end_turn"
+        assert received[0].agent_class is SimpleSignalAgent
+
+    @pytest.mark.asyncio
+    async def test_tool_call_signals_emitted_via_run_stream(self):
+        from lauren_ai._transport import CompletionChunk, ToolCallDelta
+
+        bus = SignalBus()
+        mock = MockTransport()
+        tools = _make_tool_map(echo_tool)
+        runner = make_runner_with_signals(mock, bus, tools)
+
+        started: list[ToolCallStarted] = []
+        completed: list[ToolCallComplete] = []
+
+        @bus.on(ToolCallStarted)
+        async def cap_start(event: ToolCallStarted) -> None:
+            started.append(event)
+
+        @bus.on(ToolCallComplete)
+        async def cap_done(event: ToolCallComplete) -> None:
+            completed.append(event)
+
+        # Turn 1: tool-use chunk
+        mock.queue_stream(
+            [
+                CompletionChunk(
+                    tool_call_delta=ToolCallDelta(
+                        tool_use_id="tc1",
+                        name="echo_tool",
+                        input_delta='{"message":"ping"}',
+                    )
+                ),
+                CompletionChunk(
+                    delta="",
+                    stop_reason="tool_use",
+                    usage=TokenUsage(input_tokens=10, output_tokens=5),
+                ),
+            ]
+        )
+        # Turn 2: final response
+        mock.queue_stream(_stream_chunks("Echoed."))
+
+        instance = SignalTestAgent()
+        async for _ in await runner.run_stream(instance, "Echo ping"):
+            pass
+
+        assert len(started) == 1
+        assert len(completed) == 1
+        assert started[0].tool_name == "echo_tool"
+        assert completed[0].success is True

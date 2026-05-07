@@ -175,7 +175,7 @@ user_id = ctx.get_metadata("user_id", default="anonymous")
 | `turns` | `int` | Number of loop iterations executed |
 | `total_usage` | `TokenUsage` | Cumulative token usage across all turns |
 | `tool_calls_made` | `list[ToolCall]` | All tool calls executed during the run |
-| `stop_reason` | `str` | `"end_turn"`, `"max_turns"`, `"budget_exceeded"`, `"delegated"`, or `"error"` |
+| `stop_reason` | `str` | `"end_turn"`, `"max_turns"`, `"budget_exceeded"`, or `"error"` |
 | `reasoning_traces` | `list[str]` | Extended-thinking blocks (Anthropic only) |
 
 ---
@@ -234,26 +234,14 @@ See the [streaming guide](streaming.md) for SSE controller examples.
 
 ## Delegation
 
-### ctx.delegate — hook-based handoff
+Multi-agent handoff is always tool-based: give the coordinator a `@tool()`
+that calls another agent's runner inside its body.  Every handoff appears in
+the tool-call log, is visible to the model, and composes cleanly with
+`run_stream()`.  See [multi-agent](multi-agent.md) for full examples.
 
-Any lifecycle hook can call `ctx.delegate()` to hand off to another agent.
-The runner catches the internal `DelegateToAgent` signal, recursively runs
-the target agent, and returns its result with `stop_reason="delegated"`.
-
-```python
-from lauren_ai import AgentContext
-
-async def on_start(self, ctx: AgentContext) -> None:
-    if is_legal_question(ctx):
-        await ctx.delegate(LegalAgent, ctx.memory.messages()[-1]["content"])
-```
-
-### Tool-based delegation — observable multi-agent systems
-
-For more complex routing, give the coordinator a tool that calls
-`AgentRunner.run()` directly inside its body.  The delegation appears in the
-tool call log and is visible to the model.  See [multi-agent](multi-agent.md)
-for full examples.
+For deterministic routing where *your code* decides which agent runs (rather
+than the LLM), do the dispatch in your controller before calling
+`runner.run()` / `runner.run_stream()`.
 
 ---
 

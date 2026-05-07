@@ -172,36 +172,6 @@ class AgentContext:
         """
         return self.metadata.get(key, default)
 
-    async def delegate(
-        self,
-        agent: Any,
-        message: str,
-        *,
-        metadata: dict[str, Any] | None = None,
-    ) -> AgentResponse:
-        """Hand off execution to another agent.
-
-        Raises :class:`~lauren_ai._exceptions.DelegateToAgent` which the
-        :class:`~lauren_ai._agents._runner.AgentRunner` catches and handles by
-        calling :meth:`~lauren_ai._agents._runner.AgentRunner.run` recursively
-        on the target agent.
-
-        :param agent: The ``@agent()``-decorated class or instance to delegate
-            execution to.
-        :type agent: Any
-        :param message: The message to pass to the delegated agent.
-        :type message: str
-        :param metadata: Optional additional metadata for the delegated run.
-        :type metadata: dict[str, Any] | None
-        :return: The delegated agent's :class:`AgentResponse` (raised and caught
-            by the runner, which then returns it).
-        :rtype: AgentResponse
-        :raises DelegateToAgent: Always — the runner intercepts this exception.
-        """
-        from lauren_ai._exceptions import DelegateToAgent  # noqa: PLC0415
-
-        raise DelegateToAgent(agent=agent, message=message)
-
 
 # ---------------------------------------------------------------------------
 # AgentResponse
@@ -231,9 +201,8 @@ class AgentResponse:
         * ``"end_turn"`` — the model indicated a natural end.
         * ``"max_turns"`` — the ``max_turns`` limit was reached.
         * ``"budget_exceeded"`` — cost or token budget was crossed.
-        * ``"delegated"`` — execution was handed off to another agent.
         * ``"error"`` — an unrecoverable error occurred.
-    :type stop_reason: Literal["end_turn", "max_turns", "budget_exceeded", "delegated", "error"]
+    :type stop_reason: Literal["end_turn", "max_turns", "budget_exceeded", "error"]
     :param metadata: Arbitrary metadata attached to the response.
     :type metadata: dict[str, Any]
     :param reasoning_traces: Extended-thinking / reasoning traces collected
@@ -245,7 +214,7 @@ class AgentResponse:
     turns: int
     total_usage: Any  # TokenUsage — typed as Any to avoid circular import
     tool_calls_made: list[Any]  # list[ToolCall]
-    stop_reason: Literal["end_turn", "max_turns", "budget_exceeded", "delegated", "error"]
+    stop_reason: Literal["end_turn", "max_turns", "budget_exceeded", "error"]
     metadata: dict[str, Any] = field(default_factory=dict)
     reasoning_traces: list[str] = field(default_factory=list)
 

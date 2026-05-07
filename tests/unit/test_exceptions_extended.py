@@ -10,7 +10,6 @@ from lauren_ai._exceptions import (
     AgentMaxTurnsError,
     AuthTransportError,
     DecoratorUsageError,
-    DelegateToAgent,
     EmptyQueueError,
     EvalError,
     KnowledgeLoadError,
@@ -258,41 +257,6 @@ class TestDecoratorUsageErrorStr:
     def test_attribute(self):
         exc = DecoratorUsageError("x", decorator_name="agent")
         assert exc.decorator_name == "agent"
-
-
-class TestDelegateToAgentStr:
-    def test_str_with_class_and_message(self):
-        class TargetAgent:
-            pass
-
-        exc = DelegateToAgent(TargetAgent, "please help")
-        s = str(exc)
-        assert "TargetAgent" in s
-        assert "please help" in s
-
-    def test_str_with_instance(self):
-        class TargetAgent:
-            pass
-
-        exc = DelegateToAgent(TargetAgent(), "")
-        s = str(exc)
-        assert "TargetAgent" in s
-
-    def test_str_without_message(self):
-        class AgentX:
-            pass
-
-        exc = DelegateToAgent(AgentX)
-        s = str(exc)
-        assert "AgentX" in s
-
-    def test_attributes(self):
-        class A:
-            pass
-
-        exc = DelegateToAgent(A, "msg")
-        assert exc.agent is A
-        assert exc.message == "msg"
 
 
 class TestEmptyQueueErrorStr:

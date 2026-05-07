@@ -16,7 +16,6 @@ LaurenAIError
 ├── AgentBudgetExceededError
 ├── AgentConfigError
 ├── DecoratorUsageError
-├── DelegateToAgent
 ├── EmptyQueueError
 ├── ToolConfirmationRejectedError
 ├── KnowledgeLoadError
@@ -143,21 +142,6 @@ Raised when a decorator is used incorrectly, most commonly bare `@tool` or `@age
 | `decorator_name` | `str \| None` | The name of the misused decorator. |
 
 `str()` returns `"Decorator @{name} misuse: {message}"`.
-
----
-
-## Multi-agent handoff
-
-### `DelegateToAgent(LaurenAIError)`
-
-Internal control-flow exception used to request a multi-agent handoff. Not a fatal error — the runner catches it and performs the delegation.
-
-Raised by `AgentContext.delegate()`. Never needs to be caught in application code.
-
-| Extra attribute | Type | Description |
-|-----------------|------|-------------|
-| `agent` | `Any` | The agent instance or class to delegate to. |
-| `message` | `str` | The message to pass to the target agent. |
 
 ---
 

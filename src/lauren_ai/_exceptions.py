@@ -16,7 +16,6 @@ from the built-in :class:`Exception`.  The hierarchy is:
     ├── AgentBudgetExceededError
     ├── AgentConfigError
     ├── DecoratorUsageError
-    ├── DelegateToAgent
     ├── EmptyQueueError
     ├── ToolConfirmationRejectedError
     ├── KnowledgeLoadError
@@ -41,7 +40,6 @@ __all__ = [
     "AgentBudgetExceededError",
     "AgentConfigError",
     "DecoratorUsageError",
-    "DelegateToAgent",
     "EmptyQueueError",
     "ToolConfirmationRejectedError",
     "KnowledgeLoadError",
@@ -420,47 +418,6 @@ class DecoratorUsageError(LaurenAIError):
         if self.decorator_name is not None:
             return f"Decorator @{self.decorator_name} misuse: {self.message}"
         return f"Decorator misuse: {self.message}"
-
-
-# ---------------------------------------------------------------------------
-# Multi-agent handoff (internal control-flow exception)
-# ---------------------------------------------------------------------------
-
-
-class DelegateToAgent(LaurenAIError):
-    """Internal exception used to request a multi-agent handoff.
-
-    An agent's hook method raises this to instruct the runner to transfer
-    control to another agent.  This is **not** a fatal error — the runner
-    catches it and performs the delegation.
-
-    :param agent: The agent instance or class to delegate to.
-    :type agent: Any
-    :param message: The message to pass to the target agent.
-    :type message: str
-    """
-
-    def __init__(self, agent: Any, message: str = "") -> None:
-        """Initialise the delegation request.
-
-        :param agent: The agent instance or class to delegate to.
-        :type agent: Any
-        :param message: The message to pass to the target agent.
-        :type message: str
-        """
-        super().__init__(
-            f"Delegate to {agent!r}: {message}" if message else f"Delegate to {agent!r}"
-        )
-        self.agent: Any = agent
-        self.message: str = message
-
-    def __str__(self) -> str:
-        agent_name = (
-            self.agent.__name__ if isinstance(self.agent, type) else type(self.agent).__name__
-        )
-        if self.message:
-            return f"Handoff to {agent_name!r} with message: {self.message!r}"
-        return f"Handoff to {agent_name!r}"
 
 
 # ---------------------------------------------------------------------------

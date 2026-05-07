@@ -14,18 +14,16 @@ Available skills
 
 * :class:`HttpFetchTool` — fetch a URL via HTTP and return the body text.
 * :class:`CodeExecutionTool` — execute Python code snippets in a sandbox.
-* :class:`DelegateToAgentTool` — hand off to another registered agent.
 """
 
 import asyncio
-from typing import Any, Optional
+from typing import Any
 
 from lauren_ai._tools import ToolContext, tool
 
 __all__ = [
     "HttpFetchTool",
     "CodeExecutionTool",
-    "DelegateToAgentTool",
 ]
 
 
@@ -129,40 +127,3 @@ async def CodeExecutionTool(  # noqa: N802
         return {"stdout": "", "stderr": str(exc), "exit_code": -1}
 
 
-# ---------------------------------------------------------------------------
-# DelegateToAgentTool
-# ---------------------------------------------------------------------------
-
-
-@tool()
-async def DelegateToAgentTool(  # noqa: N802
-    agent_name: str,
-    message: str,
-    ctx: ToolContext | None = None,
-) -> dict[str, Any]:
-    """Delegate a task to another registered agent.
-
-    Args:
-        agent_name: The class name of the target agent (e.g. 'ResearchAgent').
-        message: The message to pass to the delegated agent.
-
-    Returns the delegated agent's response as a dict with ``content`` and
-    ``turns`` keys.
-    """
-    # The actual delegation is handled by AgentContext.delegate(); this tool
-    # is a convenience wrapper for use when delegation is triggered via a
-    # tool call from the LLM.
-    if ctx is None:
-        return {"error": "No agent context available for delegation.", "content": ""}
-
-    agent_ctx = getattr(ctx, "agent_context", None)
-    if agent_ctx is None:
-        return {"error": "No agent context available for delegation.", "content": ""}
-
-    return {
-        "content": (
-            f"Delegation to {agent_name!r} is not yet resolved. "
-            "Implement DelegateToAgentTool with a real agent registry."
-        ),
-        "turns": 0,
-    }

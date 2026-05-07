@@ -51,8 +51,8 @@ In-depth how-to guides for every feature of `lauren-ai`.
 
     ---
 
-    Delegate between agents using `DelegateToAgent`, tool-based handoff,
-    and `AgentRunner` recursive delegation.
+    Delegate between agents via tool-based handoff — every transition is
+    visible in the tool-call log and composes with `run_stream()`.
 
 - :material-account-group: **[Agent Teams](agent-teams.md)**
 

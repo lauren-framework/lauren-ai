@@ -7,7 +7,6 @@ from lauren_ai._exceptions import (
     AgentMaxTurnsError,
     AuthTransportError,
     DecoratorUsageError,
-    DelegateToAgent,
     EmptyQueueError,
     KnowledgeLoadError,
     LaurenAIError,
@@ -58,15 +57,6 @@ class TestExceptionHierarchy:
         exc = DecoratorUsageError("Use @tool()", decorator_name="tool")
         assert isinstance(exc, LaurenAIError)
         assert exc.decorator_name == "tool"
-
-    def test_delegate_to_agent(self):
-        class FakeAgent:
-            pass
-
-        exc = DelegateToAgent(agent=FakeAgent, message="please handle this")
-        assert isinstance(exc, LaurenAIError)
-        assert exc.agent is FakeAgent
-        assert exc.message == "please handle this"
 
     def test_empty_queue_error(self):
         exc = EmptyQueueError("Queue is empty")

@@ -286,10 +286,10 @@ Rules:
 
 ## Built-in skills
 
-`lauren_ai.skills` ships four ready-to-use tools:
+`lauren_ai.skills` ships ready-to-use tools:
 
 ```python
-from lauren_ai.skills import WebSearchTool, HttpFetchTool, CodeExecutionTool, DelegateToAgentTool
+from lauren_ai.skills import WebSearchTool, HttpFetchTool, CodeExecutionTool
 ```
 
 | Tool | Description |
@@ -297,7 +297,6 @@ from lauren_ai.skills import WebSearchTool, HttpFetchTool, CodeExecutionTool, De
 | `WebSearchTool` | Web search (stub — wire up a real API in production) |
 | `HttpFetchTool` | Fetch a URL via HTTP (requires `httpx`) |
 | `CodeExecutionTool` | Execute Python in a subprocess sandbox |
-| `DelegateToAgentTool` | Hand off to another registered agent by class name |
 
 Attach them to agents via `@use_tools()`:
 
