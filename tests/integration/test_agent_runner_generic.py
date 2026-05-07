@@ -21,8 +21,8 @@ Coverage:
 from __future__ import annotations
 
 import pytest
-
 from lauren import LaurenFactory, module
+
 from lauren_ai import AgentModule, LLMModule, agent
 from lauren_ai._agents._runner import (
     AgentRunner,

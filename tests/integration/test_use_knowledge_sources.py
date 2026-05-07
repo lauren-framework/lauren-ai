@@ -20,9 +20,9 @@ Coverage:
 from __future__ import annotations
 
 import pytest
-
 from lauren import LaurenFactory, module
 from lauren.exceptions import MetadataInheritanceError
+
 from lauren_ai import AgentModule, LLMModule, agent, use_knowledge_sources
 from lauren_ai._agents import AGENT_META
 from lauren_ai._config import LLMConfig

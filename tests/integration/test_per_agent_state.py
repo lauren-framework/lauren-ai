@@ -22,15 +22,13 @@ from __future__ import annotations
 
 import pytest
 
-from lauren import LaurenFactory, module
-from lauren_ai import AgentModule, LLMModule
+from lauren_ai import AgentModule
 from lauren_ai._agents import AGENT_META, agent
 from lauren_ai._agents._runner import AgentRunnerBase
 from lauren_ai._config import LLMConfig
 from lauren_ai._memory import ShortTermMemory
 from lauren_ai._memory._stores import InMemoryConversationStore
 from lauren_ai._transport import Completion, TokenUsage
-
 
 # ---------------------------------------------------------------------------
 # Helpers

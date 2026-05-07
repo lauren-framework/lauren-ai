@@ -26,7 +26,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any, ClassVar, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from lauren_ai._agents import AGENT_META, AgentContext, AgentMeta, AgentResponse
 from lauren_ai._config import AgentConfig, LLMConfig
