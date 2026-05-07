@@ -480,9 +480,15 @@ class AgentRunnerBase(AgentRunner):
 
                 # ── Output guardrails ─────────────────────────────────────
                 if _output_guards and completion.content:
-                    _out_decision = await _run_output_guardrails(
-                        _output_guards, completion.content, meta.name
-                    )
+                    try:
+                        _out_decision = await _run_output_guardrails(
+                            _output_guards, completion.content, meta.name
+                        )
+                    except Exception as _exc:  # noqa: BLE001
+                        logger.warning(
+                            "lauren_ai: output guardrail check failed — failing open: %s", _exc
+                        )
+                        _out_decision = None
                     if _out_decision is not None and _out_decision.action != "pass":
                         _override = (
                             _out_decision.modified_content
@@ -900,9 +906,15 @@ class AgentRunnerBase(AgentRunner):
                 # sentinel CompletionChunk(guardrail_override=...) that tells
                 # the controller / frontend to replace the displayed content.
                 if output_guards and accumulated_text:
-                    _out_decision = await _run_output_guardrails(
-                        output_guards, accumulated_text, ctx.agent_name
-                    )
+                    try:
+                        _out_decision = await _run_output_guardrails(
+                            output_guards, accumulated_text, ctx.agent_name
+                        )
+                    except Exception as _exc:  # noqa: BLE001
+                        logger.warning(
+                            "lauren_ai: output guardrail check failed — failing open: %s", _exc
+                        )
+                        _out_decision = None
                     if _out_decision is not None and _out_decision.action != "pass":
                         _override = (
                             _out_decision.modified_content
@@ -914,6 +926,11 @@ class AgentRunnerBase(AgentRunner):
                         # reflect the safe content, not the hallucination.
                         accumulated_text = _override
                         accumulated_tool_calls = []
+                        # Clear the raw tool-delta dicts so the tool-rebuild
+                        # loop below cannot re-populate accumulated_tool_calls
+                        # from stale deltas.
+                        partial_tool_inputs = {}
+                        partial_tool_names = {}
                         accumulated_stop_reason = "end_turn"
                 # ─────────────────────────────────────────────────────────────
 
