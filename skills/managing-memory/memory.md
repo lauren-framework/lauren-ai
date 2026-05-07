@@ -39,22 +39,22 @@ class MyAgent:
 ## Tier 2 — Conversation store (`ConversationStore`)
 
 Persists full conversation history across multiple agent runs within a session.
-The preferred way to wire it is via `AgentModule.for_root()`:
+Declare the store **per-agent** via `@agent(conversation_store=...)`:
 
 ```python
-from lauren_ai import InMemoryConversationStore, AgentModule
+from lauren_ai import agent, InMemoryConversationStore
 
-store = InMemoryConversationStore()
+@agent(model="claude-opus-4-6", conversation_store=InMemoryConversationStore())
+class MyAgent: ...
 
-AIModule = AgentModule.for_root(
-    agents=[MyAgent],
-    conversation_store=store,   # wired to AgentRunner automatically
-    imports=LLMProvider,
-)
+# AgentModule.for_root() also auto-creates InMemoryConversationStore for agents
+# that omit it, so every agent always has an isolated store.
+AgentModule.for_root(agents=[MyAgent], imports=LLMProvider)
 ```
 
 When `runner.run()` receives a `conversation_id`, the runner automatically
-loads prior messages before the new turn and saves the updated history after:
+loads prior messages from the agent's store before the new turn and saves the
+updated history after:
 
 ```python
 # Turn 1 — no prior history
@@ -65,19 +65,14 @@ resp2 = await runner.run(agent, "What is my name?", conversation_id="sess-1")
 # resp2.content → "Your name is Alice."
 ```
 
-You can also construct `AgentRunnerBase` directly if you need finer control:
+Per-request override (leaves the agent's own store untouched):
 
 ```python
-from lauren_ai import AgentRunnerBase, LLMConfig
-
-cfg = LLMConfig(provider="anthropic", model="claude-opus-4-6")
-runner = AgentRunnerBase(
-    transport=transport,
-    tools={},
-    config=cfg,
-    conversation_store=store,
-)
+await runner.run(agent, msg, conversation_id="s1", conversation_store=other_store)
 ```
+
+`AgentModule.for_root()` **no longer accepts `conversation_store=`** — it was
+removed in favour of the per-agent pattern above.
 
 Direct store manipulation uses `save` / `load` / `delete`:
 

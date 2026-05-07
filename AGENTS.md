@@ -99,10 +99,21 @@ Marks a class as an AI agent.  **Must use parentheses.**
     max_turns=10,                    # Agentic loop limit
     temperature=0.7,                 # Sampling temperature
     max_cost_usd=0.50,              # Hard cost budget in USD (None = unlimited)
+    memory=ShortTermMemory(max_tokens=60_000),      # Optional — reused across run() calls
+    conversation_store=InMemoryConversationStore(), # Optional — auto-created if None
     config=AgentConfig(parallel_tool_calls=True),  # Full AgentConfig override
 )
 class MyAgent: ...
 ```
+
+**Per-agent state parameters:**
+
+| Parameter | Default | Purpose |
+|---|---|---|
+| `memory` | `None` | `ShortTermMemory` instance reused across **every** `run()` call (agentic persistent memory). When `None`, a fresh one is built per turn. |
+| `conversation_store` | `None` | Per-agent conversation store. When `None`, `AgentModule.for_root()` auto-creates an `InMemoryConversationStore` and writes it back to AgentMeta. Two agents in the same module always get **distinct** stores. |
+
+`AgentModule.for_root()` **does not accept `memory=` or `conversation_store=`** — these are per-agent; place them in `@agent()`.  Both can be overridden per-call via `runner.run(agent, ..., conversation_store=..., memory=...)`.
 
 **Lifecycle hooks** (all optional, all async or sync):
 
@@ -142,6 +153,64 @@ Multiple `@use_tools` can be stacked; tools are merged:
 @use_tools(base_tool)
 class MyAgent: ...
 # result: [base_tool, extra_tool]
+```
+
+---
+
+### `@use_knowledge_sources(*sources: KnowledgeSource)`
+
+Restricts an agent's knowledge-base tool visibility to the listed sources.
+**KB access is opt-in** — an agent without this decorator sees **zero** KB
+tools even when its module declares `knowledge=[...]`.
+
+```python
+from lauren_ai import use_knowledge_sources
+from .knowledge_sources import PUBLIC_KB, INTERNAL_KB
+
+@use_knowledge_sources(PUBLIC_KB)     # only this KB is visible to this agent
+@agent(name="UnauthCRM", model="claude-opus-4-6")
+class UnauthenticatedCRMAgent: ...
+
+@agent(name="AuthCRM", model="claude-opus-4-6")  # no decorator → no KB tools
+class AuthenticatedCRMAgent: ...
+```
+
+**Rules:**
+
+- Must be declared on the agent class itself — not inherited (strict-inheritance; raises `MetadataInheritanceError` if subclass inherits without redeclaring).
+- All referenced sources must be listed in the enclosing `AgentModule.for_root(knowledge=[...])` — if not, raises `DecoratorUsageError` at module-build time.
+- Must be stacked **below** `@agent()` (executes first so `@agent()` can read it).
+- Calling with no arguments (`@use_knowledge_sources()`) raises `DecoratorUsageError`.
+
+Typical wiring — hoist the `KnowledgeSource` to a shared module to avoid circular imports:
+
+```python
+# knowledge_sources.py
+from lauren_ai._knowledge import KnowledgeBase, KnowledgeSource, SentenceChunker, TextLoader
+from lauren_ai._memory._vector import InMemoryVectorStore
+
+PUBLIC_KB = KnowledgeSource(
+    kb=KnowledgeBase(store=InMemoryVectorStore(), chunker=SentenceChunker()),
+    tool_name="search_public_info",
+    top_k=3,
+    loaders=[TextLoader("docs/public.md")],   # loaded at app startup via @post_construct
+)
+
+# agent.py
+from .knowledge_sources import PUBLIC_KB
+
+@use_knowledge_sources(PUBLIC_KB)
+@agent(name="UnauthCRM", ...)
+class UnauthenticatedCRMAgent: ...
+
+# module.py
+from .knowledge_sources import PUBLIC_KB
+
+AgentModule = AgentModule.for_root(
+    agents=[UnauthenticatedCRMAgent, AuthenticatedCRMAgent],
+    knowledge=[PUBLIC_KB],   # module declares it; only UnauthCRM opts in
+    imports=[LLMProvider],
+)
 ```
 
 ---
@@ -288,16 +357,19 @@ runner = AgentRunnerBase(
     config=...,
     signals=...,           # Optional SignalBus
     cache_backend=...,     # Optional tool-result cache
-    conversation_store=...,# Optional ConversationStore — enables history persistence
+    # No conversation_store — it lives on each @agent() now.
+    # Pass it per-call via runner.run(..., conversation_store=...) to override.
 )
 
 # Blocking run — returns AgentResponse
 response: AgentResponse = await runner.run(
     agent_instance,            # @agent()-decorated instance
     "User message",
-    conversation_id="sess-1",  # Optional — loads prior history, saves after run
+    conversation_id="sess-1",  # Optional — loads prior history from agent's store, saves after
     metadata={"user_id": "u1"},
     run_id="run-abc",          # Optional — random hex if omitted
+    conversation_store=...,    # Optional per-request override (wins over agent's store)
+    memory=...,                # Optional per-request override (wins over agent's memory)
 )
 response.content        # str: final assistant text
 response.turns          # int: number of agentic loop iterations
@@ -354,22 +426,14 @@ async for event in team_runner.run_stream("Research topic"):
 
 ## Delegation pattern
 
-Use a class-form `@tool()` that injects the target agent and its named runner
-subclass. The delegation tool lives in the **calling module's `tools=`**; the
-calling module imports the target module so the target runner is visible to DI.
+Use a class-form `@tool()` that injects the target agent and its runner via
+`AgentRunner[TargetAgent]`. The delegation tool lives in the **calling module's
+`tools=`**; the calling module imports the target module so the parameterized
+runner token is visible to DI.  No named `AgentRunnerBase` subclass needed.
 
 ```python
 # delegation.py — NO from __future__ import annotations (function-form schema generation)
-from lauren import injectable, Scope
-from lauren_ai import AgentRunnerBase, tool, ToolContext
-
-@injectable(scope=Scope.SINGLETON)
-class SpecialistAgentRunner(AgentRunnerBase):
-    """Distinct DI token for the Specialist module's runner."""
-
-@injectable(scope=Scope.SINGLETON)
-class OrchestratorAgentRunner(AgentRunnerBase):
-    """Distinct DI token for the Orchestrator module's runner."""
+from lauren_ai import AgentRunner, tool, ToolContext
 
 @tool()
 class DelegateToSpecialist:
@@ -377,29 +441,31 @@ class DelegateToSpecialist:
     Args:
         task: Full task description.
     """
-    def __init__(self, agent: SpecialistAgent, runner: SpecialistAgentRunner) -> None:
+    def __init__(
+        self,
+        agent: SpecialistAgent,
+        runner: AgentRunner[SpecialistAgent],   # ← parameterized token — no boilerplate subclass
+    ) -> None:
         self._agent = agent
-        self._runner = runner   # named subclass — no ambiguity with OrchestratorAgentRunner
+        self._runner = runner
 
     async def run(self, ctx: ToolContext, task: str) -> dict:
         response = await self._runner.run(self._agent, task,
                                           execution_context=ctx.execution_context)
         return {"result": response.content}
 
-# Target module — registers its named runner token
+# Target module — AgentRunner[SpecialistAgent] is auto-registered
 SpecialistMod = AgentModule.for_root(
     agents=[SpecialistAgent],
     tools=[SpecialistTool],
     imports=[LLMProvider],
-    runner=SpecialistAgentRunner,
 )
 
 # Calling module — owns the delegation tool; imports target module
 OrchestratorMod = AgentModule.for_root(
     agents=[OrchestratorAgent],
     tools=[DelegateToSpecialist],          # ← delegation tool lives HERE
-    imports=[LLMProvider, SpecialistMod],  # ← makes SpecialistAgentRunner visible
-    runner=OrchestratorAgentRunner,
+    imports=[LLMProvider, SpecialistMod],  # ← makes AgentRunner[SpecialistAgent] visible
 )
 ```
 
@@ -409,21 +475,19 @@ OrchestratorMod = AgentModule.for_root(
 
 ### Conversation history across requests
 
-Pass `conversation_store` to `AgentModule.for_root()` (preferred) or directly
-to `AgentRunner`.  Then supply a `conversation_id` on each `run()` call — the
-runner loads prior messages before the new turn and saves the updated history
-afterward:
+Declare `conversation_store` on the `@agent()` decorator.  Then supply a
+`conversation_id` on each `run()` call — the runner loads prior messages before
+the new turn and saves the updated history afterward:
 
 ```python
-from lauren_ai import InMemoryConversationStore, AgentModule
+from lauren_ai import agent, InMemoryConversationStore
 
-store = InMemoryConversationStore()
+# Per-agent store — declared on the class, isolated from all other agents
+@agent(model="claude-opus-4-6", conversation_store=InMemoryConversationStore())
+class MyAgent: ...
 
-AIModule = AgentModule.for_root(
-    agents=[MyAgent],
-    conversation_store=store,   # wired to AgentRunner automatically
-    imports=LLMProvider,
-)
+# AgentModule.for_root() auto-creates InMemoryConversationStore for agents that omit it
+AgentModule.for_root(agents=[MyAgent], imports=LLMProvider)
 
 # In a controller — each request carries the same session ID:
 resp1 = await runner.run(agent, "My name is Alice.", conversation_id="sess-1")
@@ -431,9 +495,14 @@ resp2 = await runner.run(agent, "What is my name?",  conversation_id="sess-1")
 # resp2 sees the full prior exchange — the agent replies "Alice"
 ```
 
-Without `conversation_store` the runner creates a fresh `ShortTermMemory` per
-call; the `conversation_id` is accepted but ignored.  Different IDs are
-completely isolated.
+Override the store for a single call without mutating the agent class:
+
+```python
+await runner.run(agent, msg, conversation_id="s1", conversation_store=other_store)
+```
+
+Without a store the runner creates a fresh `ShortTermMemory` per call; the
+`conversation_id` is accepted but ignored.  Different IDs are completely isolated.
 
 ### Long-term user facts
 
@@ -605,15 +674,14 @@ print(match.matched)     # bool — False if below min_confidence
 
 `@agent()` automatically applies `@injectable(scope=Scope.SINGLETON)`.
 `AgentModule.for_root()` registers each agent class as a DI provider **and**
-exports it, so controllers in the parent module can inject it directly:
+exports it, so controllers in the parent module can inject it directly.
+
+**Single module — bare `AgentRunner` Protocol:**
 
 ```python
 from lauren_ai import AgentRunner  # @runtime_checkable Protocol
 
 class ChatController:
-    # runner: AgentRunner resolves unambiguously when only one AgentModule is in scope.
-    # When two or more AgentModules are imported, use the named concrete subclass
-    # registered via runner=MyRunner to avoid ProtocolAmbiguityError.
     def __init__(self, runner: AgentRunner, agent: ChatAgent) -> None:
         self._runner = runner
         self._agent = agent   # DI-resolved singleton
@@ -622,6 +690,28 @@ class ChatController:
         response = await self._runner.run(self._agent, message)
         return response.content
 ```
+
+**Multiple modules — `AgentRunner[X]` parameterized form:**
+
+When a controller or tool can see runners from two or more `AgentModule`s, the
+bare `runner: AgentRunner` Protocol scan would find multiple matches and raise
+`ProtocolAmbiguityError`.  Instead, use the parameterized form:
+
+```python
+from lauren_ai import AgentRunner
+
+class BankingChatController:
+    def __init__(
+        self,
+        unauth_runner:   AgentRunner[UnauthenticatedCRMAgent],
+        auth_runner:     AgentRunner[AuthenticatedCRMAgent],
+        transfer_runner: AgentRunner[BankTransferAgent],
+    ) -> None:
+        ...
+```
+
+`AgentModule.for_root()` automatically registers `AgentRunner[agent_cls]` for
+every agent in `agents=`.  **No named runner subclass boilerplate needed.**
 
 Always pass the **instance** (from DI) — never the class — to `runner.run()`.
 Passing the class breaks lifecycle hooks because `on_start` / `on_turn_complete`
@@ -732,40 +822,47 @@ class EventForwarder:
             await self.send_to_user(user_id, {"type": "token_usage", ...})
 ```
 
-### Multi-runner disambiguation with named runner subclasses
+### Multi-runner disambiguation with `AgentRunner[X]`
 
-Every `AgentModule.for_root()` call MUST have its own dedicated runner. When a
-controller or service needs runners from two modules simultaneously, define a
-named `AgentRunnerBase` subclass per module and pass it via `runner=MyRunner`:
+Every `AgentModule.for_root()` auto-registers `AgentRunner[agent_cls]` aliases
+for every agent in `agents=`.  Controllers that see runners from multiple
+modules inject by agent class — **no named subclass boilerplate needed**:
 
 ```python
-from lauren_ai import AgentRunnerBase
+from lauren_ai import AgentRunner
 
-@injectable(scope=Scope.SINGLETON)
-class TransferAgentRunner(AgentRunnerBase):
-    """Distinct DI token for the Transfer Agent's runner."""
-
-@injectable(scope=Scope.SINGLETON)
-class CRMAgentRunner(AgentRunnerBase):
-    """Distinct DI token for the CRM Agent's runner."""
+class BankingChatController:
+    def __init__(
+        self,
+        unauth_runner:   AgentRunner[UnauthenticatedCRMAgent],
+        auth_runner:     AgentRunner[AuthenticatedCRMAgent],
+        transfer_runner: AgentRunner[BankTransferAgent],
+        disputes_runner: AgentRunner[DisputesAgent],
+    ) -> None:
+        self._registry = {
+            UNAUTH:   (unauth_agent,   unauth_runner),
+            AUTH:     (auth_agent,     auth_runner),
+            TRANSFER: (transfer_agent, transfer_runner),
+            DISPUTES: (disputes_agent, disputes_runner),
+        }
 ```
 
-The delegation tool uses the named subclass so DI resolves it unambiguously:
+Delegation tools use the same pattern:
 
 ```python
 @tool()
 class DelegateToBankingTransfer:
     def __init__(
         self,
-        transfer_agent: BankingTransferAgent,
-        runner: TransferAgentRunner,       # ← named subclass, not AgentRunner Protocol
+        transfer_agent: BankTransferAgent,
+        runner: AgentRunner[BankTransferAgent],   # ← parameterized DI token
     ) -> None:
-        self._transfer_agent = transfer_agent
+        self._agent = transfer_agent
         self._runner = runner
 
     async def run(self, ctx: ToolContext, task: str) -> dict:
         response = await self._runner.run(
-            self._transfer_agent, task,
+            self._agent, task,
             execution_context=ctx.execution_context,
         )
         return {"result": response.content, "stop_reason": response.stop_reason}
@@ -781,7 +878,9 @@ class DelegateToBankingTransfer:
 - **Do not** use `@guardrail(input=[...], output=[...])` on agents — that form is for DI-injectable guardrail classes; use `@use_guardrails(input=[...], output=[...])` on agents instead.
 - **Do not** define `__call__` in class-form tools — `@tool()` looks for `run()`.
 - **Do not** register the same tool in `ToolRegistry` twice — it will override silently.
-- **Do not** pass `conversation_id=None` when you want session persistence — always supply one, and ensure `conversation_store` was passed to `AgentModule.for_root()` or `AgentRunner.__init__`.
-- **Do not** share `ShortTermMemory` across runs — it is created fresh per `AgentRunner.run()` call (prior history is loaded from `ConversationStore` when available).
+- **Do not** pass `conversation_id=None` when you want session persistence — always supply one, and ensure a `conversation_store` is set on the agent via `@agent(conversation_store=...)`.
+- **Do not** share `ShortTermMemory` instances between agents unless you want history to bleed across agent boundaries — each agent should have its own.
 - **Do not** pass agent **classes** to `runner.run()` — always pass a DI-resolved **instance**. Passing a class bypasses DI and breaks lifecycle hooks (raises `TypeError: on_start() missing 1 required positional argument: 'ctx'`).
-- **Do not** use `runner: AgentRunner` (Protocol annotation) in a controller or tool that can see runners from two or more `AgentModule`s — the structural Protocol scan finds multiple matches and raises `ProtocolAmbiguityError`. Use the named concrete subclass registered via `runner=MyRunner` instead.
+- **Do not** use `runner: AgentRunner` (bare Protocol annotation) in a controller or tool that can see runners from two or more `AgentModule`s — the structural Protocol scan finds multiple matches and raises `ProtocolAmbiguityError`. Use `AgentRunner[AgentX]` (parameterized form) instead.
+- **Do not** pass `memory=` or `conversation_store=` to `AgentModule.for_root()` — these are per-agent and must be declared on `@agent(memory=..., conversation_store=...)`.
+- **Do not** use `@use_knowledge_sources(KS)` without listing `KS` in the module's `for_root(knowledge=[...])` — raises `DecoratorUsageError` at module-build time.

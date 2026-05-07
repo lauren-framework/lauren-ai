@@ -171,24 +171,51 @@ is a registered DI provider once it is listed in `AgentModule.for_root()`.
 
 `AgentModule.for_root()` adds each agent class to **both** `providers` and
 `exports`, so controllers in the parent module can declare it as a constructor
-argument and receive the fully-resolved singleton:
+argument and receive the fully-resolved singleton.
+
+### `@agent()` — per-agent state parameters
 
 ```python
-# CORRECT — inject the agent instance via DI, pass the instance to runner.run()
+@agent(
+    model="claude-opus-4-6",
+    system="...",
+    memory=ShortTermMemory(max_tokens=60_000),    # optional — reused across run() calls
+    conversation_store=InMemoryConversationStore(), # optional — auto-created if None
+)
+class MyAgent: ...
+```
+
+| Parameter | Type | Default | Purpose |
+|---|---|---|---|
+| `memory` | `ShortTermMemory \| None` | `None` | Instance reused across every `run()` call (per-agent persistent context window). When `None`, a fresh `ShortTermMemory` is built per turn. |
+| `conversation_store` | `ConversationStore \| None` | `None` | Per-agent conversation store. When `None`, `AgentModule.for_root()` auto-creates an `InMemoryConversationStore` and writes it back to the agent's `AgentMeta`. |
+
+`AgentModule.for_root()` **no longer accepts `memory=` or `conversation_store=`**
+at the module level — these are per-agent concerns.  Each agent gets its own
+store, guaranteeing isolation even when two agents share a module.
+
+### Cross-module DI with `AgentRunner[X]`
+
+When a controller can see runners from **two or more** `AgentModule`s, use
+the parameterized form `AgentRunner[AgentClass]` — a cached real subclass that
+functions as an unambiguous DI token.
+
+```python
 from lauren_ai import AgentRunner  # @runtime_checkable Protocol
 
-class ChatController:
-    # runner: AgentRunner resolves unambiguously when only one AgentModule is in scope.
-    # If two or more AgentModules are imported, use the named concrete subclass
-    # registered via runner=MyRunner to avoid ProtocolAmbiguityError.
-    def __init__(self, runner: AgentRunner, agent: ChatAgent) -> None:
-        self._runner = runner
-        self._agent = agent   # ← DI-resolved singleton
-
-    async def chat(self, message: str) -> str:
-        response = await self._runner.run(self._agent, message)
-        return response.content
+class BankingChatController:
+    def __init__(
+        self,
+        unauth_runner: AgentRunner[UnauthenticatedCRMAgent],
+        auth_runner:   AgentRunner[AuthenticatedCRMAgent],
+        transfer_runner: AgentRunner[BankTransferAgent],
+    ) -> None:
+        ...
 ```
+
+`AgentModule.for_root()` automatically registers `use_factory(provide=AgentRunner[agent_cls], ...)` for every agent in `agents=`.  Named `AgentRunnerBase` subclasses are no longer needed for cross-module DI.
+
+Single-module scope still works as before: `runner: AgentRunner` in a tool or service inside the same module resolves via the structural Protocol fallback.
 
 **Critical invariant: pass instances, not classes, to `runner.run()`.**
 
@@ -276,30 +303,30 @@ reads this metadata to inject memory context and extract new facts after each tu
 
 ### Conversation memory — automatic load/save
 
-When `AgentRunner` has a `conversation_store` configured **and** `runner.run()`
-is called with a `conversation_id`, the runner automatically:
+When an agent has a `conversation_store` (set via `@agent(conversation_store=...)`)
+**and** `runner.run()` is called with a `conversation_id`, the runner automatically:
 
-1. **Loads** prior messages from the store and seeds `ShortTermMemory` before
-   adding the new user message.
+1. **Loads** prior messages from the agent's store and seeds `ShortTermMemory`
+   before adding the new user message.
 2. **Saves** the full updated history back to the store after `on_finish`.
 
-Wire it via `AgentModule.for_root()`:
+Per-agent declaration (preferred):
 
 ```python
-from lauren_ai import InMemoryConversationStore
+from lauren_ai import agent, InMemoryConversationStore
 
-store = InMemoryConversationStore()
+@agent(model="claude-opus-4-6", conversation_store=InMemoryConversationStore())
+class MyAgent: ...
 
-AgentModule.for_root(
-    agents=[MyAgent],
-    conversation_store=store,   # ← wired to AgentRunner automatically
-    imports=LLMProvider,
-)
+# AgentModule.for_root() also auto-creates a store for agents that omit it
+AgentModule.for_root(agents=[MyAgent], imports=LLMProvider)
 ```
 
-Without a `conversation_store` the runner creates a fresh `ShortTermMemory` on
-every call and the `conversation_id` is accepted but unused.  Without a
-`conversation_id` the store is never touched even if one is configured.
+Per-request override via `runner.run(agent, ..., conversation_store=other_store)` wins over the agent's stored value — useful for testing or per-request stores.
+
+Without a store the runner creates a fresh `ShortTermMemory` on every call and
+the `conversation_id` is accepted but unused.  Without a `conversation_id` the
+store is never touched even if one is configured.
 
 ---
 
@@ -447,69 +474,94 @@ async def generate():
     # context copy is discarded automatically when the Task exits — no reset() needed
 ```
 
-### 4. Named runner subclass as a distinct DI token
+### 4. `AgentRunner[X]` as the cross-module runner DI token
 
-Every `AgentModule.for_root()` call has its own dedicated runner. By default a
-unique `AgentRunnerBase` subclass is auto-generated. When a controller or service
-needs to inject runners from **two or more** `AgentModule`s simultaneously, use
-`runner=MyRunner` with an explicit `AgentRunnerBase` subclass per module — the
-named class becomes the unambiguous DI token:
+Every `AgentModule.for_root()` auto-generates a runner and registers
+`AgentRunner[agent_cls]` aliases for every agent in `agents=`.  Controllers in
+other modules use the parameterized form — **no named subclass boilerplate needed**:
 
 ```python
-# banking_delegation.py
-from lauren import injectable, Scope
-from lauren_ai import AgentRunnerBase
+from lauren_ai import AgentRunner
 
-@injectable(scope=Scope.SINGLETON)
-class TransferAgentRunner(AgentRunnerBase):
-    """Distinct DI token for the Transfer Agent's runner."""
-
-@injectable(scope=Scope.SINGLETON)
-class CRMAgentRunner(AgentRunnerBase):
-    """Distinct DI token for the CRM Agent's runner."""
+class BankingChatController:
+    def __init__(
+        self,
+        unauth_runner:   AgentRunner[UnauthenticatedCRMAgent],
+        auth_runner:     AgentRunner[AuthenticatedCRMAgent],
+        transfer_runner: AgentRunner[BankTransferAgent],
+        disputes_runner: AgentRunner[DisputesAgent],
+    ) -> None: ...
 ```
 
-The delegation tool uses `runner: TransferAgentRunner` (not `AgentRunner` Protocol),
-which DI resolves unambiguously from the imported Transfer module scope:
+`AgentRunner[X]` is validated at construction time: passing a non-`@agent`
+class raises `TypeError` immediately.  DI raises `MissingProviderError` at
+startup if no module declares `X`.
+
+For delegation tools, inject `runner: AgentRunner[TargetAgent]`:
 
 ```python
 @tool()
 class DelegateToBankingTransfer:
-    def __init__(self, transfer_agent: BankingTransferAgent, runner: TransferAgentRunner) -> None:
-        self._transfer_agent = transfer_agent
-        self._runner = runner          # ← named subclass, not AgentRunner Protocol
+    def __init__(
+        self,
+        transfer_agent: BankTransferAgent,
+        runner: AgentRunner[BankTransferAgent],   # ← parameterized token
+    ) -> None:
+        self._agent = transfer_agent
+        self._runner = runner
 
     async def run(self, ctx: ToolContext, task: str) -> dict:
         response = await self._runner.run(
-            self._transfer_agent, task,
+            self._agent, task,
             execution_context=ctx.execution_context,
         )
-        return {"result": response.content, "stop_reason": response.stop_reason}
+        return {"result": response.content}
 ```
 
-### 5. Delegation tool lives in the calling module's `tools=`
+### 5. `@use_knowledge_sources` — per-agent KB opt-in
 
-The delegation tool (`DelegateToBankingTransfer`) belongs in the **calling module's
-`tools=`** (e.g. the CRM module), NOT in the target module. The calling module
-imports the target module so the target runner token is visible to DI:
+`AgentModule.for_root(knowledge=[KnowledgeSource(...)])` declares sources at the
+module level but does NOT auto-attach them to every agent.  KB access is
+**opt-in** — each agent must declare `@use_knowledge_sources(source, ...)`.
+Without the decorator the agent has **no** KB tools (zero tools from the
+module's `knowledge=` list).
 
 ```python
-_TransferAgentModule = AgentModule.for_root(
-    agents=[BankingTransferAgent],
+from lauren_ai import use_knowledge_sources
+from .knowledge_sources import PUBLIC_KB_SOURCE
+
+@use_knowledge_sources(PUBLIC_KB_SOURCE)   # only this agent sees the KB tool
+@agent(name="UnauthCRM", model="...")
+class UnauthenticatedCRMAgent: ...
+```
+
+`@use_knowledge_sources` validation runs at module-build time:
+
+- Source not in `for_root(knowledge=[...])` → `DecoratorUsageError`
+- Inherited without redeclaring (subclass) → `MetadataInheritanceError`
+- No args → `DecoratorUsageError`
+
+### 6. Delegation tool lives in the calling module's `tools=`
+
+The delegation tool belongs in the **calling module's `tools=`**, NOT in the
+target module. The calling module imports the target module so the target
+runner token is visible to DI:
+
+```python
+_TransferModule = AgentModule.for_root(
+    agents=[BankTransferAgent],
     tools=[TransferFundsTool],
     imports=[LLMProvider, BankingModule],
-    runner=TransferAgentRunner,          # registers TransferAgentRunner token
 )
 
-_CRMAgentModule = AgentModule.for_root(
-    agents=[BankingCRMAgent],
+_CRMModule = AgentModule.for_root(
+    agents=[AuthenticatedCRMAgent],
     tools=[DelegateToBankingTransfer],      # ← delegation tool lives HERE
-    imports=[LLMProvider, _TransferAgentModule, BankingModule],  # ← makes TransferAgentRunner visible
-    runner=CRMAgentRunner,
+    imports=[LLMProvider, _TransferModule, BankingModule],  # makes AgentRunner[BankTransferAgent] visible
 )
 ```
 
-### 6. Register observability singletons in `providers=[]`
+### 7. Register observability singletons in `providers=[]`
 
 Any class that subscribes to `SignalBus` events or performs post-construction
 wiring in `__init__` must appear in the `providers` list of the enclosing `@module`

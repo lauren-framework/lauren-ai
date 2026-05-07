@@ -1,6 +1,6 @@
 ---
 name: integrating-with-lauren
-description: Wires lauren-ai into a lauren web framework application. Use when setting up LLMModule/AgentModule, streaming agent responses as SSE, securing tools with ExecutionContext, routing SignalBus events to WebSocket clients, or breaking circular DI with a runner subclass.
+description: Wires lauren-ai into a lauren web framework application. Use when setting up LLMModule/AgentModule, streaming agent responses as SSE, securing tools with ExecutionContext, routing SignalBus events to WebSocket clients, or injecting multiple runners via AgentRunner[X].
 ---
 
 # Integrating lauren-ai with the lauren Framework
@@ -24,7 +24,7 @@ transport layer as singletons. Pass it to the parent `@module`'s `imports=`.
 ### Step 2 — `AgentModule`
 
 ```python
-from lauren_ai import AgentModule, InMemoryConversationStore, SignalBus
+from lauren_ai import AgentModule, SignalBus
 
 signal_bus = SignalBus()   # shared singleton — keep in a dedicated module
 
@@ -33,14 +33,17 @@ AgentProvider = AgentModule.for_root(
     tools=[GetBalanceTool, TransferFundsTool, DelegateToBankingTransfer],
     imports=[LLMProvider],
     signals=signal_bus,
-    conversation_store=InMemoryConversationStore(),
+    # No conversation_store here — set per-agent on @agent(conversation_store=...)
 )
 ```
 
 `AgentModule.for_root()` auto-registers each agent class and tool class as a
 singleton provider and generates a unique `AgentRunnerBase` subclass as the module's
-runner token. Inject it with `runner: AgentRunner` (single-module scope) or with the
-named concrete subclass via `runner=MyRunner` (multi-module scope).
+runner token.  It also registers `AgentRunner[agent_cls]` for every agent in
+`agents=`, giving controllers a per-agent DI token without any boilerplate subclass.
+
+Inject with `runner: AgentRunner` (single-module scope) or with the parameterized
+form `runner: AgentRunner[MyAgent]` (multi-module scope).
 
 ### Step 3 — parent `@module`
 
@@ -186,58 +189,71 @@ handlers without any extra wiring.
 
 ---
 
-## Multi-runner disambiguation — named `AgentRunnerBase` subclass per module
+## Multi-runner disambiguation — `AgentRunner[X]` per agent
 
-Every `AgentModule.for_root()` call MUST have its own dedicated runner token.
-When a controller or delegation tool can see runners from two modules simultaneously,
-use `runner=MyRunner` with an explicit `AgentRunnerBase` subclass:
-
-```python
-from lauren import injectable, Scope
-from lauren_ai import AgentRunnerBase
-
-@injectable(scope=Scope.SINGLETON)
-class TransferAgentRunner(AgentRunnerBase):
-    """Distinct DI token for the Transfer module's runner."""
-
-@injectable(scope=Scope.SINGLETON)
-class CRMAgentRunner(AgentRunnerBase):
-    """Distinct DI token for the CRM module's runner."""
-```
+Every `AgentModule.for_root()` call has its own runner.  When a controller or
+delegation tool can see runners from two or more modules, use the parameterized
+form `AgentRunner[AgentClass]` — a cached real subclass used as an unambiguous
+DI token.  **No named `AgentRunnerBase` subclass needed.**
 
 ```python
-# Transfer module — registers TransferAgentRunner as its runner token
+# Transfer module — AgentRunner[BankingTransferAgent] is auto-registered
 TransferMod = AgentModule.for_root(
     agents=[BankingTransferAgent],
     tools=[TransferFundsTool],
     imports=[LLMProvider],
     signals=signal_bus,
-    runner=TransferAgentRunner,
 )
 
 # CRM module — imports Transfer module, owns the delegation tool
 CRMMod = AgentModule.for_root(
     agents=[BankingCRMAgent],
     tools=[DelegateToBankingTransfer],     # ← delegation tool lives in the calling module
-    imports=[LLMProvider, TransferMod],    # ← makes TransferAgentRunner visible
+    imports=[LLMProvider, TransferMod],    # ← makes AgentRunner[BankingTransferAgent] visible
     signals=signal_bus,
-    runner=CRMAgentRunner,
 )
 ```
 
-The delegation tool uses `runner: TransferAgentRunner` (named subclass, not
-`AgentRunner` Protocol) — DI resolves it unambiguously from the imported scope.
-
-Always forward `execution_context` in the delegation tool:
+The delegation tool uses `AgentRunner[BankingTransferAgent]` — DI resolves it
+unambiguously from the imported scope:
 
 ```python
-async def run(self, ctx: ToolContext, transfer_request: str) -> dict:
-    response = await self._runner.run(
-        self._agent,
-        transfer_request,
-        execution_context=ctx.execution_context,
-    )
-    return {"content": response.content}
+@tool()
+class DelegateToBankingTransfer:
+    """Delegate a transfer task to the BankingTransferAgent.
+    Args:
+        transfer_request: Transfer instructions.
+    """
+    def __init__(
+        self,
+        agent: BankingTransferAgent,
+        runner: AgentRunner[BankingTransferAgent],   # ← parameterized — no boilerplate
+    ) -> None:
+        self._agent = agent
+        self._runner = runner
+
+    async def run(self, ctx: ToolContext, transfer_request: str) -> dict:
+        response = await self._runner.run(
+            self._agent,
+            transfer_request,
+            execution_context=ctx.execution_context,
+        )
+        return {"content": response.content}
+```
+
+The controller injects multiple runners the same way:
+
+```python
+from lauren_ai import AgentRunner
+
+class BankingChatController:
+    def __init__(
+        self,
+        crm_runner:      AgentRunner[BankingCRMAgent],
+        transfer_runner: AgentRunner[BankingTransferAgent],
+        crm_agent:       BankingCRMAgent,
+        transfer_agent:  BankingTransferAgent,
+    ) -> None: ...
 ```
 
 ---

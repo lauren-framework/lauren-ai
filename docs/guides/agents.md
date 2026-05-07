@@ -27,6 +27,8 @@ class ResearchAgent:
 | `system` | `str \| None` | class docstring or `AgentConfig.system_prompt` | System prompt |
 | `max_turns` | `int \| None` | `10` | Maximum agentic loop iterations |
 | `temperature` | `float \| None` | `1.0` | Sampling temperature |
+| `memory` | `ShortTermMemory \| None` | `None` | Per-agent memory instance; reused across every `run()` call when set. Fresh memory is built per turn when `None`. |
+| `conversation_store` | `ConversationStore \| None` | `None` | Per-agent conversation store. `AgentModule.for_root()` auto-creates `InMemoryConversationStore` for agents that omit it. |
 | `thinking` | `bool` | `False` | Enable Anthropic extended thinking |
 | `thinking_budget_tokens` | `int` | `8_000` | Token ceiling for the thinking phase |
 | `reasoning_effort` | `str \| None` | `None` | OpenAI o-series effort: `"low"` / `"medium"` / `"high"` |

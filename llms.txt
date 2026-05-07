@@ -141,10 +141,27 @@ print(response.reasoning_traces) # list[str] — extended thinking traces (Anthr
 
 **Rule: every `AgentModule` MUST have its own runner.**
 Each `AgentModule.for_root()` call auto-generates a unique `AgentRunnerBase`
-subclass. Inject with `runner: AgentRunner` in own-module providers (structural
-Protocol scan resolves unambiguously). When two AgentModules are in the same import
-scope, define explicit named runner subclasses and use `runner=MyRunner` —
-see `llms-full.txt` § AgentModule for the full disambiguation pattern.
+subclass and registers `AgentRunner[agent_cls]` for every agent in `agents=`.
+
+- **Single module:** inject with `runner: AgentRunner` (structural Protocol scan).
+- **Multiple modules:** inject with `runner: AgentRunner[MyAgent]` — a cached real
+  subclass used as an unambiguous DI token.  No named `AgentRunnerBase` subclass
+  boilerplate needed.
+
+```python
+from lauren_ai import AgentRunner
+
+class BankingController:
+    def __init__(
+        self,
+        crm_runner:      AgentRunner[CRMAgent],
+        transfer_runner: AgentRunner[TransferAgent],
+    ) -> None: ...
+```
+
+Both `@agent(memory=ShortTermMemory(...))` and `@agent(conversation_store=InMemoryConversationStore())`
+declare per-agent state.  `AgentModule.for_root()` **no longer accepts** `memory=` or
+`conversation_store=` at the module level.
 
 ### @use_guardrails() — attach guardrail instances to an agent
 
@@ -285,22 +302,12 @@ Stream events via `runner.run_stream(...)`:
 ### Delegation pattern — cross-module tool routing
 
 The delegation tool lives in the **calling module's `tools=`**. The calling module
-imports the target module so the named target runner is visible to DI. The tool's
-constructor uses the **named concrete runner subclass** — not the `AgentRunner`
-Protocol — to avoid ambiguity when two runners are in scope.
+imports the target module so `AgentRunner[TargetAgent]` is visible to DI.
+No named `AgentRunnerBase` subclass needed.
 
 ```python
-from lauren import injectable, Scope
-from lauren_ai import AgentRunnerBase, tool, ToolContext
-
-# Named runner token for the target module
-@injectable(scope=Scope.SINGLETON)
-class SpecialistAgentRunner(AgentRunnerBase):
-    """Distinct DI token for the Specialist module's runner."""
-
-@injectable(scope=Scope.SINGLETON)
-class OrchestratorAgentRunner(AgentRunnerBase):
-    """Distinct DI token for the Orchestrator module's runner."""
+# NOTE: Do NOT add `from __future__ import annotations` to this file.
+from lauren_ai import AgentRunner, tool, ToolContext
 
 @tool()
 class DelegateToSpecialist:
@@ -309,37 +316,37 @@ class DelegateToSpecialist:
     Args:
         task: Full description of the task.
     """
-    def __init__(self, agent: SpecialistAgent, runner: SpecialistAgentRunner) -> None:
+    def __init__(
+        self,
+        agent: SpecialistAgent,
+        runner: AgentRunner[SpecialistAgent],   # ← parameterized token — no boilerplate
+    ) -> None:
         self._agent = agent
-        self._runner = runner   # named subclass — resolves unambiguously
+        self._runner = runner
 
     async def run(self, ctx: ToolContext, task: str) -> dict:
         response = await self._runner.run(self._agent, task,
                                           execution_context=ctx.execution_context)
         return {"result": response.content}
 
-# Target module: registers SpecialistAgentRunner as its runner token
+# Target module: AgentRunner[SpecialistAgent] is auto-registered
 SpecialistMod = AgentModule.for_root(
     agents=[SpecialistAgent],
     tools=[SpecialistTool1],
     imports=[LLMProvider],
-    runner=SpecialistAgentRunner,
 )
 
 # Calling module: owns the delegation tool; imports target module so
-# SpecialistAgentRunner is visible to DI when resolving DelegateToSpecialist
+# AgentRunner[SpecialistAgent] is visible to DI when resolving DelegateToSpecialist
 OrchestratorMod = AgentModule.for_root(
     agents=[OrchestratorAgent],
     tools=[DelegateToSpecialist],          # ← delegation tool lives HERE
-    imports=[LLMProvider, SpecialistMod],  # ← makes SpecialistAgentRunner visible
-    runner=OrchestratorAgentRunner,
+    imports=[LLMProvider, SpecialistMod],  # ← makes AgentRunner[SpecialistAgent] visible
 )
 ```
 
 **Rule:** The delegation tool belongs in the **calling module's `tools=`**. The
 calling module imports the target module so the target runner token is visible.
-Use the named concrete runner subclass (not `AgentRunner` Protocol) in the tool's
-`__init__` — this is unambiguous even when two runners are in scope.
 
 ### @traced() — tracing & observability
 
@@ -439,6 +446,7 @@ msg = Message.from_multimodal("user", [
 | `@tool()` | Expose a function or class as an agent tool | Yes |
 | `@agent()` | Declare an agent class | Yes |
 | `@use_tools(t1, t2)` | Attach tools to an agent | Yes |
+| `@use_knowledge_sources(ks, ...)` | Opt agent into specific KB sources (opt-in — no decorator = no KB tools) | Yes |
 | `@use_guardrails(...)` | Attach guardrail instances to an agent | Yes |
 | `@guardrail()` | Mark a class as a DI-injectable guardrail | Yes |
 | `@remember()` | Enable persistent user memory | Yes |
@@ -448,10 +456,11 @@ msg = Message.from_multimodal("user", [
 ## Decorator ordering (mandatory)
 
 ```
-@agent()            ← outermost
-@remember()         ← optional
-@use_guardrails()   ← optional
-@use_tools()        ← innermost
+@agent()                    ← outermost
+@remember()                 ← optional
+@use_guardrails()           ← optional
+@use_knowledge_sources()    ← optional (KB opt-in; must be below @agent)
+@use_tools()                ← innermost
 class Agent: ...
 ```
 

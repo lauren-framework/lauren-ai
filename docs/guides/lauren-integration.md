@@ -65,7 +65,6 @@ as singleton providers and exports all three.  Any `AgentModule` that lists
 ### 2. Register agents and tools
 
 ```python title="app/ai/ai_module.py"
-from lauren_ai import InMemoryConversationStore
 from lauren_ai._module import AgentModule
 
 from app.ai.crm_agent import BankingCRMAgent
@@ -74,14 +73,15 @@ from app.ai.banking_delegation import DelegateToBankingTransfer
 from app.ai.signals import signal_bus
 from app.banking.banking_module import BankingModule
 
-_conversation_store = InMemoryConversationStore()
+# Conversation store lives on the agent, not the module:
+#   @agent(conversation_store=InMemoryConversationStore())
+#   class BankingCRMAgent: ...
 
 _CRMAgentModule = AgentModule.for_root(
     agents=[BankingCRMAgent],
     tools=[DelegateToBankingTransfer, GetBalanceTool, GetTransactionHistoryTool],
     imports=[LLMProvider, BankingModule],
     signals=signal_bus,
-    conversation_store=_conversation_store,
 )
 ```
 
@@ -93,8 +93,12 @@ _CRMAgentModule = AgentModule.for_root(
   injected into `GetBalanceTool.__init__` by the container).
 - A unique `AgentRunnerBase` subclass is registered as the module's runner token.
   Inject it with `runner: AgentRunner` (Protocol annotation) in any provider
-  belonging to the same module. When two or more AgentModules are in scope,
-  use `runner=MyRunner` with an explicit named subclass instead (see below).
+  belonging to the same module.  For cross-module disambiguation, use
+  `AgentRunner[AgentClass]` — see the multi-runner section below.
+- Each agent also gets a `AgentRunner[AgentClass]` alias registered, enabling
+  cross-module controllers to inject specific runners without named subclass boilerplate.
+- Agents that omit `conversation_store=` in `@agent()` receive an auto-created
+  `InMemoryConversationStore` — each agent always has its own isolated store.
 - `signals=signal_bus` wires the shared `SignalBus` so every model call emits
   `ModelCallComplete` and friends.
 
@@ -378,35 +382,23 @@ response = await self._runner.run(
 
 ---
 
-## Delegation with a distinct DI token
+## Delegation with `AgentRunner[X]`
 
 Multi-agent delegation introduces a DI challenge: if the CRM `AgentRunner`
 depends on `DelegateToBankingTransfer`, and `DelegateToBankingTransfer`
 depends on `AgentRunner`, the container sees a cycle and raises
 `CircularDependencyError` at startup.
 
-The solution is a **named runner subclass** used as a distinct DI token:
+The solution is the **parameterized form** `AgentRunner[TargetAgent]` — a distinct
+DI token generated automatically by `AgentModule.for_root()`.  No named
+`AgentRunnerBase` subclass boilerplate needed.
+
+`DelegateToBankingTransfer` injects `AgentRunner[BankingTransferAgent]`:
 
 ```python title="app/ai/banking_delegation.py"
-from lauren import injectable, Scope
-from lauren_ai import AgentRunnerBase
+# NOTE: Do NOT add `from __future__ import annotations` to this file.
+from lauren_ai import AgentRunner, ToolContext, tool
 
-@injectable(scope=Scope.SINGLETON)
-class TransferAgentRunner(AgentRunnerBase):
-    """Dedicated runner subclass for the Transfer Agent.
-
-    Named DI token so DelegateToBankingTransfer can inject it specifically,
-    avoiding ProtocolAmbiguityError in the CRM module scope that sees both runners.
-    """
-
-@injectable(scope=Scope.SINGLETON)
-class CRMAgentRunner(AgentRunnerBase):
-    """Dedicated runner subclass for the CRM Agent."""
-```
-
-`DelegateToBankingTransfer` injects `TransferAgentRunner`, not `AgentRunner`:
-
-```python title="app/ai/banking_delegation.py"
 @tool()
 class DelegateToBankingTransfer:
     """Delegate a banking transfer task to the Transfer Agent.
@@ -419,7 +411,7 @@ class DelegateToBankingTransfer:
     def __init__(
         self,
         transfer_agent: BankingTransferAgent,
-        runner: TransferAgentRunner,    # distinct token — no cycle
+        runner: AgentRunner[BankingTransferAgent],   # ← parameterized token; no cycle
     ) -> None:
         self._transfer_agent = transfer_agent
         self._runner = runner
@@ -434,53 +426,62 @@ class DelegateToBankingTransfer:
         return {"result": response.content, "stop_reason": response.stop_reason}
 ```
 
-The two modules use separate `AgentModule.for_root()` calls, each with its own
-named runner token. The delegation tool lives in the **calling module's `tools=`**
-(CRM module); the CRM module imports the Transfer module so `TransferAgentRunner`
-is visible to DI when resolving `DelegateToBankingTransfer`:
+The two modules use separate `AgentModule.for_root()` calls.  The delegation tool
+lives in the **calling module's `tools=`** (CRM module); the CRM module imports
+the Transfer module so `AgentRunner[BankingTransferAgent]` is visible:
 
 ```python title="app/ai/ai_module.py"
-from app.ai.banking_delegation import (
-    DelegateToBankingTransfer, TransferAgentRunner, CRMAgentRunner,
-)
 from app.ai.banking_tools import GetBalanceTool, GetTransactionHistoryTool, TransferFundsTool
+from app.ai.banking_delegation import DelegateToBankingTransfer
 from app.ai.crm_agent import BankingCRMAgent
 from app.ai.transfer_agent import BankingTransferAgent
 
-# Step 1: wire the Transfer Agent module under its own named runner token.
+# Step 1: wire the Transfer Agent module.
+# AgentRunner[BankingTransferAgent] is auto-registered — no runner= needed.
 _TransferAgentModule = AgentModule.for_root(
     agents=[BankingTransferAgent],
     tools=[TransferFundsTool],
     imports=[LLMProvider, BankingModule],
     signals=signal_bus,
-    conversation_store=_conversation_store,
-    runner=TransferAgentRunner,   # registers TransferAgentRunner as this module's runner
 )
 
-# Step 2: wire the CRM Agent module; import TransferAgentModule so that
-# DelegateToBankingTransfer can resolve TransferAgentRunner.
+# Step 2: wire the CRM Agent module; import _TransferAgentModule so that
+# DelegateToBankingTransfer can resolve AgentRunner[BankingTransferAgent].
 # The delegation tool lives here — it belongs to the calling module.
 _CRMAgentModule = AgentModule.for_root(
     agents=[BankingCRMAgent],
     tools=[DelegateToBankingTransfer, GetBalanceTool, GetTransactionHistoryTool],
     imports=[LLMProvider, _TransferAgentModule, BankingModule],
     signals=signal_bus,
-    conversation_store=_conversation_store,
-    runner=CRMAgentRunner,        # registers CRMAgentRunner as this module's runner
 )
 ```
 
 The dependency graph the container sees:
 
 ```
-CRMAgentRunner
+AgentRunner[BankingCRMAgent] (auto-generated)
     └─ DelegateToBankingTransfer
-            └─ TransferAgentRunner   ← distinct token; resolved independently
+            └─ AgentRunner[BankingTransferAgent]   ← distinct token; resolved independently
 ```
 
 No cycle.  Startup succeeds.  The `execution_context` forwarded by
 `DelegateToBankingTransfer.run()` ensures `TransferFundsTool` reads the same
 HMAC-verified `user_id` that the original HTTP guard pinned.
+
+The controller injects all four runners by agent class — no named subclasses:
+
+```python
+from lauren_ai import AgentRunner
+
+class BankingChatController:
+    def __init__(
+        self,
+        unauth_runner:   AgentRunner[UnauthenticatedCRMAgent],
+        auth_runner:     AgentRunner[AuthenticatedCRMAgent],
+        transfer_runner: AgentRunner[BankTransferAgent],
+        disputes_runner: AgentRunner[DisputesAgent],
+    ) -> None: ...
+```
 
 ---
 
@@ -725,7 +726,8 @@ Before shipping an integration like this, verify:
   inside `AgentModule` after startup, which is safe with the future import).
 - [ ] Every privileged tool reads identity from
   `ctx.execution_context.request.state`, not from LLM-supplied arguments.
-- [ ] Circular DI dependencies are broken via distinct runner subclass tokens,
+- [ ] Circular DI dependencies are broken via `AgentRunner[TargetAgent]`
+  parameterized tokens (registered automatically by `AgentModule.for_root()`),
   not via `__post_init__` hacks or module-level globals.
 - [ ] The `SignalBus` singleton is defined in its own module to avoid circular
   imports between `ai_module.py` and any listener module.
@@ -736,10 +738,14 @@ Before shipping an integration like this, verify:
   `@post_construct` hook — the DI container calls `__init__` at startup, which
   is the right time to bind to the bus.
 - [ ] Runner and agent singletons are constructor-injected into controllers, not
-  resolved per-request.  Singletons are cheap to inject and expensive to construct.
-  Use `runner: AgentRunner` (Protocol) for single-module scope; use the named
-  concrete subclass (`runner=MyRunner`) when two or more AgentModules are
-  in scope to avoid `ProtocolAmbiguityError`.
+  resolved per-request.  Use `runner: AgentRunner` (Protocol) for single-module
+  scope; use `runner: AgentRunner[MyAgent]` (parameterized form) when two or more
+  `AgentModule`s are in scope to avoid `ProtocolAmbiguityError`.
+- [ ] `AgentModule.for_root()` does **not** receive `memory=` or
+  `conversation_store=` — these are per-agent, declared on `@agent()`.
+- [ ] `@use_knowledge_sources(KS)` is only used when the source is listed in the
+  module's `for_root(knowledge=[KS, ...])`.  Agents without the decorator have
+  no KB tools (opt-in semantics).
 
 ---
 

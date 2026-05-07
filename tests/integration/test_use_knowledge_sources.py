@@ -71,6 +71,48 @@ class TestKnowledgeSourceFilter:
         assert "search_x" not in names
 
     @pytest.mark.asyncio
+    async def test_two_agents_same_module_have_independent_kb_visibility(self):
+        """One agent opts in, its sibling does not — each sees only its own set.
+
+        This is the canonical real-world scenario: two agents share a module
+        (and therefore a runner), but only one of them needs the KB tool.
+        The runner must consult each agent's ``knowledge_source_filter``
+        independently rather than applying a global setting.
+        """
+        kb_x = await _populated_kb("Topic X.")
+        ks_x = KnowledgeSource(kb=kb_x, tool_name="search_x")
+
+        @use_knowledge_sources(ks_x)
+        @agent(model=None)
+        class OptInAgent: ...
+
+        @agent(model=None)
+        class OptOutAgent: ...  # no @use_knowledge_sources
+
+        cfg, mock = LLMConfig.for_testing()
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        AIMod = AgentModule.for_root(
+            agents=[OptInAgent, OptOutAgent],
+            imports=[LLMProv],
+            knowledge=[ks_x],
+        )
+
+        @module(imports=[LLMProv, AIMod])
+        class AppMod: ...
+
+        app = LaurenFactory.create(AppMod)
+        runner = await _resolve(app, AIMod.runner_class)
+
+        optin_meta = getattr(OptInAgent, AGENT_META)
+        optout_meta = getattr(OptOutAgent, AGENT_META)
+
+        optin_names = [s["name"] for s in runner._get_tool_schemas(optin_meta)]
+        optout_names = [s["name"] for s in runner._get_tool_schemas(optout_meta)]
+
+        assert "search_x" in optin_names, "OptInAgent must see search_x"
+        assert "search_x" not in optout_names, "OptOutAgent must NOT see search_x"
+
+    @pytest.mark.asyncio
     async def test_decorator_attaches_only_listed_sources(self):
         kb_x = await _populated_kb("Topic X.")
         kb_y = await _populated_kb("Topic Y.")

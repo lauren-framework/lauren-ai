@@ -183,14 +183,7 @@ to audit and debug.
 
 ```python
 # NOTE: Do NOT add `from __future__ import annotations` to this file.
-from lauren import injectable, Scope
-from lauren_ai import tool, ToolContext, AgentRunnerBase
-
-# Named runner token for the target module — avoids ProtocolAmbiguityError
-# in any scope that can see both this runner and another AgentModule's runner.
-@injectable(scope=Scope.SINGLETON)
-class ResearchAgentRunner(AgentRunnerBase):
-    """Distinct DI token for the Research module's runner."""
+from lauren_ai import AgentRunner, tool, ToolContext
 
 @tool()
 class DelegateToResearcher:
@@ -200,9 +193,13 @@ class DelegateToResearcher:
         task: Detailed description of what to research.
     """
 
-    def __init__(self, researcher: ResearchAgent, runner: ResearchAgentRunner) -> None:
+    def __init__(
+        self,
+        researcher: ResearchAgent,
+        runner: AgentRunner[ResearchAgent],   # ← parameterized DI token — no boilerplate subclass
+    ) -> None:
         self._agent = researcher
-        self._runner = runner   # named subclass — unambiguous
+        self._runner = runner
 
     async def run(self, ctx: ToolContext, task: str) -> dict:
         response = await self._runner.run(
@@ -214,7 +211,8 @@ class DelegateToResearcher:
 ```
 
 Wire the delegation tool in the **calling (coordinator) module's `tools=`**; the
-coordinator module imports the researcher module so `ResearchAgentRunner` is visible:
+coordinator module imports the researcher module so `AgentRunner[ResearchAgent]`
+is visible:
 
 ```python
 from lauren_ai import AgentModule, agent, use_tools
@@ -225,14 +223,14 @@ class CoordinatorAgent: ...
 
 ResearchMod = AgentModule.for_root(
     agents=[ResearchAgent], tools=[ResearchTool],
-    imports=[LLMProvider], runner=ResearchAgentRunner,
+    imports=[LLMProvider],
+    # AgentRunner[ResearchAgent] auto-registered — no runner= needed
 )
 
 CoordinatorMod = AgentModule.for_root(
     agents=[CoordinatorAgent],
     tools=[DelegateToResearcher],          # ← delegation tool lives in calling module
-    imports=[LLMProvider, ResearchMod],    # ← makes ResearchAgentRunner visible
-    runner=CoordinatorAgentRunner,
+    imports=[LLMProvider, ResearchMod],    # ← makes AgentRunner[ResearchAgent] visible
 )
 ```
 
@@ -267,7 +265,7 @@ from lauren_ai import AgentRunner  # @runtime_checkable Protocol
 
 class ChatController:
     # runner: AgentRunner works when only one AgentModule is in scope.
-    # If two AgentModules are in scope, use the named concrete subclass (runner=MyRunner).
+    # When two AgentModules are in scope, use AgentRunner[AgentClass] (parameterized form).
     def __init__(self, runner: AgentRunner, agent: MyAgent) -> None:
         self._runner = runner
         self._agent = agent   # DI-resolved singleton
@@ -275,6 +273,14 @@ class ChatController:
     async def chat(self, message: str) -> str:
         response = await self._runner.run(self._agent, message)
         return response.content
+
+# Multiple modules — parameterized form, no boilerplate subclasses:
+class MultiAgentController:
+    def __init__(
+        self,
+        researcher_runner: AgentRunner[ResearchAgent],
+        writer_runner:     AgentRunner[WriterAgent],
+    ) -> None: ...
 ```
 
 **Critical:** always pass the instance — never the class — to `runner.run()`.
@@ -305,6 +311,8 @@ passed to `AgentRunner`.
     max_cost_usd=0.50,                # hard cost cap — raises AgentBudgetExceededError
     parallel_tool_calls=True,         # True = concurrent tool calls
     tool_error_policy="return_error", # "raise" | "return_error" | "skip"
+    memory=ShortTermMemory(max_tokens=60_000),      # optional — reused across run() calls
+    conversation_store=InMemoryConversationStore(), # optional — auto-created if omitted
 )
 class MyAgent: ...
 ```
@@ -320,6 +328,8 @@ class MyAgent: ...
 | `max_cost_usd` | `float \| None` | `None` | Raises `AgentBudgetExceededError` when exceeded |
 | `parallel_tool_calls` | `bool` | `True` | `False` = serial execution (useful for order-dependent tools) |
 | `tool_error_policy` | `str` | `"return_error"` | What to do when a tool raises an exception |
+| `memory` | `ShortTermMemory \| None` | `None` | Instance reused across **every** `run()` call; fresh per turn when `None` |
+| `conversation_store` | `ConversationStore \| None` | `None` | Per-agent store; `AgentModule.for_root()` auto-creates if `None` |
 
 ### `tool_error_policy` values
 
