@@ -26,8 +26,6 @@ from the built-in :class:`Exception`.  The hierarchy is:
 
 from __future__ import annotations
 
-from typing import Any
-
 __all__ = [
     "LaurenAIError",
     "TransportError",

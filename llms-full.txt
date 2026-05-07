@@ -579,12 +579,40 @@ n = await kb.load(TextLoader("raw text here", is_file=False))  # from string
 # Search
 results = await kb.search("How do I reset my password?", top_k=5)
 
-# Use as agent tool
+# Use as agent tool — manual pattern
 tool_fn = kb.as_tool(name="search_knowledge_base", top_k=5)
 
 @agent(model="claude-opus-4-6")
 @use_tools(kb.as_tool())
 class SupportAgent: ...
+
+# Module-level pattern — auto-attach KB to every agent in the module.
+# No @use_tools needed; the framework calls .as_tool() internally.
+# When loaders= is supplied, the framework also generates a singleton
+# @post_construct hook that loads them at app startup — no asyncio.run
+# at module-import time, safe inside any async context.
+from lauren_ai._knowledge import KnowledgeSource
+
+AIModule = AgentModule.for_root(
+    agents=[SupportAgent],
+    imports=LLMProvider,
+    knowledge=[
+        KnowledgeSource(
+            kb=KnowledgeBase(store=InMemoryVectorStore(), chunker=SentenceChunker()),
+            tool_name="search_manual",
+            top_k=3,
+            loaders=[TextLoader("docs/manual.txt")],     # loaded at app startup
+        ),
+    ],
+)
+
+# Pre-populated KB — pass the bare instance, no loaders=:
+# (caller has already done: await kb.load(TextLoader(...)))
+AIModule = AgentModule.for_root(
+    agents=[SupportAgent],
+    imports=LLMProvider,
+    knowledge=[kb],                                       # default tool name
+)
 ```
 
 ### Chunkers

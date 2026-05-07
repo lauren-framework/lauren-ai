@@ -401,9 +401,7 @@ class TestRunStreamParity:
         """run_stream loads prior history and saves the new turn back."""
         store = InMemoryConversationStore()
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(
-            transport=mock, tools={}, config=config, conversation_store=store
-        )
+        runner = AgentRunner(transport=mock, tools={}, config=config, conversation_store=store)
 
         mock.queue_stream(_stream_chunks("First reply"))
         async for _ in await runner.run_stream(_MemAgent(), "Hi", conversation_id="sess"):
@@ -423,9 +421,7 @@ class TestRunStreamParity:
             return _stream_chunks("Second reply").__iter__()
 
         mock.queue_stream(_stream_chunks("Second reply"))
-        async for _ in await runner.run_stream(
-            _MemAgent(), "Follow up", conversation_id="sess"
-        ):
+        async for _ in await runner.run_stream(_MemAgent(), "Follow up", conversation_id="sess"):
             pass
 
         history = await store.load("sess")

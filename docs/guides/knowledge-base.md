@@ -154,6 +154,94 @@ The tool's JSON schema exposes a single `query: str` parameter.  Results are
 returned as a list of dicts with `content`, `score`, and any document metadata
 keys.
 
+### Attaching via `AgentModule.for_root(knowledge=...)`
+
+For module-level wiring, pass `KnowledgeSource` instances (or bare
+`KnowledgeBase`s) to `AgentModule.for_root` via the `knowledge=`
+parameter.  The framework calls `kb.as_tool()` internally and
+auto-attaches the resulting tool to **every** agent in the module —
+no `@use_tools()` declaration needed.
+
+When a `KnowledgeSource` ships `loaders=[…]`, the framework also
+generates a `Scope.SINGLETON` `@post_construct` hook per source.  At
+app startup (`LifecycleScheduler.run_post_construct`), the framework
+iterates the loaders and populates each KB via `await kb.load(loader)`
+— **the user never calls `await` themselves**.
+
+```python
+from lauren_ai import AgentModule, LLMModule
+from lauren_ai._knowledge import (
+    KnowledgeBase, KnowledgeSource, SentenceChunker, TextLoader,
+)
+from lauren_ai._memory._vector import InMemoryVectorStore
+
+@agent(model="claude-opus-4-6", system="Answer using the product manual.")
+class ManualAgent: ...                                # NO @use_tools needed
+
+LLMProvider = LLMModule.for_root(LLMConfig.for_anthropic())
+
+AIModule = AgentModule.for_root(
+    agents=[ManualAgent],
+    imports=LLMProvider,
+    knowledge=[
+        KnowledgeSource(
+            # KB is empty here; the framework populates it at startup
+            kb=KnowledgeBase(
+                store=InMemoryVectorStore(),
+                chunker=SentenceChunker(),
+            ),
+            tool_name="search_manual",
+            top_k=3,
+            loaders=[TextLoader("docs/product_manual.txt")],
+        ),
+    ],
+)
+# Loading happens at app startup via a generated @post_construct hook —
+# no asyncio.run at module-import time, safe inside any async context
+# (uvicorn, pytest-asyncio mode=auto, Modal).
+```
+
+For multiple KBs in the same module, give each a distinct `tool_name`:
+
+```python
+AIModule = AgentModule.for_root(
+    agents=[ManualAgent],
+    imports=LLMProvider,
+    knowledge=[
+        KnowledgeSource(
+            kb=KnowledgeBase(store=InMemoryVectorStore()),
+            tool_name="search_products",
+            top_k=3,
+            loaders=[TextLoader("docs/products.md")],
+        ),
+        KnowledgeSource(
+            kb=KnowledgeBase(store=InMemoryVectorStore()),
+            tool_name="search_policies",
+            top_k=5,
+            loaders=[TextLoader("docs/policies.md")],
+        ),
+    ],
+)
+```
+
+Two KBs with the same `tool_name` raise `DecoratorUsageError` at
+module-build time so the collision is caught before the first request.
+
+#### Pre-populated KB (no loaders)
+
+If you've already loaded the KB elsewhere (e.g. fetching from a
+remote source asynchronously before app construction), pass the bare
+populated KB and omit `loaders=`:
+
+```python
+# Caller has already done: await kb.load(TextLoader(...))
+AIModule = AgentModule.for_root(
+    agents=[ManualAgent],
+    imports=LLMProvider,
+    knowledge=[kb],          # bare KnowledgeBase; default tool name
+)
+```
+
 ---
 
 ## Full example

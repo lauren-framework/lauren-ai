@@ -125,5 +125,3 @@ async def CodeExecutionTool(  # noqa: N802
         }
     except Exception as exc:
         return {"stdout": "", "stderr": str(exc), "exit_code": -1}
-
-

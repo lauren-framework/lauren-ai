@@ -114,12 +114,19 @@ class AgentRunnerBase(AgentRunner):
         signals: Any | None = None,
         cache_backend: CacheBackend | None = None,
         conversation_store: Any | None = None,
+        knowledge_tool_names: set[str] | None = None,
     ) -> None:
         self._transport = transport
         self._tools = tools
         self._config = config
         self._signals = signals
         self._conversation_store = conversation_store
+        # Tool names auto-attached at the module level via
+        # ``AgentModule.for_root(knowledge=...)``.  These are added to
+        # every agent's schema list in ``_get_tool_schemas`` so the LLM
+        # sees them even when the agent's ``@use_tools`` decoration
+        # didn't list them explicitly.
+        self._knowledge_tool_names: set[str] = set(knowledge_tool_names or ())
         self._executor = ToolExecutor(
             tools=tools,
             cache_backend=cache_backend,
@@ -716,9 +723,7 @@ class AgentRunnerBase(AgentRunner):
 
         # Post-loop cleanup (mirrors run() 378–412).  Skipped on caller
         # cancellation (GeneratorExit propagates without running this).
-        final_content = (
-            last_synthetic_completion.content if last_synthetic_completion else ""
-        )
+        final_content = last_synthetic_completion.content if last_synthetic_completion else ""
         reasoning_traces: list[str] = [last_thinking_text] if last_thinking_text else []
         response = AgentResponse(
             content=final_content,
@@ -782,17 +787,29 @@ class AgentRunnerBase(AgentRunner):
     def _get_tool_schemas(self, meta: AgentMeta) -> list[Any]:
         """Build the list of tool schemas for the agent's attached tools.
 
+        Includes:
+
+        * Tools the agent declared via ``@use_tools(...)`` (from
+          ``meta.tool_classes``).
+        * Tools auto-attached at the module level via
+          ``AgentModule.for_root(knowledge=...)`` (from
+          ``self._knowledge_tool_names``) — every agent in the module
+          sees these regardless of its ``@use_tools`` declaration.
+
         :param meta: The agent's ``AgentMeta``.
         :type meta: AgentMeta
         :return: List of JSON schema dicts suitable for passing to the transport.
         :rtype: list[Any]
         """
-        if not meta.tool_classes:
+        if not meta.tool_classes and not self._knowledge_tool_names:
             return []
         schemas: list[Any] = []
+        seen_names: set[str] = set()
         for tool_item in meta.tool_classes:
             tool_meta: ToolMeta | None = getattr(tool_item, TOOL_META, None)
             if tool_meta is None:
+                continue
+            if tool_meta.name in seen_names:
                 continue
             entry = self._tools.get(tool_meta.name)
             if entry is None:
@@ -802,6 +819,17 @@ class AgentRunnerBase(AgentRunner):
                 )
                 continue
             schemas.append(tool_meta.parameters)
+            seen_names.add(tool_meta.name)
+        # Module-level knowledge tools — auto-attached to every agent
+        for kb_tool_name in self._knowledge_tool_names:
+            if kb_tool_name in seen_names:
+                continue
+            entry = self._tools.get(kb_tool_name)
+            if entry is None:
+                continue
+            _, kb_tool_meta = entry
+            schemas.append(kb_tool_meta.parameters)
+            seen_names.add(kb_tool_name)
         return schemas
 
     async def _execute_tools(

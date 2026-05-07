@@ -32,6 +32,7 @@ from lauren_ai._memory import MemoryResult, MemoryStore
 
 __all__ = [
     "KnowledgeBase",
+    "KnowledgeSource",
     "Document",
     "TextLoader",
     "FixedSizeChunker",
@@ -311,6 +312,54 @@ class KnowledgeBase:
             return [{"content": r.content, "score": r.score, **r.metadata} for r in results]
 
         return _kb_search
+
+
+# ---------------------------------------------------------------------------
+# KnowledgeSource — typed wrapper for AgentModule.for_root(knowledge=...)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class KnowledgeSource:
+    """Pair a :class:`KnowledgeBase` with retrieval-tool configuration
+    and (optionally) document loaders.
+
+    Pass a list of these (or bare :class:`KnowledgeBase` instances) to
+    :meth:`AgentModule.for_root(knowledge=...)
+    <lauren_ai._module.AgentModule.for_root>` to expose the KB as a
+    ``@tool()``-backed retrieval tool that every agent in the module can
+    call.
+
+    Three reasons to wrap a ``KnowledgeBase`` in a ``KnowledgeSource``:
+
+    * **Custom tool name.**  The default name (``search_knowledge_base``)
+      collides if a single module attaches more than one KB.  Provide a
+      domain-specific name (e.g. ``search_product_catalog``) so the LLM
+      can disambiguate at call time.
+    * **Custom ``top_k``.**  Smaller for terse, more authoritative
+      retrieval; larger for broad context.
+    * **Loaders for startup-time indexing.**  When ``loaders`` is
+      non-empty, ``AgentModule.for_root`` registers a singleton
+      ``@post_construct`` hook that iterates the loaders and populates
+      the KB via ``await kb.load(loader)`` at app startup
+      (``LifecycleScheduler.run_post_construct``).  The user never has
+      to call ``await kb.load(...)`` themselves; the KB starts empty
+      and is populated before the first request lands.
+
+    :param kb:        The knowledge base.  May be empty when ``loaders``
+                      is supplied — the framework populates it at startup.
+    :param tool_name: Name the LLM uses to call the search tool.
+                      Defaults to ``"search_knowledge_base"``.
+    :param top_k:     Maximum results returned per query.  Default 5.
+    :param loaders:   Optional list of loader objects (e.g. ``TextLoader``).
+                      Each is invoked via ``await kb.load(loader)`` at app
+                      startup via a generated ``@post_construct`` hook.
+    """
+
+    kb: KnowledgeBase
+    tool_name: str = "search_knowledge_base"
+    top_k: int = 5
+    loaders: list[Any] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

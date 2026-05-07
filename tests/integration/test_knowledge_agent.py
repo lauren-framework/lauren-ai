@@ -346,3 +346,325 @@ class TestKnowledgeAgentIntegration:
 
         assert count >= 4
         assert len(store) >= 4
+
+
+# ---------------------------------------------------------------------------
+# Tests: AgentModule.for_root(knowledge=...)
+#
+# Verifies the upstream wiring that converts each ``KnowledgeBase`` /
+# ``KnowledgeSource`` into a function-form ``@tool()`` and registers it
+# into the runner's tool map (and therefore into every agent's schema).
+# ---------------------------------------------------------------------------
+
+
+from lauren import LaurenFactory, module  # noqa: E402
+
+from lauren_ai import AgentModule, LLMModule  # noqa: E402
+from lauren_ai._agents import AGENT_META  # noqa: E402
+from lauren_ai._exceptions import DecoratorUsageError  # noqa: E402
+from lauren_ai._knowledge import KnowledgeSource  # noqa: E402
+
+
+async def _resolve(app, cls):
+    """Resolve a class from the app's DI container (async test helper)."""
+    return await app.container.resolve(cls)
+
+
+async def _populated_kb(text: str = "The Lauren framework is async-first.") -> KnowledgeBase:
+    kb = KnowledgeBase(store=InMemoryVectorStore())
+    await kb.load(TextLoader(text, is_file=False))
+    return kb
+
+
+class TestKnowledgeParameter:
+    """``AgentModule.for_root(knowledge=...)`` exposes KB-backed search tools."""
+
+    @pytest.mark.asyncio
+    async def test_attaches_search_tool_to_runner(self):
+        """A bare KnowledgeBase shows up as ``search_knowledge_base`` in the runner."""
+        kb = await _populated_kb()
+
+        @agent(model=None)
+        class SearchAgent: ...
+
+        cfg, mock = LLMConfig.for_testing()
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        AIMod = AgentModule.for_root(
+            agents=[SearchAgent],
+            imports=[LLMProv],
+            knowledge=[kb],
+        )
+
+        @module(imports=[LLMProv, AIMod])
+        class AppMod: ...
+
+        app = LaurenFactory.create(AppMod)
+        runner = await _resolve(app, AIMod.runner_class)
+
+        assert "search_knowledge_base" in runner._tools
+
+    @pytest.mark.asyncio
+    async def test_appears_in_agent_schema(self):
+        """The KB tool is in the schema list the runner sends the LLM."""
+        kb = await _populated_kb()
+
+        @agent(model=None)
+        class SchemaAgent: ...
+
+        cfg, mock = LLMConfig.for_testing()
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        AIMod = AgentModule.for_root(
+            agents=[SchemaAgent],
+            imports=[LLMProv],
+            knowledge=[kb],
+        )
+
+        @module(imports=[LLMProv, AIMod])
+        class AppMod: ...
+
+        app = LaurenFactory.create(AppMod)
+        runner = await _resolve(app, AIMod.runner_class)
+
+        meta = getattr(SchemaAgent, AGENT_META)
+        schemas = runner._get_tool_schemas(meta)
+        names = [s["name"] for s in schemas]
+        assert "search_knowledge_base" in names
+
+    @pytest.mark.asyncio
+    async def test_custom_name_via_knowledge_source(self):
+        """KnowledgeSource(tool_name=, top_k=) overrides the defaults."""
+        kb = await _populated_kb()
+
+        @agent(model=None)
+        class CustomNameAgent: ...
+
+        cfg, mock = LLMConfig.for_testing()
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        AIMod = AgentModule.for_root(
+            agents=[CustomNameAgent],
+            imports=[LLMProv],
+            knowledge=[KnowledgeSource(kb=kb, tool_name="search_lauren_docs", top_k=2)],
+        )
+
+        @module(imports=[LLMProv, AIMod])
+        class AppMod: ...
+
+        app = LaurenFactory.create(AppMod)
+        runner = await _resolve(app, AIMod.runner_class)
+
+        assert "search_lauren_docs" in runner._tools
+        assert "search_knowledge_base" not in runner._tools
+
+    @pytest.mark.asyncio
+    async def test_two_kbs_with_default_name_collision_raises(self):
+        """Two bare KBs both default to ``search_knowledge_base`` — must raise."""
+        kb_a = await _populated_kb("Document A.")
+        kb_b = await _populated_kb("Document B.")
+
+        @agent(model=None)
+        class CollideAgent: ...
+
+        cfg, mock = LLMConfig.for_testing()
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        with pytest.raises(DecoratorUsageError, match="Duplicate knowledge-base tool name"):
+            AgentModule.for_root(
+                agents=[CollideAgent],
+                imports=[LLMProv],
+                knowledge=[kb_a, kb_b],
+            )
+
+    @pytest.mark.asyncio
+    async def test_two_kbs_distinct_names_both_attached(self):
+        """Two KnowledgeSources with distinct tool names both end up in the runner."""
+        kb_a = await _populated_kb("Cats purr.")
+        kb_b = await _populated_kb("Dogs bark.")
+
+        @agent(model=None)
+        class DualKbAgent: ...
+
+        cfg, mock = LLMConfig.for_testing()
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        AIMod = AgentModule.for_root(
+            agents=[DualKbAgent],
+            imports=[LLMProv],
+            knowledge=[
+                KnowledgeSource(kb=kb_a, tool_name="search_cats"),
+                KnowledgeSource(kb=kb_b, tool_name="search_dogs"),
+            ],
+        )
+
+        @module(imports=[LLMProv, AIMod])
+        class AppMod: ...
+
+        app = LaurenFactory.create(AppMod)
+        runner = await _resolve(app, AIMod.runner_class)
+
+        assert "search_cats" in runner._tools
+        assert "search_dogs" in runner._tools
+
+    @pytest.mark.asyncio
+    async def test_unsupported_entry_type_raises(self):
+        """Anything other than KnowledgeBase / KnowledgeSource raises TypeError."""
+
+        @agent(model=None)
+        class BadEntryAgent: ...
+
+        cfg, mock = LLMConfig.for_testing()
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        with pytest.raises(TypeError, match="KnowledgeBase or KnowledgeSource"):
+            AgentModule.for_root(
+                agents=[BadEntryAgent],
+                imports=[LLMProv],
+                knowledge=["not a knowledge base"],  # type: ignore[list-item]
+            )
+
+    @pytest.mark.asyncio
+    async def test_agent_calls_knowledge_param_tool_end_to_end(self):
+        """Full agent run: model calls the auto-generated KB tool, gets a result, replies."""
+        kb = await _populated_kb("Lauren is a Python web framework inspired by NestJS.")
+
+        @agent(model="mock-model", system="You are a docs assistant.")
+        class DocsAgent: ...
+
+        cfg, mock = LLMConfig.for_testing()
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        AIMod = AgentModule.for_root(
+            agents=[DocsAgent],
+            imports=[LLMProv],
+            knowledge=[KnowledgeSource(kb=kb, tool_name="search_lauren_docs")],
+        )
+
+        @module(imports=[LLMProv, AIMod])
+        class AppMod: ...
+
+        app = LaurenFactory.create(AppMod)
+        runner = await _resolve(app, AIMod.runner_class)
+
+        agent_inst = await _resolve(app, DocsAgent)
+        mock.queue_tool_use("search_lauren_docs", {"query": "Lauren framework"})
+        mock.queue_response(text_completion("Lauren is a Python web framework.", id="c2"))
+        response = await runner.run(agent_inst, "What is Lauren?")
+
+        assert response.stop_reason == "end_turn"
+        assert any(tc.name == "search_lauren_docs" for tc in response.tool_calls_made)
+        assert "Lauren" in response.content
+
+    # ─── KnowledgeSource.loaders=… loaded at app startup ───────────────────
+
+    @pytest.mark.asyncio
+    async def test_loaders_in_knowledge_source_indexed_after_startup(self):
+        """``KnowledgeSource(loaders=[...])`` populates an empty KB at app startup."""
+        kb = KnowledgeBase(store=InMemoryVectorStore())  # NOT pre-loaded
+        text = "The mitochondria is the powerhouse of the cell."
+
+        @agent(model=None)
+        class StartupLoadAgent: ...
+
+        cfg, mock = LLMConfig.for_testing()
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        AIMod = AgentModule.for_root(
+            agents=[StartupLoadAgent],
+            imports=[LLMProv],
+            knowledge=[
+                KnowledgeSource(
+                    kb=kb,
+                    tool_name="search_biology",
+                    loaders=[TextLoader(text, is_file=False)],
+                ),
+            ],
+        )
+
+        @module(imports=[LLMProv, AIMod])
+        class AppMod: ...
+
+        app = LaurenFactory.create(AppMod)
+
+        # Before startup: KB is empty
+        empty_results = await kb.search("mitochondria")
+        assert len(empty_results) == 0
+
+        # Trigger startup → @post_construct hooks run → KB populated
+        await app.startup()
+
+        results = await kb.search("mitochondria")
+        assert len(results) > 0
+        assert "mitochondria" in results[0].content.lower()
+
+    @pytest.mark.asyncio
+    async def test_loaders_run_inside_already_running_event_loop(self):
+        """Reproduces the user-reported failure.
+
+        ``LaurenFactory.create`` + ``app.startup()`` from inside an async
+        test (loop already running) MUST NOT raise the
+        ``RuntimeError: asyncio.run() cannot be called from a running
+        event loop`` that the chatbot's manual loader hit.  The
+        framework drives loaders via ``@post_construct``, so no nested
+        ``asyncio.run`` happens anywhere in the chain.
+        """
+        import asyncio  # noqa: PLC0415
+
+        asyncio.get_running_loop()  # confirm we're inside a loop
+
+        kb = KnowledgeBase(store=InMemoryVectorStore())
+
+        @agent(model=None)
+        class LoopSafeAgent: ...
+
+        cfg, mock = LLMConfig.for_testing()
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        AIMod = AgentModule.for_root(
+            agents=[LoopSafeAgent],
+            imports=[LLMProv],
+            knowledge=[
+                KnowledgeSource(
+                    kb=kb,
+                    tool_name="search_loop_safe",
+                    loaders=[TextLoader("Test content for loop safety.", is_file=False)],
+                ),
+            ],
+        )
+
+        @module(imports=[LLMProv, AIMod])
+        class AppMod: ...
+
+        app = LaurenFactory.create(AppMod)
+        await app.startup()  # MUST NOT RAISE RuntimeError
+
+        # And the load actually happened
+        results = await kb.search("loop safety")
+        assert len(results) > 0
+
+    @pytest.mark.asyncio
+    async def test_loaders_with_no_startup_leaves_kb_empty(self):
+        """Without ``app.startup()`` the loader hook hasn't run yet — KB stays empty.
+
+        Locks in the contract that loading is deferred to startup, not
+        eager at module-build time.  This is intentional and matches the
+        Lauren ``@post_construct`` lifecycle.
+        """
+        kb = KnowledgeBase(store=InMemoryVectorStore())
+
+        @agent(model=None)
+        class NoStartupAgent: ...
+
+        cfg, mock = LLMConfig.for_testing()
+        LLMProv = LLMModule.for_root(cfg, transport_override=mock)
+        AIMod = AgentModule.for_root(
+            agents=[NoStartupAgent],
+            imports=[LLMProv],
+            knowledge=[
+                KnowledgeSource(
+                    kb=kb,
+                    tool_name="search_no_startup",
+                    loaders=[TextLoader("Some content.", is_file=False)],
+                ),
+            ],
+        )
+
+        @module(imports=[LLMProv, AIMod])
+        class AppMod: ...
+
+        LaurenFactory.create(AppMod)  # NO startup() call
+
+        results = await kb.search("Some")
+        assert len(results) == 0  # confirms load is deferred to startup

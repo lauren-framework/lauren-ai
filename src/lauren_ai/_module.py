@@ -51,12 +51,13 @@ from typing import Any, TypeVar, get_origin
 T = TypeVar("T")
 
 from lauren_ai._config import AgentConfig, LLMConfig
-from lauren_ai._exceptions import AgentConfigError
+from lauren_ai._exceptions import AgentConfigError, DecoratorUsageError
+from lauren_ai._knowledge import KnowledgeBase, KnowledgeSource
 from lauren_ai._transport import Completion, CompletionChunk, Embedding, Message
 
 logger = logging.getLogger(__name__)
 
-from lauren import Scope, module, use_class, use_factory, use_value
+from lauren import Scope, injectable, module, post_construct, use_class, use_factory, use_value
 
 # ---------------------------------------------------------------------------
 # Transport builder
@@ -419,6 +420,56 @@ class LLMModule:
 
 
 # ---------------------------------------------------------------------------
+# AgentModule helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_kb_loader_class(
+    *,
+    kb: KnowledgeBase,
+    loaders: list[Any],
+    tool_name: str,
+) -> type:
+    """Generate a ``Scope.SINGLETON`` ``@injectable`` whose ``@post_construct``
+    populates *kb* from *loaders* at app startup.
+
+    Each call returns a fresh class so the closure captures THIS call's
+    ``kb`` / ``loaders`` / ``tool_name`` rather than aliasing the
+    enclosing loop's variables (a classic Python closure trap).
+
+    The class has no other purpose — its singleton instance exists only
+    so the framework's ``LifecycleScheduler.run_post_construct`` will
+    invoke its async hook once at app startup, before any request is
+    handled.
+
+    :param kb: The knowledge base to populate.
+    :param loaders: Sequence of loader objects with an ``async load()`` method.
+    :param tool_name: Used to disambiguate the generated class name in
+        diagnostics (e.g. ``_KnowledgeLoader_search_public_info``).
+    """
+
+    @injectable(scope=Scope.SINGLETON)
+    class _KnowledgeLoader:
+        """Auto-generated singleton sentinel for KB loading at startup."""
+
+        @post_construct
+        async def _load(self) -> None:
+            for loader in loaders:
+                source = getattr(loader, "_source", repr(loader))
+                n = await kb.load(loader)
+                logger.info(
+                    "AgentModule: loaded knowledge source %s (%d chunk%s)",
+                    source,
+                    n,
+                    "" if n == 1 else "s",
+                )
+
+    _KnowledgeLoader.__name__ = f"_KnowledgeLoader_{tool_name}"
+    _KnowledgeLoader.__qualname__ = _KnowledgeLoader.__name__
+    return _KnowledgeLoader
+
+
+# ---------------------------------------------------------------------------
 # AgentModule
 # ---------------------------------------------------------------------------
 
@@ -502,9 +553,17 @@ class AgentModule:
         :type config: AgentConfig | None
         :param tool_cache: Cache backend for tool result caching.
         :type tool_cache: Any | None
-        :param knowledge: Knowledge base instances to pre-load into long-term
-            memory.
-        :type knowledge: list[Any] | None
+        :param knowledge: Knowledge bases to expose as retrieval tools.  Each
+            entry is either a bare :class:`~lauren_ai._knowledge.KnowledgeBase`
+            (registered under the default tool name ``"search_knowledge_base"``)
+            or a :class:`~lauren_ai._knowledge.KnowledgeSource` with custom
+            ``tool_name`` and ``top_k`` overrides.  Each KB is converted to a
+            ``@tool()`` via ``KnowledgeBase.as_tool()`` and added to every
+            agent in this module's tool map.  Pre-populate the KB via
+            ``await kb.load(loader)`` *before* passing it in — this method
+            does not load.  Two KBs with the same tool name raise
+            :class:`~lauren_ai._exceptions.DecoratorUsageError`.
+        :type knowledge: list[KnowledgeBase | KnowledgeSource] | None
         :param runner: Optional named :class:`~lauren_ai._agents._runner.AgentRunnerBase`
             subclass to use as this module's runner DI token.
 
@@ -602,6 +661,64 @@ class AgentModule:
             for tool_item in getattr(agent_cls, USE_TOOLS_META, ()):
                 _categorize(tool_item)
 
+        # ── Bridge ``knowledge=`` knowledge bases to retrieval tools ─────────
+        # Each entry is converted to a function-form ``@tool()`` via
+        # ``KnowledgeBase.as_tool()`` and fed through ``_categorize`` so it
+        # lands in ``_fn_tools`` and is registered into the runner's tool
+        # map exactly like any other function tool.
+        #
+        # If a ``KnowledgeSource`` ships ``loaders``, we ALSO generate a
+        # singleton injectable per source whose async ``@post_construct``
+        # iterates the loaders and populates the KB at app startup
+        # (via ``LifecycleScheduler.run_post_construct`` in the framework).
+        # Those classes are queued in ``_kb_loader_classes`` and added to
+        # ``providers`` once the providers list is initialised below.
+        #
+        # Detect tool-name collisions before ``_categorize`` silently drops
+        # the duplicate (its dedup logic uses ``_seen_tool_names``).
+        _kb_tool_names: set[str] = set()
+        _kb_loader_classes: list[type] = []
+        for ks in knowledge or []:
+            if isinstance(ks, KnowledgeSource):
+                _name = ks.tool_name
+            elif isinstance(ks, KnowledgeBase):
+                _name = "search_knowledge_base"
+            else:
+                raise TypeError(
+                    f"AgentModule.for_root(knowledge=...): each entry must be "
+                    f"a KnowledgeBase or KnowledgeSource instance; got "
+                    f"{type(ks).__name__!r}"
+                )
+            if _name in _kb_tool_names:
+                raise DecoratorUsageError(
+                    f"Duplicate knowledge-base tool name {_name!r} in "
+                    f"AgentModule.for_root(knowledge=...).  Use "
+                    f"KnowledgeSource(kb=..., tool_name=...) to give each "
+                    f"KnowledgeBase a unique tool name.",
+                    decorator_name=None,
+                )
+            _kb_tool_names.add(_name)
+
+            if isinstance(ks, KnowledgeSource):
+                kb_tool = ks.kb.as_tool(name=ks.tool_name, top_k=ks.top_k)
+            else:
+                kb_tool = ks.as_tool()
+            _categorize(kb_tool)
+
+            # Generate the per-source loader-injectable if the user
+            # supplied loaders.  Each call creates a fresh class so the
+            # closure captures THIS source's kb / loaders / name (NOT
+            # the loop variables, which would alias to the last
+            # iteration).
+            if isinstance(ks, KnowledgeSource) and ks.loaders:
+                _kb_loader_classes.append(
+                    _make_kb_loader_class(
+                        kb=ks.kb,
+                        loaders=list(ks.loaders),
+                        tool_name=ks.tool_name,
+                    )
+                )
+
         # ── Initialise eager-tools sentinel and effective scope ───────────────
 
         _eager_tools: dict | None = None
@@ -620,6 +737,12 @@ class AgentModule:
 
         providers: list[Any] = []
         exports: list[Any] = []
+
+        # Knowledge-base loader injectables (one per KnowledgeSource with
+        # ``loaders=``).  Their ``@post_construct`` hooks fire once at app
+        # startup and populate each KB before the first request lands.
+        for _kb_loader_cls in _kb_loader_classes:
+            providers.append(_kb_loader_cls)
 
         # Add class-form tools as DI providers only — they are module-internal
         # and resolved by the AgentRunner factory.  Exporting them would cause
@@ -666,6 +789,7 @@ class AgentModule:
                 _captured_signals_ref = _captured_signals
                 _captured_tool_cache_ref = _captured_tool_cache
                 _captured_conv_store_ref = _captured_conversation_store
+                _captured_kb_tool_names = frozenset(_kb_tool_names)
 
                 def _build_runner_with_classes(*args: Any) -> AgentRunner:
                     transport = args[0]
@@ -709,6 +833,7 @@ class AgentModule:
                         signals=_captured_signals_ref,
                         cache_backend=_captured_tool_cache_ref,
                         conversation_store=_captured_conv_store_ref,
+                        knowledge_tool_names=set(_captured_kb_tool_names),
                     )
 
                 _runner_provider = use_factory(
@@ -734,6 +859,7 @@ class AgentModule:
                 _captured_tool_cache_ref = _captured_tool_cache
                 _captured_conv_store_ref = _captured_conversation_store
                 _captured_runner_cls = _runner_cls
+                _captured_kb_tool_names_eager = frozenset(_kb_tool_names)
 
                 _runner_provider = use_factory(
                     provide=_runner_cls,
@@ -744,6 +870,7 @@ class AgentModule:
                         signals=_captured_signals_ref,
                         cache_backend=_captured_tool_cache_ref,
                         conversation_store=_captured_conv_store_ref,
+                        knowledge_tool_names=set(_captured_kb_tool_names_eager),
                     ),
                     injects=[_Transport, LLMConfig],
                     scope=_effective_scope,
