@@ -182,6 +182,63 @@ class AgentRunner(Protocol):
 AgentRunner.__class_getitem__ = classmethod(_agent_runner_class_getitem)  # type: ignore[attr-defined,assignment]
 
 
+# ---------------------------------------------------------------------------
+# Guardrail helpers
+# ---------------------------------------------------------------------------
+#
+# ``@use_guardrails()`` stores ``UseGuardrailsMeta`` on the agent class at
+# ``__lauren_ai_use_guardrails__``.  The runner reads it here and invokes the
+# guardrail checks at the appropriate points in the agentic loop.
+
+
+def _get_input_guardrails(agent: Any) -> list[Any]:
+    from lauren_ai._guardrails._decorator import USE_GUARDRAILS_META  # noqa: PLC0415
+
+    cls = type(agent) if not isinstance(agent, type) else agent
+    meta = getattr(cls, USE_GUARDRAILS_META, None)
+    return meta.input_guardrails if meta else []
+
+
+def _get_output_guardrails(agent: Any) -> list[Any]:
+    from lauren_ai._guardrails._decorator import USE_GUARDRAILS_META  # noqa: PLC0415
+
+    cls = type(agent) if not isinstance(agent, type) else agent
+    meta = getattr(cls, USE_GUARDRAILS_META, None)
+    return meta.output_guardrails if meta else []
+
+
+async def _run_input_guardrails(
+    guardrails: list[Any],
+    message: str,
+    agent_name: str,
+) -> Any | None:
+    """Run input guardrails in order; return the first non-pass decision."""
+    from lauren_ai._guardrails._base import GuardrailContext  # noqa: PLC0415
+
+    ctx = GuardrailContext(agent_name=agent_name)
+    for guard in guardrails:
+        decision = await guard.check(message, ctx)
+        if decision.action != "pass":
+            return decision
+    return None
+
+
+async def _run_output_guardrails(
+    guardrails: list[Any],
+    response_text: str,
+    agent_name: str,
+) -> Any | None:
+    """Run output guardrails in order; return the first non-pass decision."""
+    from lauren_ai._guardrails._base import GuardrailContext  # noqa: PLC0415
+
+    ctx = GuardrailContext(agent_name=agent_name)
+    for guard in guardrails:
+        decision = await guard.check(response_text, ctx)
+        if decision.action != "pass":
+            return decision
+    return None
+
+
 class AgentRunnerBase(AgentRunner):
     """Concrete implementation of the :class:`AgentRunner` Protocol.
 
@@ -315,7 +372,32 @@ class AgentRunnerBase(AgentRunner):
             prior = await effective_store.load(conversation_id)
             if prior:
                 memory.restore(prior)
-        memory.add_user(message)
+        # ── Input guardrails ─────────────────────────────────────────────────
+        _input_guards = _get_input_guardrails(agent)
+        if _input_guards:
+            _inp_decision = await _run_input_guardrails(_input_guards, message, meta.name)
+            if _inp_decision is not None:
+                _redirect = (
+                    _inp_decision.modified_content
+                    if _inp_decision.action == "modify"
+                    else (_inp_decision.violation or "Message blocked by guardrail.")
+                )
+                if _inp_decision.action == "block":
+                    return AgentResponse(
+                        content=_redirect,
+                        turns=0,
+                        total_usage=TokenUsage(input_tokens=0, output_tokens=0),
+                        tool_calls_made=[],
+                        stop_reason="end_turn",
+                    )
+                # modify — replace the seeded user message with the safe version
+                message = _redirect
+                memory.restore([])
+                memory.add_user(message)
+            else:
+                memory.add_user(message)
+        else:
+            memory.add_user(message)
 
         # Agent context
         ctx = AgentContext(
@@ -342,6 +424,7 @@ class AgentRunnerBase(AgentRunner):
         all_tool_calls: list[ToolCall] = []
         last_completion: Completion | None = None
         stop_reason: str = "max_turns"
+        _output_guards = _get_output_guardrails(agent)
 
         try:
             # Lifecycle hook: on_start
@@ -394,6 +477,33 @@ class AgentRunnerBase(AgentRunner):
 
                 # Record assistant message
                 memory.add_assistant(completion)
+
+                # ── Output guardrails ─────────────────────────────────────
+                if _output_guards and completion.content:
+                    _out_decision = await _run_output_guardrails(
+                        _output_guards, completion.content, meta.name
+                    )
+                    if _out_decision is not None and _out_decision.action != "pass":
+                        _override = (
+                            _out_decision.modified_content
+                            if _out_decision.action == "modify"
+                            else (_out_decision.violation or "Response blocked by guardrail.")
+                        )
+                        # Swap the assistant message in memory with the safe content
+                        memory._messages.pop()
+                        _safe = Completion(
+                            id=completion.id,
+                            model=completion.model,
+                            content=_override,
+                            tool_calls=[],
+                            stop_reason="end_turn",
+                            usage=completion.usage,
+                        )
+                        memory.add_assistant(_safe)
+                        last_completion = _safe
+                        stop_reason = "end_turn"
+                        break
+                # ─────────────────────────────────────────────────────────
 
                 # Lifecycle hook: on_turn_complete
                 await self._call_hook(agent, "on_turn_complete", completion, ctx)
@@ -576,6 +686,29 @@ class AgentRunnerBase(AgentRunner):
             prior = await effective_store.load(conversation_id)
             if prior:
                 memory.restore(prior)
+
+        # ── Input guardrails (before first LLM call) ─────────────────────
+        _stream_input_guards = _get_input_guardrails(agent)
+        if _stream_input_guards:
+            _inp_decision = await _run_input_guardrails(_stream_input_guards, message, meta.name)
+            if _inp_decision is not None:
+                _redirect = (
+                    _inp_decision.modified_content
+                    if _inp_decision.action == "modify"
+                    else (_inp_decision.violation or "Message blocked by guardrail.")
+                )
+                if _inp_decision.action == "block":
+                    # Yield the redirect as a single guardrail_override sentinel
+                    # so the frontend can display it via the normal SSE flow.
+                    async def _blocked_stream() -> AsyncIterator[CompletionChunk]:
+                        yield CompletionChunk(guardrail_override=_redirect)
+                        yield CompletionChunk(stop_reason="end_turn")
+
+                    return _blocked_stream()
+                # modify — replace the message before seeding memory
+                message = _redirect
+        # ─────────────────────────────────────────────────────────────────
+
         memory.add_user(message)
 
         ctx = AgentContext(
@@ -619,6 +752,7 @@ class AgentRunnerBase(AgentRunner):
             agent_run_id=agent_run_id,
             conversation_id=conversation_id,
             conversation_store=effective_store,
+            output_guards=_get_output_guardrails(agent),
         )
 
     async def approve_tool(self, agent_run_id: str, tool_use_id: str) -> None:
@@ -681,6 +815,7 @@ class AgentRunnerBase(AgentRunner):
         agent_run_id: str,
         conversation_id: str | None = None,
         conversation_store: Any | None = None,
+        output_guards: list[Any] | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         """Internal generator that drives the streaming agentic loop.
 
@@ -758,6 +893,29 @@ class AgentRunnerBase(AgentRunner):
                     yield chunk
 
                 duration_ms = (time.monotonic() - t0) * 1000
+
+                # ── Output guardrails (post-stream, real-time yield preserved) ──
+                # Chunks have already been yielded to the caller; the guardrail
+                # now judges the fully-assembled text.  If it fires, emit a
+                # sentinel CompletionChunk(guardrail_override=...) that tells
+                # the controller / frontend to replace the displayed content.
+                if output_guards and accumulated_text:
+                    _out_decision = await _run_output_guardrails(
+                        output_guards, accumulated_text, ctx.agent_name
+                    )
+                    if _out_decision is not None and _out_decision.action != "pass":
+                        _override = (
+                            _out_decision.modified_content
+                            if _out_decision.action == "modify"
+                            else (_out_decision.violation or "Response blocked by guardrail.")
+                        )
+                        yield CompletionChunk(guardrail_override=_override)
+                        # Rewrite the accumulated text so memory + housekeeping
+                        # reflect the safe content, not the hallucination.
+                        accumulated_text = _override
+                        accumulated_tool_calls = []
+                        accumulated_stop_reason = "end_turn"
+                # ─────────────────────────────────────────────────────────────
 
                 # Build tool calls from accumulated deltas
                 import json  # noqa: PLC0415

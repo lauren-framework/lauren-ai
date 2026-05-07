@@ -514,6 +514,12 @@ class CompletionChunk:
     :param pending_approval: Human-in-the-loop pending-approval signal.
         Present when a tool call requires confirmation before execution.
     :type pending_approval: PendingApproval | None
+    :param guardrail_override: When set, an output guardrail fired and this
+        string is the replacement content.  The runner emits one sentinel
+        chunk with only this field populated (``delta=""`` etc.) after all
+        normal chunks have been yielded.  Callers should replace the
+        accumulated streaming text with this value.
+    :type guardrail_override: str | None
     """
 
     delta: str = ""
@@ -522,6 +528,7 @@ class CompletionChunk:
     stop_reason: str | None = None
     usage: TokenUsage | None = None
     pending_approval: PendingApproval | None = None
+    guardrail_override: str | None = None
 
 
 # ---------------------------------------------------------------------------
