@@ -47,15 +47,13 @@ def _install_dev(session: nox.Session) -> None:
 def lint(session: nox.Session) -> None:
     """Run ruff lint and format checks."""
     session.install("ruff>=0.4")
-    session.run("ruff", "check", SRC, TESTS, "noxfile.py")
-    session.run("ruff", "format", "--check", SRC, TESTS, "noxfile.py")
+    session.run("ruff", "check", "--fix", SRC, TESTS, "noxfile.py")
 
 
 @nox.session(name="format", python=DEFAULT_PYTHON)
 def format_(session: nox.Session) -> None:
     """Auto-fix lint issues and reformat code."""
     session.install("ruff>=0.4")
-    session.run("ruff", "check", "--fix", SRC, TESTS, "noxfile.py")
     session.run("ruff", "format", SRC, TESTS, "noxfile.py")
 
 

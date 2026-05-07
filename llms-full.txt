@@ -1407,10 +1407,24 @@ class ProfanityFilter:
 # kind may be "input", "output", or "any" (default)
 
 # --- LLMGuardrail — use another LLM to evaluate safety ---
+# Basic usage (action="block" by default):
 llm_guard = LLMGuardrail(
     llm=llm_service,
     prompt="Does the following text contain harmful content? Reply YES or NO.\n\n{content}",
     block_if="YES",
+)
+
+# Extended parameters — graceful redirect + cost-efficient judge call:
+llm_guard = LLMGuardrail(
+    llm=llm_service,
+    prompt="Is this response outside the agent's scope?\n\n{content}\n\nYES or NO.",
+    block_if="YES",
+    action="modify",                          # replaces response instead of raising
+    violation_message="I can't help with that. Redirecting you.",
+    system="Answer with YES or NO only.",     # judge system prompt
+    max_tokens=5,                             # YES/NO needs ≤1 token
+    temperature=0.0,                          # deterministic
+    guardrail_name="ScopeGuard",              # shown in activity feeds
 )
 
 # --- GuardrailDecision ---

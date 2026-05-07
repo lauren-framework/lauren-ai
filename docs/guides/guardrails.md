@@ -257,6 +257,43 @@ guard = LLMGuardrail(
 The `block_if` comparison is case-insensitive.  Use a cheap, fast model for the
 secondary call.
 
+#### All parameters
+
+| Parameter | Type | Default | Purpose |
+|---|---|---|---|
+| `llm` | `Any` | required | `LLMService` or any object with a `.complete(messages, **kwargs)` method |
+| `prompt` | `str` | required | Judgment prompt; must contain `{content}` |
+| `block_if` | `str` | required | String that triggers the guardrail (case-insensitive) |
+| `violation_message` | `str` | `"Content blocked by safety filter."` | User-facing message; becomes `modified_content` when `action="modify"` |
+| `action` | `"block"` \| `"modify"` | `"block"` | What to do on trigger — see below |
+| `system` | `str \| None` | `None` | System prompt for the judgment call |
+| `max_tokens` | `int \| None` | `None` | Max tokens for the judgment response — set to `5` for YES/NO |
+| `temperature` | `float \| None` | `None` | Sampling temperature — `0.0` for deterministic YES/NO |
+| `guardrail_name` | `str` | `"LLMGuardrail"` | Label attached to every `GuardrailDecision` emitted |
+
+#### `action="modify"` — graceful redirect
+
+The default `action="block"` causes the runner to raise `GuardrailViolated`.
+Use `action="modify"` to silently replace the agent's response with
+`violation_message` instead — useful for redirecting users to the correct agent
+without surfacing an error:
+
+```python
+guard = LLMGuardrail(
+    llm=llm_service,
+    prompt="Is this response outside the agent's allowed scope?\n\n{content}\n\nYES or NO.",
+    block_if="YES",
+    action="modify",                   # replace response, don't raise
+    violation_message=(
+        "I can't help with that. Would you like me to transfer you to our CRM agent?"
+    ),
+    system="Answer with YES or NO only.",
+    max_tokens=5,                      # YES/NO needs at most 1 token
+    temperature=0.0,                   # deterministic
+    guardrail_name="ScopeGuard",
+)
+```
+
 ---
 
 ## Writing a custom guardrail
