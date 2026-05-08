@@ -28,14 +28,13 @@ LAUREN_FRAMEWORK_PATH = "../lauren-framework"
 
 
 def _install_dev(session: nox.Session) -> None:
-    """Install the package in editable mode with dev extras via uv.
+    """Install all dev dependencies from pyproject.toml via uv sync.
 
-    ``[tool.uv.sources]`` is not honoured by ``uv pip install`` (only by
-    ``uv sync``).  We pass both the local ``lauren`` path and this package in
-    **one** call so that uv's resolver sees the local ``lauren`` editable
-    install and accepts it as satisfying ``lauren>=1.0``.
+    ``uv sync`` honours ``[tool.uv.sources]`` (local path overrides),
+    so the local ``lauren-framework`` editable install is resolved
+    automatically — no need to pass the path explicitly.
     """
-    session.install("-e", LAUREN_FRAMEWORK_PATH, "-e", ".[dev,anthropic]")
+    session.run("uv", "sync", "--extra", "dev", "--active", external=True)
 
 
 # ---------------------------------------------------------------------------
