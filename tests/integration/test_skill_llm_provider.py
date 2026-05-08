@@ -8,10 +8,11 @@ Tests cover:
 - Config properties are accessible
 """
 
-from __future__ import annotations
-
 import pytest
+from pydantic import BaseModel
 
+from lauren import LaurenFactory, controller, get, post, module, injectable, Scope, use_value, Json
+from lauren.testing import TestClient
 from lauren_ai import LLMConfig
 from lauren_ai._agents import agent
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
@@ -20,13 +21,15 @@ from lauren_ai._transport._mock import MockTransport
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Module-level mock
 # ---------------------------------------------------------------------------
 
+_MOCK = MockTransport()
 
-def _completion(content: str = "OK") -> Completion:
+
+def _completion(content: str = "OK", *, n: int = 1) -> Completion:
     return Completion(
-        id="c1",
+        id=f"c{n}",
         model="mock-model",
         content=content,
         tool_calls=[],
@@ -35,12 +38,58 @@ def _completion(content: str = "OK") -> Completion:
     )
 
 
-def _make_runner(mock: MockTransport | None = None) -> tuple[AgentRunner, MockTransport]:
-    if mock is None:
-        mock = MockTransport()
-    cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, tools={}, config=cfg)
-    return runner, mock
+# ---------------------------------------------------------------------------
+# Controller / Module
+# ---------------------------------------------------------------------------
+
+
+class _RunRequest(BaseModel):
+    prompt: str = "hi"
+
+
+@controller("/llm")
+class LLMController:
+    def __init__(self, mock: MockTransport) -> None:
+        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
+        self._runner = AgentRunner(transport=mock, tools={}, config=cfg)
+        self._cfg = cfg
+
+    @post("/complete")
+    async def complete(self, body: Json[_RunRequest]) -> dict:
+        @agent(model="mock-model")
+        class SimpleAgent: ...
+
+        resp = await self._runner.run(SimpleAgent(), body.prompt)
+        return {
+            "content": resp.content,
+            "model": self._cfg.model,
+            "stop_reason": resp.stop_reason,
+            "input_tokens": resp.total_usage.input_tokens,
+            "calls": len(_MOCK.calls),
+        }
+
+    @get("/config")
+    async def config(self) -> dict:
+        return {
+            "provider": self._cfg.provider,
+            "model": self._cfg.model,
+            "max_tokens": self._cfg.max_tokens,
+            "temperature": self._cfg.temperature,
+        }
+
+
+@module(
+    controllers=[LLMController],
+    providers=[use_value(provide=MockTransport, value=_MOCK)],
+)
+class LLMModule: ...
+
+
+def build_app(*responses: str) -> TestClient:
+    _MOCK.reset()
+    for content in responses:
+        _MOCK.queue_response(_completion(content))
+    return TestClient(LaurenFactory.create(LLMModule))
 
 
 # ---------------------------------------------------------------------------
@@ -140,55 +189,46 @@ class TestLLMConfigFactoryMethods:
 
 
 # ---------------------------------------------------------------------------
-# TestRunnerWithMockTransport
+# TestRunnerWithMockTransport (via TestClient)
 # ---------------------------------------------------------------------------
 
 
 class TestRunnerWithMockTransport:
-    async def test_runner_runs_basic_agent(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("Hello from mock"))
+    def test_runner_runs_basic_agent(self):
+        client = build_app("Hello from mock")
+        r = client.post("/llm/complete", json={"prompt": "hi"})
+        assert r.status_code == 200
+        assert r.json()["content"] == "Hello from mock"
 
-        @agent(model="mock-model")
-        class SimpleAgent: ...
+    def test_runner_records_calls(self):
+        client = build_app("OK")
+        r = client.post("/llm/complete", json={"prompt": "hi"})
+        assert r.status_code == 200
+        assert r.json()["calls"] == 1
 
-        resp = await runner.run(SimpleAgent(), "hi")
-        assert resp.content == "Hello from mock"
+    def test_runner_stop_reason_end_turn(self):
+        client = build_app("done")
+        r = client.post("/llm/complete", json={"prompt": "hi"})
+        assert r.status_code == 200
+        assert r.json()["stop_reason"] == "end_turn"
 
-    async def test_runner_records_calls(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("OK"))
+    def test_runner_usage_populated(self):
+        client = build_app("OK")
+        r = client.post("/llm/complete", json={"prompt": "hi"})
+        assert r.status_code == 200
+        assert r.json()["input_tokens"] > 0
 
-        @agent(model="mock-model")
-        class SimpleAgent: ...
+    def test_config_properties_via_endpoint(self):
+        client = build_app()
+        r = client.get("/llm/config")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["provider"] == "anthropic"
+        assert data["model"] == "mock-model"
+        assert data["max_tokens"] == 4096
+        assert data["temperature"] == 1.0
 
-        await runner.run(SimpleAgent(), "hi")
-        assert len(mock.calls) == 1
-
-    async def test_runner_stop_reason_end_turn(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("done"))
-
-        @agent(model="mock-model")
-        class SimpleAgent: ...
-
-        resp = await runner.run(SimpleAgent(), "hi")
-        assert resp.stop_reason == "end_turn"
-
-    async def test_runner_usage_populated(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("OK"))
-
-        @agent(model="mock-model")
-        class SimpleAgent: ...
-
-        resp = await runner.run(SimpleAgent(), "hi")
-        assert resp.total_usage.input_tokens > 0
-
-    async def test_no_network_calls_made(self):
-        """MockTransport records calls; real transport would need network."""
-        _, mock = LLMConfig.for_testing()
-        mock.queue_response(_completion("zero network"))
-        cfg, mock2 = LLMConfig.for_testing()
-        # mock2 is a different instance; proves for_testing() creates fresh mocks
-        assert mock is not mock2
+    def test_no_network_calls_made(self):
+        _, mock1 = LLMConfig.for_testing()
+        _, mock2 = LLMConfig.for_testing()
+        assert mock1 is not mock2

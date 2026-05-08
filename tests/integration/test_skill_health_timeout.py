@@ -17,9 +17,12 @@ from __future__ import annotations
 
 import asyncio
 import time
-import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
+from pydantic import BaseModel
+
+from lauren import LaurenFactory, controller, get, post, module, injectable, Scope, use_value, Json
+from lauren.testing import TestClient
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
 from lauren_ai._config import LLMConfig
 from lauren_ai._transport import Completion, TokenUsage
@@ -30,6 +33,7 @@ from lauren_ai._agents import agent
 # ---------------------------------------------------------------------------
 # Timeout + circuit breaker implementations (inline for test file)
 # ---------------------------------------------------------------------------
+
 
 async def run_with_timeout(
     runner: AgentRunner,
@@ -90,13 +94,18 @@ class CircuitBreaker:
 # Agent definitions
 # ---------------------------------------------------------------------------
 
+
 @agent(model=None, system="You are helpful.")
 class HealthAgent: ...
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Module-level mock and circuit breaker
 # ---------------------------------------------------------------------------
+
+_MOCK = MockTransport()
+_circuit: dict = {}
+
 
 def _completion(content="OK", *, n=1, stop_reason="end_turn"):
     return Completion(
@@ -105,40 +114,108 @@ def _completion(content="OK", *, n=1, stop_reason="end_turn"):
     )
 
 
-def _make_runner(mock=None):
-    if mock is None:
-        mock = MockTransport()
+def _make_runner(mock: MockTransport) -> AgentRunner:
     cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, tools={}, config=cfg)
-    return runner, mock
+    return AgentRunner(transport=mock, tools={}, config=cfg)
+
+
+# ---------------------------------------------------------------------------
+# Controllers
+# ---------------------------------------------------------------------------
+
+
+class _RunRequest(BaseModel):
+    prompt: str = "Hi"
+    timeout: float = 30.0
+
+
+@controller("/agent")
+class AgentController:
+    def __init__(self, mock: MockTransport) -> None:
+        self._mock = mock
+
+    @post("/run-with-timeout")
+    async def run_with_timeout_endpoint(self, body: Json[_RunRequest]) -> dict:
+        runner = _make_runner(self._mock)
+        return await run_with_timeout(runner, HealthAgent(), body.prompt, timeout=body.timeout)
+
+
+@controller("/circuit")
+class CircuitController:
+    @post("/record-failure")
+    async def record_failure(self) -> dict:
+        cb = _circuit["cb"]
+        cb.record_failure()
+        return {"failures": cb._failures, "state": cb.state}
+
+    @post("/record-success")
+    async def record_success(self) -> dict:
+        cb = _circuit["cb"]
+        cb.record_success()
+        return {"failures": cb._failures, "state": cb.state}
+
+    @get("/status")
+    async def status(self) -> dict:
+        cb = _circuit["cb"]
+        return {"state": cb.state, "failures": cb._failures}
+
+    @post("/can-call")
+    async def can_call(self) -> dict:
+        cb = _circuit["cb"]
+        return {"can_call": cb.can_call()}
+
+
+@module(
+    controllers=[AgentController, CircuitController],
+    providers=[use_value(provide=MockTransport, value=_MOCK)],
+)
+class HealthModule: ...
+
+
+# ---------------------------------------------------------------------------
+# Build app helper
+# ---------------------------------------------------------------------------
+
+
+def build_app(
+    *responses: str,
+    failure_threshold: int = 3,
+    reset_timeout: float = 60.0,
+) -> TestClient:
+    _MOCK.reset()
+    for c in responses:
+        _MOCK.queue_response(_completion(c))
+    _circuit["cb"] = CircuitBreaker(failure_threshold=failure_threshold, reset_timeout=reset_timeout)
+    return TestClient(LaurenFactory.create(HealthModule))
 
 
 # ---------------------------------------------------------------------------
 # Tests: run_with_timeout
 # ---------------------------------------------------------------------------
 
+
 class TestRunWithTimeout:
-    async def test_successful_run_returns_ok_status(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("Hello!"))
+    def test_successful_run_returns_ok_status(self):
+        client = build_app("Hello!")
+        r = client.post("/agent/run-with-timeout", json={"prompt": "Hello", "timeout": 5.0})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "ok"
+        assert data["content"] == "Hello!"
 
-        result = await run_with_timeout(runner, HealthAgent(), "Hello", timeout=5.0)
-        assert result["status"] == "ok"
-        assert result["content"] == "Hello!"
-
-    async def test_successful_run_returns_turns(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("Done"))
-
-        result = await run_with_timeout(runner, HealthAgent(), "Go", timeout=5.0)
-        assert "turns" in result
-        assert result["turns"] >= 1
+    def test_successful_run_returns_turns(self):
+        client = build_app("Done")
+        r = client.post("/agent/run-with-timeout", json={"prompt": "Go", "timeout": 5.0})
+        assert r.status_code == 200
+        assert "turns" in r.json()
+        assert r.json()["turns"] >= 1
 
     async def test_timeout_error_returns_timeout_status(self):
-        runner, mock = _make_runner()
+        runner, mock = MockTransport(), None
+        mock = MockTransport()
         mock.queue_response(_completion("too slow"))
+        runner = _make_runner(mock)
 
-        # Patch asyncio.wait_for to raise TimeoutError
         async def always_timeout(*args, **kwargs):
             raise asyncio.TimeoutError()
 
@@ -149,10 +226,11 @@ class TestRunWithTimeout:
         assert "timed out" in result["error"].lower()
 
     async def test_timeout_error_includes_timeout_value(self):
+        mock = MockTransport()
+        runner = _make_runner(mock)
+
         async def always_timeout(*args, **kwargs):
             raise asyncio.TimeoutError()
-
-        runner, mock = _make_runner()
 
         with patch("asyncio.wait_for", side_effect=always_timeout):
             result = await run_with_timeout(runner, HealthAgent(), "prompt", timeout=15.5)
@@ -160,10 +238,11 @@ class TestRunWithTimeout:
         assert "15.5" in result["error"]
 
     async def test_generic_exception_returns_error_status(self):
+        mock = MockTransport()
+        runner = _make_runner(mock)
+
         async def always_raises(*args, **kwargs):
             raise ValueError("Something went wrong")
-
-        runner, mock = _make_runner()
 
         with patch("asyncio.wait_for", side_effect=always_raises):
             result = await run_with_timeout(runner, HealthAgent(), "prompt", timeout=5.0)
@@ -171,68 +250,77 @@ class TestRunWithTimeout:
         assert result["status"] == "error"
         assert "Something went wrong" in result["error"]
 
-    async def test_default_timeout_parameter_exists(self):
-        """Verify default timeout parameter (30.0) works without passing it."""
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("Default timeout test"))
-
-        result = await run_with_timeout(runner, HealthAgent(), "Hello")
-        assert result["status"] == "ok"
+    def test_default_timeout_parameter_exists(self):
+        client = build_app("Default timeout test")
+        r = client.post("/agent/run-with-timeout", json={"prompt": "Hello"})
+        assert r.status_code == 200
+        assert r.json()["status"] == "ok"
 
 
 # ---------------------------------------------------------------------------
 # Tests: CircuitBreaker
 # ---------------------------------------------------------------------------
 
+
 class TestCircuitBreaker:
     def test_initial_state_is_closed(self):
-        cb = CircuitBreaker()
-        assert cb.state == "closed"
+        client = build_app()
+        r = client.get("/circuit/status")
+        assert r.json()["state"] == "closed"
 
     def test_can_call_when_closed(self):
-        cb = CircuitBreaker()
-        assert cb.can_call() is True
+        client = build_app()
+        r = client.post("/circuit/can-call")
+        assert r.json()["can_call"] is True
 
     def test_single_failure_stays_closed_below_threshold(self):
-        cb = CircuitBreaker(failure_threshold=3)
-        cb.record_failure()
-        assert cb.state == "closed"
-        assert cb.can_call() is True
+        client = build_app(failure_threshold=3)
+        client.post("/circuit/record-failure")
+        r = client.get("/circuit/status")
+        assert r.json()["state"] == "closed"
+        r2 = client.post("/circuit/can-call")
+        assert r2.json()["can_call"] is True
 
     def test_opens_after_threshold_failures(self):
-        cb = CircuitBreaker(failure_threshold=3)
-        cb.record_failure()
-        cb.record_failure()
-        cb.record_failure()
-        assert cb.state == "open"
+        client = build_app(failure_threshold=3)
+        client.post("/circuit/record-failure")
+        client.post("/circuit/record-failure")
+        client.post("/circuit/record-failure")
+        r = client.get("/circuit/status")
+        assert r.json()["state"] == "open"
 
     def test_cannot_call_when_open(self):
-        cb = CircuitBreaker(failure_threshold=2, reset_timeout=600.0)
-        cb.record_failure()
-        cb.record_failure()
-        assert cb.can_call() is False
+        client = build_app(failure_threshold=2, reset_timeout=600.0)
+        client.post("/circuit/record-failure")
+        client.post("/circuit/record-failure")
+        r = client.post("/circuit/can-call")
+        assert r.json()["can_call"] is False
 
     def test_record_success_resets_failures(self):
-        cb = CircuitBreaker(failure_threshold=5)
-        cb.record_failure()
-        cb.record_failure()
-        cb.record_success()
-        assert cb._failures == 0
+        client = build_app(failure_threshold=5)
+        client.post("/circuit/record-failure")
+        client.post("/circuit/record-failure")
+        client.post("/circuit/record-success")
+        r = client.get("/circuit/status")
+        assert r.json()["failures"] == 0
 
     def test_record_success_closes_circuit(self):
-        cb = CircuitBreaker(failure_threshold=2)
-        cb.record_failure()
-        cb.record_failure()  # opens
-        assert cb.state == "open"
-        cb.record_success()
-        assert cb.state == "closed"
+        client = build_app(failure_threshold=2)
+        client.post("/circuit/record-failure")
+        client.post("/circuit/record-failure")  # opens
+        r1 = client.get("/circuit/status")
+        assert r1.json()["state"] == "open"
+        client.post("/circuit/record-success")
+        r2 = client.get("/circuit/status")
+        assert r2.json()["state"] == "closed"
 
     def test_can_call_after_reset_success(self):
-        cb = CircuitBreaker(failure_threshold=2)
-        cb.record_failure()
-        cb.record_failure()
-        cb.record_success()
-        assert cb.can_call() is True
+        client = build_app(failure_threshold=2)
+        client.post("/circuit/record-failure")
+        client.post("/circuit/record-failure")
+        client.post("/circuit/record-success")
+        r = client.post("/circuit/can-call")
+        assert r.json()["can_call"] is True
 
     def test_half_open_state_after_reset_timeout(self):
         cb = CircuitBreaker(failure_threshold=1, reset_timeout=0.0)

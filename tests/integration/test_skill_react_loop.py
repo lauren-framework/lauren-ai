@@ -14,7 +14,10 @@ NOTE: No `from __future__ import annotations` in this file — @tool() used.
 """
 
 import pytest
+from pydantic import BaseModel
 
+from lauren import LaurenFactory, controller, get, post, module, injectable, Scope, use_value, Json
+from lauren.testing import TestClient
 from lauren_ai._agents import agent, use_tools
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
 from lauren_ai._config import LLMConfig
@@ -49,8 +52,10 @@ async def compute_tool(value: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Module-level mock
 # ---------------------------------------------------------------------------
+
+_MOCK = MockTransport()
 
 
 def _completion(content: str = "OK", *, n: int = 1, stop_reason: str = "end_turn") -> Completion:
@@ -64,22 +69,119 @@ def _completion(content: str = "OK", *, n: int = 1, stop_reason: str = "end_turn
     )
 
 
-def _make_runner_with_tools(*tool_funcs) -> tuple[AgentRunner, MockTransport]:
-    mock = MockTransport()
-    tools = {}
-    for t in tool_funcs:
-        _add_to_tool_map(tools, t)
-    cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, tools=tools, config=cfg)
-    return runner, mock
+# ---------------------------------------------------------------------------
+# Controller / Module
+# ---------------------------------------------------------------------------
 
 
-def _make_runner(mock: MockTransport | None = None) -> tuple[AgentRunner, MockTransport]:
-    if mock is None:
-        mock = MockTransport()
-    cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, tools={}, config=cfg)
-    return runner, mock
+class _RunRequest(BaseModel):
+    prompt: str = "hi"
+    max_turns: int = 10
+
+
+@controller("/agent")
+class ReActController:
+    def __init__(self, mock: MockTransport) -> None:
+        tools = {}
+        _add_to_tool_map(tools, search_tool)
+        _add_to_tool_map(tools, compute_tool)
+        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
+        self._runner = AgentRunner(transport=mock, tools=tools, config=cfg)
+        self._runner_no_tools = AgentRunner(transport=mock, tools={}, config=cfg)
+        self._mock = mock
+
+    @post("/run-direct")
+    async def run_direct(self, body: Json[_RunRequest]) -> dict:
+        @agent(model="mock-model")
+        class DirectAgent: ...
+
+        resp = await self._runner_no_tools.run(DirectAgent(), body.prompt)
+        return {
+            "content": resp.content,
+            "turns": resp.turns,
+            "stop_reason": resp.stop_reason,
+        }
+
+    @post("/run-search")
+    async def run_search(self, body: Json[_RunRequest]) -> dict:
+        @use_tools(search_tool)
+        @agent(model="mock-model")
+        class ReActAgent: ...
+
+        resp = await self._runner.run(ReActAgent(), body.prompt)
+        return {
+            "content": resp.content,
+            "turns": resp.turns,
+            "calls": len(self._mock.calls),
+            "second_call_msg_count": len(self._mock.calls[1].messages) if len(self._mock.calls) > 1 else 0,
+            "first_call_msg_count": len(self._mock.calls[0].messages) if self._mock.calls else 0,
+        }
+
+    @post("/run-three-turns")
+    async def run_three_turns(self, body: Json[_RunRequest]) -> dict:
+        @use_tools(search_tool, compute_tool)
+        @agent(model="mock-model")
+        class ThreeTurnAgent: ...
+
+        resp = await self._runner.run(ThreeTurnAgent(), body.prompt)
+        tool_names = [t.name for t in resp.tool_calls_made]
+        return {
+            "content": resp.content,
+            "turns": resp.turns,
+            "tool_names": tool_names,
+        }
+
+    @post("/run-hooks")
+    async def run_hooks(self, body: Json[_RunRequest]) -> dict:
+        turns_seen = []
+        results_seen = []
+
+        @use_tools(search_tool)
+        @agent(model="mock-model")
+        class HookAgent:
+            async def on_turn_complete(self, completion, ctx):
+                turns_seen.append(ctx.turn)
+
+        resp = await self._runner.run(HookAgent(), body.prompt)
+        return {
+            "turns_seen": turns_seen,
+            "content": resp.content,
+        }
+
+    @post("/run-tool-result-hook")
+    async def run_tool_result_hook(self, body: Json[_RunRequest]) -> dict:
+        results_seen = []
+
+        @use_tools(compute_tool)
+        @agent(model="mock-model")
+        class ToolHookAgent:
+            async def on_tool_result(self, result, ctx):
+                results_seen.append(result.content if hasattr(result, "content") else str(result))
+                return None
+
+        await self._runner.run(ToolHookAgent(), body.prompt)
+        return {"results_count": len(results_seen)}
+
+    @post("/run-max-turns")
+    async def run_max_turns(self, body: Json[_RunRequest]) -> dict:
+        @use_tools(search_tool)
+        @agent(model="mock-model", max_turns=body.max_turns)
+        class TightAgent: ...
+
+        resp = await self._runner.run(TightAgent(), body.prompt)
+        return {"stop_reason": resp.stop_reason}
+
+
+@module(
+    controllers=[ReActController],
+    providers=[use_value(provide=MockTransport, value=_MOCK)],
+)
+class ReActModule: ...
+
+
+def build_app() -> TestClient:
+    _MOCK.reset()
+    return TestClient(LaurenFactory.create(ReActModule))
 
 
 # ---------------------------------------------------------------------------
@@ -88,35 +190,26 @@ def _make_runner(mock: MockTransport | None = None) -> tuple[AgentRunner, MockTr
 
 
 class TestReActSingleTurn:
-    async def test_single_turn_no_tool_call(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("Direct answer."))
+    def test_single_turn_no_tool_call(self):
+        client = build_app()
+        _MOCK.queue_response(_completion("Direct answer."))
+        r = client.post("/agent/run-direct", json={"prompt": "What is 2+2?"})
+        assert r.status_code == 200
+        assert r.json()["content"] == "Direct answer."
 
-        @agent(model="mock-model")
-        class DirectAgent: ...
+    def test_single_turn_count(self):
+        client = build_app()
+        _MOCK.queue_response(_completion("Answer"))
+        r = client.post("/agent/run-direct", json={"prompt": "hi"})
+        assert r.status_code == 200
+        assert r.json()["turns"] == 1
 
-        resp = await runner.run(DirectAgent(), "What is 2+2?")
-        assert resp.content == "Direct answer."
-
-    async def test_single_turn_count(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("Answer"))
-
-        @agent(model="mock-model")
-        class DirectAgent: ...
-
-        resp = await runner.run(DirectAgent(), "hi")
-        assert resp.turns == 1
-
-    async def test_single_turn_stop_reason_end_turn(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("Done"))
-
-        @agent(model="mock-model")
-        class DirectAgent: ...
-
-        resp = await runner.run(DirectAgent(), "hi")
-        assert resp.stop_reason == "end_turn"
+    def test_single_turn_stop_reason_end_turn(self):
+        client = build_app()
+        _MOCK.queue_response(_completion("Done"))
+        r = client.post("/agent/run-direct", json={"prompt": "hi"})
+        assert r.status_code == 200
+        assert r.json()["stop_reason"] == "end_turn"
 
 
 # ---------------------------------------------------------------------------
@@ -125,60 +218,38 @@ class TestReActSingleTurn:
 
 
 class TestReActTwoTurns:
-    async def test_think_act_answer_loop(self):
-        runner, mock = _make_runner_with_tools(search_tool)
+    def test_think_act_answer_loop(self):
+        client = build_app()
+        _MOCK.queue_tool_use("search_tool", {"query": "AI"})
+        _MOCK.queue_response(_completion("Based on search: AI is advancing rapidly."))
+        r = client.post("/agent/run-search", json={"prompt": "Tell me about AI"})
+        assert r.status_code == 200
+        assert "AI" in r.json()["content"]
 
-        @use_tools(search_tool)
-        @agent(model="mock-model")
-        class ReActAgent: ...
+    def test_two_turn_count(self):
+        client = build_app()
+        _MOCK.queue_tool_use("search_tool", {"query": "news"})
+        _MOCK.queue_response(_completion("News found."))
+        r = client.post("/agent/run-search", json={"prompt": "find news"})
+        assert r.status_code == 200
+        assert r.json()["turns"] == 2
 
-        mock.queue_tool_use("search_tool", {"query": "AI"})
-        mock.queue_response(_completion("Based on search: AI is advancing rapidly."))
+    def test_two_llm_calls_made(self):
+        client = build_app()
+        _MOCK.queue_tool_use("search_tool", {"query": "test"})
+        _MOCK.queue_response(_completion("Done"))
+        r = client.post("/agent/run-search", json={"prompt": "go"})
+        assert r.status_code == 200
+        assert r.json()["calls"] == 2
 
-        resp = await runner.run(ReActAgent(), "Tell me about AI")
-        assert "AI" in resp.content
-
-    async def test_two_turn_count(self):
-        runner, mock = _make_runner_with_tools(search_tool)
-
-        @use_tools(search_tool)
-        @agent(model="mock-model")
-        class ReActAgent: ...
-
-        mock.queue_tool_use("search_tool", {"query": "news"})
-        mock.queue_response(_completion("News found."))
-
-        resp = await runner.run(ReActAgent(), "find news")
-        assert resp.turns == 2
-
-    async def test_two_llm_calls_made(self):
-        runner, mock = _make_runner_with_tools(search_tool)
-
-        @use_tools(search_tool)
-        @agent(model="mock-model")
-        class ReActAgent: ...
-
-        mock.queue_tool_use("search_tool", {"query": "test"})
-        mock.queue_response(_completion("Done"))
-
-        await runner.run(ReActAgent(), "go")
-        assert len(mock.calls) == 2
-
-    async def test_tool_result_in_second_call_messages(self):
-        runner, mock = _make_runner_with_tools(search_tool)
-
-        @use_tools(search_tool)
-        @agent(model="mock-model")
-        class ReActAgent: ...
-
-        mock.queue_tool_use("search_tool", {"query": "quantum"})
-        mock.queue_response(_completion("Quantum is complex."))
-
-        await runner.run(ReActAgent(), "explain quantum")
-        # Second call should have tool result in messages
-        second_call_messages = mock.calls[1].messages
-        # The tool result is appended as a message with tool_result type
-        assert len(second_call_messages) > len(mock.calls[0].messages)
+    def test_tool_result_in_second_call_messages(self):
+        client = build_app()
+        _MOCK.queue_tool_use("search_tool", {"query": "quantum"})
+        _MOCK.queue_response(_completion("Quantum is complex."))
+        r = client.post("/agent/run-search", json={"prompt": "explain quantum"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["second_call_msg_count"] > data["first_call_msg_count"]
 
 
 # ---------------------------------------------------------------------------
@@ -187,33 +258,23 @@ class TestReActTwoTurns:
 
 
 class TestReActThreeTurns:
-    async def test_three_turn_loop(self):
-        runner, mock = _make_runner_with_tools(search_tool, compute_tool)
+    def test_three_turn_loop(self):
+        client = build_app()
+        _MOCK.queue_tool_use("search_tool", {"query": "data"})
+        _MOCK.queue_tool_use("compute_tool", {"value": 21})
+        _MOCK.queue_response(_completion("Searched and computed: result is 42."))
+        r = client.post("/agent/run-three-turns", json={"prompt": "search and compute"})
+        assert r.status_code == 200
+        assert r.json()["turns"] == 3
 
-        @use_tools(search_tool, compute_tool)
-        @agent(model="mock-model")
-        class ThreeTurnAgent: ...
-
-        mock.queue_tool_use("search_tool", {"query": "data"})
-        mock.queue_tool_use("compute_tool", {"value": 21})
-        mock.queue_response(_completion("Searched and computed: result is 42."))
-
-        resp = await runner.run(ThreeTurnAgent(), "search and compute")
-        assert resp.turns == 3
-
-    async def test_both_tools_in_tool_calls_made(self):
-        runner, mock = _make_runner_with_tools(search_tool, compute_tool)
-
-        @use_tools(search_tool, compute_tool)
-        @agent(model="mock-model")
-        class ThreeTurnAgent: ...
-
-        mock.queue_tool_use("search_tool", {"query": "x"})
-        mock.queue_tool_use("compute_tool", {"value": 5})
-        mock.queue_response(_completion("Done"))
-
-        resp = await runner.run(ThreeTurnAgent(), "go")
-        tool_names = [t.name for t in resp.tool_calls_made]
+    def test_both_tools_in_tool_calls_made(self):
+        client = build_app()
+        _MOCK.queue_tool_use("search_tool", {"query": "x"})
+        _MOCK.queue_tool_use("compute_tool", {"value": 5})
+        _MOCK.queue_response(_completion("Done"))
+        r = client.post("/agent/run-three-turns", json={"prompt": "go"})
+        assert r.status_code == 200
+        tool_names = r.json()["tool_names"]
         assert "search_tool" in tool_names
         assert "compute_tool" in tool_names
 
@@ -224,40 +285,21 @@ class TestReActThreeTurns:
 
 
 class TestReActLifecycleHooks:
-    async def test_on_turn_complete_fires_per_turn(self):
-        turns_seen: list[int] = []
+    def test_on_turn_complete_fires_per_turn(self):
+        client = build_app()
+        _MOCK.queue_tool_use("search_tool", {"query": "hook test"})
+        _MOCK.queue_response(_completion("done"))
+        r = client.post("/agent/run-hooks", json={"prompt": "go"})
+        assert r.status_code == 200
+        assert len(r.json()["turns_seen"]) == 2
 
-        runner, mock = _make_runner_with_tools(search_tool)
-
-        @use_tools(search_tool)
-        @agent(model="mock-model")
-        class HookAgent:
-            async def on_turn_complete(self, completion, ctx):
-                turns_seen.append(ctx.turn)
-
-        mock.queue_tool_use("search_tool", {"query": "hook test"})
-        mock.queue_response(_completion("done"))
-
-        await runner.run(HookAgent(), "go")
-        assert len(turns_seen) == 2
-
-    async def test_on_tool_result_fires(self):
-        results_seen: list[str] = []
-
-        runner, mock = _make_runner_with_tools(compute_tool)
-
-        @use_tools(compute_tool)
-        @agent(model="mock-model")
-        class ToolHookAgent:
-            async def on_tool_result(self, result, ctx):
-                results_seen.append(result.content if hasattr(result, "content") else str(result))
-                return None
-
-        mock.queue_tool_use("compute_tool", {"value": 5})
-        mock.queue_response(_completion("computed"))
-
-        await runner.run(ToolHookAgent(), "compute")
-        assert len(results_seen) == 1
+    def test_on_tool_result_fires(self):
+        client = build_app()
+        _MOCK.queue_tool_use("compute_tool", {"value": 5})
+        _MOCK.queue_response(_completion("computed"))
+        r = client.post("/agent/run-tool-result-hook", json={"prompt": "compute"})
+        assert r.status_code == 200
+        assert r.json()["results_count"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -266,17 +308,10 @@ class TestReActLifecycleHooks:
 
 
 class TestReActMaxTurns:
-    async def test_max_turns_sets_stop_reason(self):
-        runner, mock = _make_runner_with_tools(search_tool)
-
-        @use_tools(search_tool)
-        @agent(model="mock-model", max_turns=1)
-        class TightAgent: ...
-
-        # Queue tool_use so the loop exhausts max_turns
-        mock.queue_tool_use("search_tool", {"query": "x"})
-        mock.queue_tool_use("search_tool", {"query": "y"})
-
-        # Runner exhausts max_turns and returns stop_reason="max_turns"
-        resp = await runner.run(TightAgent(), "go")
-        assert resp.stop_reason in ("max_turns", "end_turn")
+    def test_max_turns_sets_stop_reason(self):
+        client = build_app()
+        _MOCK.queue_tool_use("search_tool", {"query": "x"})
+        _MOCK.queue_tool_use("search_tool", {"query": "y"})
+        r = client.post("/agent/run-max-turns", json={"prompt": "go", "max_turns": 1})
+        assert r.status_code == 200
+        assert r.json()["stop_reason"] in ("max_turns", "end_turn")

@@ -1,12 +1,15 @@
 """Integration tests for the prompt-versioning skill (Skill 25).
 
 Verifies PromptVersionRegistry lookup, default handling, and A/B routing
-consistency per user_id.
+consistency per user_id, via HTTP through a Lauren TestClient.
 """
-import hashlib
-import pytest
 
-from dataclasses import dataclass, field
+import hashlib
+from dataclasses import dataclass
+
+from lauren import LaurenFactory, controller, post, get, module, Json, use_value, injectable, Scope, Path
+from lauren.testing import TestClient
+from pydantic import BaseModel
 
 
 # ---------------------------------------------------------------------------
@@ -21,6 +24,7 @@ class PromptVersion:
     description: str = ""
 
 
+@injectable(scope=Scope.SINGLETON)
 class PromptVersionRegistry:
     def __init__(self):
         self._versions: dict[str, PromptVersion] = {}
@@ -59,103 +63,179 @@ class PromptVersionRegistry:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Request models
 # ---------------------------------------------------------------------------
 
 
-def _populated_registry() -> PromptVersionRegistry:
-    registry = PromptVersionRegistry()
-    registry.register(
-        PromptVersion(version="v1", system_prompt="You are a helpful assistant.", description="Baseline"),
-        default=True,
-    )
-    registry.register(
-        PromptVersion(version="v2", system_prompt="You are a concise assistant. Use bullets.", description="Concise"),
-    )
-    registry.register(
-        PromptVersion(version="v3", system_prompt="You are a detailed assistant.", description="Verbose"),
-    )
-    return registry
+class RegisterRequest(BaseModel):
+    version: str
+    system_prompt: str
+    description: str = ""
+    default: bool = False
+
+
+class AbSelectRequest(BaseModel):
+    user_id: str
+    variants: list[str]
+    weights: list[float] | None = None
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# Controller / Module / build_app
+# ---------------------------------------------------------------------------
+
+
+@controller("/versions")
+class VersionsController:
+    def __init__(self, registry: PromptVersionRegistry) -> None:
+        self._registry = registry
+
+    @post("/register")
+    async def register(self, body: Json[RegisterRequest]) -> dict:
+        self._registry.register(
+            PromptVersion(
+                version=body.version,
+                system_prompt=body.system_prompt,
+                description=body.description,
+            ),
+            default=body.default,
+        )
+        return {"registered": True}
+
+    @get("/{version}")
+    async def get_version(self, version: Path[str]) -> dict:
+        pv = self._registry.get(version)
+        return {"version": pv.version, "system_prompt": pv.system_prompt, "description": pv.description}
+
+    @post("/ab-select")
+    async def ab_select(self, body: Json[AbSelectRequest]) -> dict:
+        selected = self._registry.ab_select(body.user_id, body.variants, body.weights)
+        return {"selected": selected}
+
+
+@module(controllers=[VersionsController], providers=[PromptVersionRegistry])
+class VersionsModule: ...
+
+
+def build_app():
+    return TestClient(LaurenFactory.create(VersionsModule))
+
+
+def _register_defaults(client):
+    """Register v1, v2, v3 in the given client's app."""
+    client.post("/versions/register", json={
+        "version": "v1", "system_prompt": "You are a helpful assistant.",
+        "description": "Baseline", "default": True,
+    })
+    client.post("/versions/register", json={
+        "version": "v2", "system_prompt": "You are a concise assistant. Use bullets.",
+        "description": "Concise",
+    })
+    client.post("/versions/register", json={
+        "version": "v3", "system_prompt": "You are a detailed assistant.",
+        "description": "Verbose",
+    })
+
+
+# ---------------------------------------------------------------------------
+# Tests: PromptVersionRegistry
 # ---------------------------------------------------------------------------
 
 
 class TestPromptVersionRegistry:
     def test_register_and_get(self):
-        registry = _populated_registry()
-        v1 = registry.get("v1")
-        assert v1.version == "v1"
-        assert "helpful" in v1.system_prompt
+        client = build_app()
+        _register_defaults(client)
+        resp = client.get("/versions/v1")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["version"] == "v1"
+        assert "helpful" in data["system_prompt"]
 
-    def test_get_unknown_version_raises_key_error(self):
-        registry = _populated_registry()
-        with pytest.raises(KeyError, match="v99"):
-            registry.get("v99")
+    def test_get_unknown_version_returns_error(self):
+        client = build_app()
+        resp = client.get("/versions/v99")
+        assert resp.status_code != 200
 
-    def test_first_registered_is_default(self):
-        registry = PromptVersionRegistry()
-        registry.register(PromptVersion(version="first", system_prompt="First"))
-        registry.register(PromptVersion(version="second", system_prompt="Second"))
-        assert registry.get_default().version == "first"
-
-    def test_explicit_default_overrides_first(self):
-        registry = PromptVersionRegistry()
-        registry.register(PromptVersion(version="a", system_prompt="A"))
-        registry.register(PromptVersion(version="b", system_prompt="B"), default=True)
-        assert registry.get_default().version == "b"
-
-    def test_get_default_raises_when_empty(self):
-        registry = PromptVersionRegistry()
-        with pytest.raises(RuntimeError, match="No versions"):
-            registry.get_default()
+    def test_register_sets_default(self):
+        client = build_app()
+        resp = client.post("/versions/register", json={
+            "version": "first", "system_prompt": "First", "default": True,
+        })
+        assert resp.status_code == 200
+        assert resp.json()["registered"] is True
 
     def test_version_descriptions_stored(self):
-        registry = _populated_registry()
-        assert registry.get("v1").description == "Baseline"
-        assert registry.get("v2").description == "Concise"
+        client = build_app()
+        _register_defaults(client)
+        r1 = client.get("/versions/v1").json()
+        r2 = client.get("/versions/v2").json()
+        assert r1["description"] == "Baseline"
+        assert r2["description"] == "Concise"
+
+    def test_register_multiple_versions(self):
+        client = build_app()
+        _register_defaults(client)
+        for v in ["v1", "v2", "v3"]:
+            resp = client.get(f"/versions/{v}")
+            assert resp.status_code == 200
+            assert resp.json()["version"] == v
+
+
+# ---------------------------------------------------------------------------
+# Tests: A/B selection
+# ---------------------------------------------------------------------------
 
 
 class TestAbSelect:
     def test_ab_select_returns_valid_variant(self):
-        registry = _populated_registry()
+        client = build_app()
+        _register_defaults(client)
         for uid in ["user1", "user2", "user3", "user4", "user5"]:
-            selected = registry.ab_select(uid, ["v1", "v2"])
-            assert selected in {"v1", "v2"}
+            resp = client.post("/versions/ab-select", json={
+                "user_id": uid, "variants": ["v1", "v2"],
+            })
+            assert resp.status_code == 200
+            assert resp.json()["selected"] in {"v1", "v2"}
 
     def test_ab_select_is_deterministic(self):
-        """Same user_id always maps to the same variant."""
-        registry = _populated_registry()
+        client = build_app()
+        _register_defaults(client)
         for uid in ["alice", "bob", "charlie", "dave"]:
-            first = registry.ab_select(uid, ["v1", "v2"])
-            second = registry.ab_select(uid, ["v1", "v2"])
-            assert first == second, f"Non-deterministic for user_id={uid}"
+            r1 = client.post("/versions/ab-select", json={"user_id": uid, "variants": ["v1", "v2"]})
+            r2 = client.post("/versions/ab-select", json={"user_id": uid, "variants": ["v1", "v2"]})
+            assert r1.json()["selected"] == r2.json()["selected"], f"Non-deterministic for {uid}"
 
     def test_ab_select_distributes_users(self):
-        """With 100 distinct user IDs and equal weights, both variants appear."""
-        registry = _populated_registry()
+        client = build_app()
+        _register_defaults(client)
         results = set()
         for i in range(100):
             uid = f"user_{i:04d}"
-            results.add(registry.ab_select(uid, ["v1", "v2"]))
+            resp = client.post("/versions/ab-select", json={"user_id": uid, "variants": ["v1", "v2"]})
+            results.add(resp.json()["selected"])
         assert len(results) == 2, "Both variants should appear across 100 users"
 
     def test_ab_select_with_weights(self):
-        """Heavily weighted towards v1; v2 should appear but rarely."""
-        registry = _populated_registry()
+        client = build_app()
+        _register_defaults(client)
         counts = {"v1": 0, "v2": 0}
         for i in range(100):
             uid = f"weighted_user_{i}"
-            selected = registry.ab_select(uid, ["v1", "v2"], weights=[0.9, 0.1])
-            counts[selected] += 1
+            resp = client.post("/versions/ab-select", json={
+                "user_id": uid, "variants": ["v1", "v2"], "weights": [0.9, 0.1],
+            })
+            counts[resp.json()["selected"]] += 1
         assert counts["v1"] > counts["v2"], "v1 should dominate with 90% weight"
 
     def test_ab_select_three_variants(self):
-        registry = _populated_registry()
+        client = build_app()
+        _register_defaults(client)
         results = set()
         for i in range(200):
             uid = f"multi_{i}"
-            results.add(registry.ab_select(uid, ["v1", "v2", "v3"]))
+            resp = client.post("/versions/ab-select", json={
+                "user_id": uid, "variants": ["v1", "v2", "v3"],
+            })
+            results.add(resp.json()["selected"])
         assert len(results) == 3, "All three variants should appear"

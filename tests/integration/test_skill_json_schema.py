@@ -10,13 +10,13 @@ Tests cover:
 - Agent completion with JSON system prompt
 """
 
-from __future__ import annotations
-
 import json
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from lauren import LaurenFactory, controller, get, post, module, injectable, Scope, use_value, Json
+from lauren.testing import TestClient
 from lauren_ai import (
     JSONOutputParser,
     LLMConfig,
@@ -31,27 +31,8 @@ from lauren_ai._transport._mock import MockTransport
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helper
 # ---------------------------------------------------------------------------
-
-
-def _completion(content: str, *, id: str = "c1") -> Completion:
-    return Completion(
-        id=id,
-        model="mock-model",
-        content=content,
-        tool_calls=[],
-        stop_reason="end_turn",
-        usage=TokenUsage(input_tokens=10, output_tokens=10),
-    )
-
-
-def _make_runner(mock: MockTransport | None = None) -> tuple[AgentRunner, MockTransport]:
-    if mock is None:
-        mock = MockTransport()
-    cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, tools={}, config=cfg)
-    return runner, mock
 
 
 def parse_json_response(content: str, schema: type[BaseModel]) -> BaseModel:
@@ -77,6 +58,86 @@ class OrderInfo(BaseModel):
     order_id: str
     total: float
     items: list[str] = []
+
+
+# ---------------------------------------------------------------------------
+# Module-level mock
+# ---------------------------------------------------------------------------
+
+_MOCK = MockTransport()
+
+
+def _completion(content: str, *, id: str = "c1") -> Completion:
+    return Completion(
+        id=id,
+        model="mock-model",
+        content=content,
+        tool_calls=[],
+        stop_reason="end_turn",
+        usage=TokenUsage(input_tokens=10, output_tokens=10),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Controller / Module
+# ---------------------------------------------------------------------------
+
+
+class _ValidateRequest(BaseModel):
+    json_str: str
+
+
+class _AgentRequest(BaseModel):
+    prompt: str
+
+
+@controller("/schema")
+class SchemaController:
+    def __init__(self, mock: MockTransport) -> None:
+        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
+        self._runner = AgentRunner(transport=mock, tools={}, config=cfg)
+
+    @post("/validate-product")
+    async def validate_product(self, body: Json[_ValidateRequest]) -> dict:
+        result = parse_json_response(body.json_str, ProductInfo)
+        return {"name": result.name, "price": result.price, "in_stock": result.in_stock}
+
+    @post("/validate-order")
+    async def validate_order(self, body: Json[_ValidateRequest]) -> dict:
+        result = parse_json_response(body.json_str, OrderInfo)
+        return {"order_id": result.order_id, "total": result.total, "items": result.items}
+
+    @post("/agent-product")
+    async def agent_product(self, body: Json[_AgentRequest]) -> dict:
+        @agent(model="mock-model", system='Always return JSON: {"name": str, "price": float, "in_stock": bool}')
+        class ProductAgent: ...
+
+        resp = await self._runner.run(ProductAgent(), body.prompt)
+        result = parse_json_response(resp.content, ProductInfo)
+        return {"name": result.name, "price": result.price, "in_stock": result.in_stock}
+
+    @post("/agent-order")
+    async def agent_order(self, body: Json[_AgentRequest]) -> dict:
+        @agent(model="mock-model")
+        class OrderAgent: ...
+
+        resp = await self._runner.run(OrderAgent(), body.prompt)
+        result = parse_json_response(resp.content, OrderInfo)
+        return {"order_id": result.order_id, "total": result.total}
+
+
+@module(
+    controllers=[SchemaController],
+    providers=[use_value(provide=MockTransport, value=_MOCK)],
+)
+class JSONSchemaModule: ...
+
+
+def build_app(*responses: str) -> TestClient:
+    _MOCK.reset()
+    for content in responses:
+        _MOCK.queue_response(_completion(content))
+    return TestClient(LaurenFactory.create(JSONSchemaModule))
 
 
 # ---------------------------------------------------------------------------
@@ -172,30 +233,21 @@ class TestParseJsonResponseHelper:
 
 
 # ---------------------------------------------------------------------------
-# TestAgentJSONSchemaPattern
+# TestAgentJSONSchemaPattern (via TestClient)
 # ---------------------------------------------------------------------------
 
 
 class TestAgentJSONSchemaPattern:
-    async def test_agent_returns_valid_product_json(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion('{"name": "Widget", "price": 9.99, "in_stock": true}'))
+    def test_agent_returns_valid_product_json(self):
+        client = build_app('{"name": "Widget", "price": 9.99, "in_stock": true}')
+        r = client.post("/schema/agent-product", json={"prompt": "Describe product #42"})
+        assert r.status_code == 200
+        assert r.json()["name"] == "Widget"
 
-        @agent(model="mock-model", system='Always return JSON: {"name": str, "price": float, "in_stock": bool}')
-        class ProductAgent: ...
-
-        resp = await runner.run(ProductAgent(), "Describe product #42")
-        result = parse_json_response(resp.content, ProductInfo)
-        assert result.name == "Widget"
-
-    async def test_agent_returns_order_json(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion('{"order_id": "O-999", "total": 75.5, "items": ["item1"]}'))
-
-        @agent(model="mock-model")
-        class OrderAgent: ...
-
-        resp = await runner.run(OrderAgent(), "Get order details")
-        result = parse_json_response(resp.content, OrderInfo)
-        assert result.order_id == "O-999"
-        assert result.total == pytest.approx(75.5)
+    def test_agent_returns_order_json(self):
+        client = build_app('{"order_id": "O-999", "total": 75.5, "items": ["item1"]}')
+        r = client.post("/schema/agent-order", json={"prompt": "Get order details"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["order_id"] == "O-999"
+        assert data["total"] == pytest.approx(75.5)

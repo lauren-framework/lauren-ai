@@ -78,6 +78,7 @@ nav:
     - Overview: guides/index.md
     - LLM Calls: guides/llm-calls.md
     - Tools: guides/tools.md
+    - Custom Tool Decorators: guides/tool-decorators.md
     - Agents: guides/agents.md
     - Memory: guides/memory.md
     - User Memory: guides/user-memory.md

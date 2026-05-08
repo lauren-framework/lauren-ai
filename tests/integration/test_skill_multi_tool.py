@@ -12,7 +12,10 @@ NOTE: No `from __future__ import annotations` — @tool() needs live annotations
 """
 
 import pytest
+from pydantic import BaseModel
 
+from lauren import LaurenFactory, controller, get, post, module, injectable, Scope, use_value, Json
+from lauren.testing import TestClient
 from lauren_ai._agents import agent, use_tools
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
 from lauren_ai._config import LLMConfig
@@ -61,8 +64,10 @@ async def get_stock_price(symbol: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Module-level mock
 # ---------------------------------------------------------------------------
+
+_MOCK = MockTransport()
 
 
 def _completion(content: str = "OK", *, n: int = 1) -> Completion:
@@ -76,147 +81,171 @@ def _completion(content: str = "OK", *, n: int = 1) -> Completion:
     )
 
 
-def _make_runner_with_tools(*tool_funcs) -> tuple[AgentRunner, MockTransport]:
-    mock = MockTransport()
-    tools = {}
-    for t in tool_funcs:
-        _add_to_tool_map(tools, t)
-    cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, tools=tools, config=cfg)
-    return runner, mock
-
-
 # ---------------------------------------------------------------------------
-# TestMultiToolAttachment
+# Controller / Module
 # ---------------------------------------------------------------------------
 
 
-class TestMultiToolAttachment:
-    async def test_two_tools_sequential_calls(self):
-        runner, mock = _make_runner_with_tools(search_web, calculate)
+class _RunRequest(BaseModel):
+    prompt: str = "hi"
 
+
+@controller("/agent")
+class MultiToolController:
+    def __init__(self, mock: MockTransport) -> None:
+        tools = {}
+        _add_to_tool_map(tools, search_web)
+        _add_to_tool_map(tools, calculate)
+        _add_to_tool_map(tools, get_stock_price)
+        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
+        self._runner = AgentRunner(transport=mock, tools=tools, config=cfg)
+        self._mock = mock
+
+    @post("/run-research")
+    async def run_research(self, body: Json[_RunRequest]) -> dict:
         @use_tools(search_web, calculate)
         @agent(model="mock-model")
         class ResearchAgent: ...
 
-        mock.queue_tool_use("search_web", {"query": "AI trends"})
-        mock.queue_tool_use("calculate", {"expression": "42 * 2"})
-        mock.queue_response(_completion("Searched and calculated. Answer is 84."))
+        resp = await self._runner.run(ResearchAgent(), body.prompt)
+        return {
+            "content": resp.content,
+            "tool_calls_made": [t.name for t in resp.tool_calls_made],
+            "calls": len(self._mock.calls),
+        }
 
-        resp = await runner.run(ResearchAgent(), "Research AI and compute 42*2")
-        assert resp.content == "Searched and calculated. Answer is 84."
-
-    async def test_two_tool_calls_recorded(self):
-        runner, mock = _make_runner_with_tools(search_web, calculate)
-
-        @use_tools(search_web, calculate)
-        @agent(model="mock-model")
-        class ResearchAgent: ...
-
-        mock.queue_tool_use("search_web", {"query": "news"})
-        mock.queue_tool_use("calculate", {"expression": "1 + 1"})
-        mock.queue_response(_completion("Done"))
-
-        resp = await runner.run(ResearchAgent(), "do both")
-        assert len(resp.tool_calls_made) == 2
-
-    async def test_first_tool_name_correct(self):
-        runner, mock = _make_runner_with_tools(search_web, calculate)
-
-        @use_tools(search_web, calculate)
-        @agent(model="mock-model")
-        class ResearchAgent: ...
-
-        mock.queue_tool_use("search_web", {"query": "news"})
-        mock.queue_tool_use("calculate", {"expression": "2 + 2"})
-        mock.queue_response(_completion("Done"))
-
-        resp = await runner.run(ResearchAgent(), "research and calculate")
-        assert resp.tool_calls_made[0].name == "search_web"
-
-    async def test_second_tool_name_correct(self):
-        runner, mock = _make_runner_with_tools(search_web, calculate)
-
-        @use_tools(search_web, calculate)
-        @agent(model="mock-model")
-        class ResearchAgent: ...
-
-        mock.queue_tool_use("search_web", {"query": "trends"})
-        mock.queue_tool_use("calculate", {"expression": "10 / 2"})
-        mock.queue_response(_completion("Done"))
-
-        resp = await runner.run(ResearchAgent(), "research and calculate")
-        assert resp.tool_calls_made[1].name == "calculate"
-
-    async def test_three_llm_calls_for_two_tool_turns(self):
-        runner, mock = _make_runner_with_tools(search_web, calculate)
-
-        @use_tools(search_web, calculate)
-        @agent(model="mock-model")
-        class ResearchAgent: ...
-
-        mock.queue_tool_use("search_web", {"query": "AI"})
-        mock.queue_tool_use("calculate", {"expression": "5 * 5"})
-        mock.queue_response(_completion("All done."))
-
-        await runner.run(ResearchAgent(), "go")
-        assert len(mock.calls) == 3
-
-    async def test_single_tool_from_multi_tool_agent(self):
-        runner, mock = _make_runner_with_tools(search_web, calculate, get_stock_price)
-
+    @post("/run-stock")
+    async def run_stock(self, body: Json[_RunRequest]) -> dict:
         @use_tools(search_web, calculate, get_stock_price)
         @agent(model="mock-model")
         class FullAgent: ...
 
-        mock.queue_tool_use("get_stock_price", {"symbol": "AAPL"})
-        mock.queue_response(_completion("AAPL is at $150."))
+        resp = await self._runner.run(FullAgent(), body.prompt)
+        return {
+            "content": resp.content,
+            "tool_calls_made": [t.name for t in resp.tool_calls_made],
+        }
 
-        resp = await runner.run(FullAgent(), "What's AAPL price?")
-        assert resp.tool_calls_made[0].name == "get_stock_price"
-
-
-# ---------------------------------------------------------------------------
-# TestMultiToolAgentConfig
-# ---------------------------------------------------------------------------
-
-
-class TestMultiToolAgentConfig:
-    async def test_parallel_tool_calls_config_accepted(self):
-        runner, mock = _make_runner_with_tools(search_web, calculate)
-
+    @post("/run-parallel")
+    async def run_parallel(self, body: Json[_RunRequest]) -> dict:
         @use_tools(search_web, calculate)
         @agent(model="mock-model", parallel_tool_calls=True)
         class ParallelAgent: ...
 
-        mock.queue_tool_use("search_web", {"query": "x"})
-        mock.queue_response(_completion("done"))
+        resp = await self._runner.run(ParallelAgent(), body.prompt)
+        return {"content": resp.content}
 
-        # Should run without error; parallel config is accepted
-        resp = await runner.run(ParallelAgent(), "go")
-        assert resp is not None
-
-    async def test_tool_error_return_policy_continues(self):
-        from lauren_ai._tools import _add_to_tool_map
-
+    @post("/run-resilient")
+    async def run_resilient(self, body: Json[_RunRequest]) -> dict:
         @tool()
         async def broken_tool(x: str) -> dict:
             """Broken tool. Args: x: any string."""
             raise RuntimeError("always broken")
 
-        tools = {}
-        _add_to_tool_map(tools, search_web)
-        _add_to_tool_map(tools, broken_tool)
-        mock = MockTransport()
+        local_tools = {}
+        _add_to_tool_map(local_tools, search_web)
+        _add_to_tool_map(local_tools, broken_tool)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, tools=tools, config=cfg)
+        local_runner = AgentRunner(transport=self._mock, tools=local_tools, config=cfg)
 
         @use_tools(search_web, broken_tool)
         @agent(model="mock-model", tool_error_policy="return_error")
         class ResilientAgent: ...
 
-        mock.queue_tool_use("broken_tool", {"x": "test"})
-        mock.queue_response(_completion("Recovered gracefully."))
+        resp = await local_runner.run(ResilientAgent(), body.prompt)
+        return {"content": resp.content}
 
-        resp = await runner.run(ResilientAgent(), "try it")
-        assert resp.content == "Recovered gracefully."
+
+@module(
+    controllers=[MultiToolController],
+    providers=[use_value(provide=MockTransport, value=_MOCK)],
+)
+class MultiToolModule: ...
+
+
+def build_app() -> TestClient:
+    _MOCK.reset()
+    return TestClient(LaurenFactory.create(MultiToolModule))
+
+
+# ---------------------------------------------------------------------------
+# TestMultiToolAttachment (via TestClient)
+# ---------------------------------------------------------------------------
+
+
+class TestMultiToolAttachment:
+    def test_two_tools_sequential_calls(self):
+        client = build_app()
+        _MOCK.queue_tool_use("search_web", {"query": "AI trends"})
+        _MOCK.queue_tool_use("calculate", {"expression": "42 * 2"})
+        _MOCK.queue_response(_completion("Searched and calculated. Answer is 84."))
+        r = client.post("/agent/run-research", json={"prompt": "Research AI and compute 42*2"})
+        assert r.status_code == 200
+        assert r.json()["content"] == "Searched and calculated. Answer is 84."
+
+    def test_two_tool_calls_recorded(self):
+        client = build_app()
+        _MOCK.queue_tool_use("search_web", {"query": "news"})
+        _MOCK.queue_tool_use("calculate", {"expression": "1 + 1"})
+        _MOCK.queue_response(_completion("Done"))
+        r = client.post("/agent/run-research", json={"prompt": "do both"})
+        assert r.status_code == 200
+        assert len(r.json()["tool_calls_made"]) == 2
+
+    def test_first_tool_name_correct(self):
+        client = build_app()
+        _MOCK.queue_tool_use("search_web", {"query": "news"})
+        _MOCK.queue_tool_use("calculate", {"expression": "2 + 2"})
+        _MOCK.queue_response(_completion("Done"))
+        r = client.post("/agent/run-research", json={"prompt": "research and calculate"})
+        assert r.status_code == 200
+        assert r.json()["tool_calls_made"][0] == "search_web"
+
+    def test_second_tool_name_correct(self):
+        client = build_app()
+        _MOCK.queue_tool_use("search_web", {"query": "trends"})
+        _MOCK.queue_tool_use("calculate", {"expression": "10 / 2"})
+        _MOCK.queue_response(_completion("Done"))
+        r = client.post("/agent/run-research", json={"prompt": "research and calculate"})
+        assert r.status_code == 200
+        assert r.json()["tool_calls_made"][1] == "calculate"
+
+    def test_three_llm_calls_for_two_tool_turns(self):
+        client = build_app()
+        _MOCK.queue_tool_use("search_web", {"query": "AI"})
+        _MOCK.queue_tool_use("calculate", {"expression": "5 * 5"})
+        _MOCK.queue_response(_completion("All done."))
+        r = client.post("/agent/run-research", json={"prompt": "go"})
+        assert r.status_code == 200
+        assert r.json()["calls"] == 3
+
+    def test_single_tool_from_multi_tool_agent(self):
+        client = build_app()
+        _MOCK.queue_tool_use("get_stock_price", {"symbol": "AAPL"})
+        _MOCK.queue_response(_completion("AAPL is at $150."))
+        r = client.post("/agent/run-stock", json={"prompt": "What's AAPL price?"})
+        assert r.status_code == 200
+        assert r.json()["tool_calls_made"][0] == "get_stock_price"
+
+
+# ---------------------------------------------------------------------------
+# TestMultiToolAgentConfig (via TestClient)
+# ---------------------------------------------------------------------------
+
+
+class TestMultiToolAgentConfig:
+    def test_parallel_tool_calls_config_accepted(self):
+        client = build_app()
+        _MOCK.queue_tool_use("search_web", {"query": "x"})
+        _MOCK.queue_response(_completion("done"))
+        r = client.post("/agent/run-parallel", json={"prompt": "go"})
+        assert r.status_code == 200
+        assert r.json()["content"] is not None
+
+    def test_tool_error_return_policy_continues(self):
+        client = build_app()
+        _MOCK.queue_tool_use("broken_tool", {"x": "test"})
+        _MOCK.queue_response(_completion("Recovered gracefully."))
+        r = client.post("/agent/run-resilient", json={"prompt": "try it"})
+        assert r.status_code == 200
+        assert r.json()["content"] == "Recovered gracefully."

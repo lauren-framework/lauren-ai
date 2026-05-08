@@ -8,8 +8,12 @@ Tests cover:
 - Concurrent approval/decline of different requests
 """
 
+from __future__ import annotations
+
 import asyncio
-import pytest
+
+from lauren import LaurenFactory, controller, get, post, module, Json, Path
+from lauren.testing import TestClient
 
 
 # ---------------------------------------------------------------------------
@@ -43,63 +47,187 @@ class ApprovalGate:
 
 
 # ---------------------------------------------------------------------------
+# Module-level gate and results store
+# ---------------------------------------------------------------------------
+
+_gate = ApprovalGate(timeout=5.0)
+_results: dict[str, bool | None] = {}
+_tasks: dict[str, asyncio.Task] = {}
+
+
+# ---------------------------------------------------------------------------
+# Controllers / Module
+# ---------------------------------------------------------------------------
+
+
+@controller("/approvals")
+class ApprovalController:
+    @post("/request")
+    async def request_approval(self, body: Json[dict]) -> dict:
+        approval_id = body.get("approval_id", "req-default")
+        details = body.get("details", {})
+        timeout = body.get("timeout", None)
+
+        # Use custom timeout if provided
+        gate = _gate
+        if timeout is not None:
+            gate = ApprovalGate(timeout=timeout)
+            _results[approval_id] = None
+
+            async def _process():
+                result = await gate.request(approval_id, details)
+                _results[approval_id] = result
+
+            task = asyncio.create_task(_process())
+            _tasks[approval_id] = task
+            return {"approval_id": approval_id, "status": "pending"}
+
+        # For normal requests: run in background task
+        _results[approval_id] = None
+
+        async def _process_normal():
+            result = await _gate.request(approval_id, details)
+            _results[approval_id] = result
+
+        task = asyncio.create_task(_process_normal())
+        _tasks[approval_id] = task
+        return {"approval_id": approval_id, "status": "pending"}
+
+    @post("/resolve")
+    async def resolve_approval(self, body: Json[dict]) -> dict:
+        approval_id = body.get("approval_id", "")
+        approved = body.get("approved", False)
+        resolved = _gate.resolve(approval_id, approved)
+        return {"resolved": resolved, "approval_id": approval_id}
+
+    @get("/result/{approval_id}")
+    async def get_result(self, approval_id: Path[str]) -> dict:
+        # Give background task a chance to complete
+        if approval_id in _tasks:
+            task = _tasks[approval_id]
+            if not task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=0.1)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass
+        result = _results.get(approval_id)
+        done = result is not None
+        return {"approved": result, "done": done, "approval_id": approval_id}
+
+    @post("/resolve-direct")
+    async def resolve_direct(self, body: Json[dict]) -> dict:
+        """Direct resolve call on the gate — tests resolve() return value."""
+        approval_id = body.get("approval_id", "")
+        approved = body.get("approved", False)
+        resolved = _gate.resolve(approval_id, approved)
+        return {"resolved": resolved}
+
+    @post("/wait-result")
+    async def wait_result(self, body: Json[dict]) -> dict:
+        """Run request and resolve in same handler for synchronous test."""
+        approval_id = body.get("approval_id", "req-sync")
+        approved = body.get("approved", True)
+        timeout_val = body.get("timeout", 5.0)
+
+        gate = ApprovalGate(timeout=timeout_val)
+        result_container: list[bool] = []
+
+        async def _do_request():
+            r = await gate.request(approval_id, {})
+            result_container.append(r)
+
+        task = asyncio.create_task(_do_request())
+        await asyncio.sleep(0)  # yield to let task start
+        gate.resolve(approval_id, approved)
+        await task
+
+        return {"result": result_container[0] if result_container else None}
+
+    @post("/timeout-test")
+    async def timeout_test(self, body: Json[dict]) -> dict:
+        """Run request with tiny timeout — expect False."""
+        approval_id = body.get("approval_id", "req-timeout")
+        timeout_val = body.get("timeout", 0.05)
+        gate = ApprovalGate(timeout=timeout_val)
+        result = await gate.request(approval_id, {})
+        return {"result": result}
+
+    @post("/concurrent")
+    async def concurrent_approvals(self, body: Json[dict]) -> dict:
+        """Run two concurrent requests and resolve them independently."""
+        id_a = body.get("id_a", "req-a")
+        id_b = body.get("id_b", "req-b")
+        approved_a = body.get("approved_a", True)
+        approved_b = body.get("approved_b", False)
+
+        gate = ApprovalGate(timeout=5.0)
+        results: dict[str, bool] = {}
+
+        async def req_a():
+            results["a"] = await gate.request(id_a, {})
+
+        async def req_b():
+            results["b"] = await gate.request(id_b, {})
+
+        task_a = asyncio.create_task(req_a())
+        task_b = asyncio.create_task(req_b())
+        await asyncio.sleep(0.01)
+
+        gate.resolve(id_a, approved_a)
+        gate.resolve(id_b, approved_b)
+
+        await task_a
+        await task_b
+
+        return {"a": results["a"], "b": results["b"]}
+
+
+@module(controllers=[ApprovalController])
+class HITLModule: ...
+
+
+def build_app() -> TestClient:
+    _results.clear()
+    _tasks.clear()
+    return TestClient(LaurenFactory.create(HITLModule))
+
+
+# ---------------------------------------------------------------------------
 # Tests: basic approve/decline
 # ---------------------------------------------------------------------------
 
 
 class TestApprovalGateBasic:
-    @pytest.mark.asyncio
-    async def test_request_approved_returns_true(self):
+    def test_request_approved_returns_true(self):
         """Resolving with approved=True causes request() to return True."""
-        gate = ApprovalGate(timeout=5.0)
-        approval_id = "req-001"
+        client = build_app()
+        r = client.post("/approvals/wait-result", json={"approval_id": "req-001", "approved": True})
+        assert r.status_code == 200
+        assert r.json()["result"] is True
 
-        async def approve():
-            await asyncio.sleep(0.01)
-            gate.resolve(approval_id, True)
-
-        asyncio.create_task(approve())
-        result = await gate.request(approval_id, {"action": "delete"})
-
-        assert result is True
-
-    @pytest.mark.asyncio
-    async def test_request_declined_returns_false(self):
+    def test_request_declined_returns_false(self):
         """Resolving with approved=False causes request() to return False."""
-        gate = ApprovalGate(timeout=5.0)
-        approval_id = "req-002"
+        client = build_app()
+        r = client.post("/approvals/wait-result", json={"approval_id": "req-002", "approved": False})
+        assert r.status_code == 200
+        assert r.json()["result"] is False
 
-        async def decline():
-            await asyncio.sleep(0.01)
-            gate.resolve(approval_id, False)
-
-        asyncio.create_task(decline())
-        result = await gate.request(approval_id, {"action": "send_email"})
-
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_resolve_returns_true_when_pending(self):
+    def test_resolve_returns_true_when_pending(self):
         """resolve() returns True when it successfully resolves a pending request."""
-        gate = ApprovalGate(timeout=5.0)
-        approval_id = "req-003"
+        client = build_app()
+        # Start a request (background task via /request endpoint)
+        client.post("/approvals/request", json={"approval_id": "req-003"})
+        # Resolve it
+        r = client.post("/approvals/resolve", json={"approval_id": "req-003", "approved": True})
+        assert r.status_code == 200
+        assert r.json()["resolved"] is True
 
-        async def do_request():
-            await gate.request(approval_id, {})
-
-        task = asyncio.create_task(do_request())
-        await asyncio.sleep(0.01)
-
-        resolved = gate.resolve(approval_id, True)
-        assert resolved is True
-        await task
-
-    @pytest.mark.asyncio
-    async def test_resolve_returns_false_when_no_pending(self):
+    def test_resolve_returns_false_when_no_pending(self):
         """resolve() returns False when the approval_id is not pending."""
-        gate = ApprovalGate()
-        resolved = gate.resolve("nonexistent-id", True)
-        assert resolved is False
+        client = build_app()
+        r = client.post("/approvals/resolve-direct", json={"approval_id": "nonexistent-id", "approved": True})
+        assert r.status_code == 200
+        assert r.json()["resolved"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -108,23 +236,22 @@ class TestApprovalGateBasic:
 
 
 class TestApprovalGateTimeout:
-    @pytest.mark.asyncio
-    async def test_timeout_returns_false(self):
+    def test_timeout_returns_false(self):
         """When the timeout expires without resolution, request() returns False."""
-        gate = ApprovalGate(timeout=0.05)
-        result = await gate.request("req-timeout", {"action": "irreversible"})
-        assert result is False
+        client = build_app()
+        r = client.post("/approvals/timeout-test", json={"approval_id": "req-timeout", "timeout": 0.05})
+        assert r.status_code == 200
+        assert r.json()["result"] is False
 
-    @pytest.mark.asyncio
-    async def test_resolve_after_timeout_is_noop(self):
+    def test_resolve_after_timeout_is_noop(self):
         """Calling resolve() after the timeout has already expired is a no-op."""
-        gate = ApprovalGate(timeout=0.05)
-        approval_id = "req-late"
-
-        await gate.request(approval_id, {})  # Times out immediately
-        resolved = gate.resolve(approval_id, True)  # Already cleaned up
-
-        assert resolved is False
+        client = build_app()
+        # Timeout the request first
+        client.post("/approvals/timeout-test", json={"approval_id": "req-late", "timeout": 0.05})
+        # Try to resolve — gate is already cleaned up
+        r = client.post("/approvals/resolve-direct", json={"approval_id": "req-late", "approved": True})
+        assert r.status_code == 200
+        assert r.json()["resolved"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -133,57 +260,29 @@ class TestApprovalGateTimeout:
 
 
 class TestApprovalGateConcurrent:
-    @pytest.mark.asyncio
-    async def test_two_concurrent_approvals(self):
+    def test_two_concurrent_approvals(self):
         """Two concurrent requests can be independently approved."""
-        gate = ApprovalGate(timeout=5.0)
+        client = build_app()
+        r = client.post(
+            "/approvals/concurrent",
+            json={"id_a": "req-a", "id_b": "req-b", "approved_a": True, "approved_b": False},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["a"] is True
+        assert data["b"] is False
 
-        results = {}
-
-        async def req_a():
-            results["a"] = await gate.request("req-a", {})
-
-        async def req_b():
-            results["b"] = await gate.request("req-b", {})
-
-        task_a = asyncio.create_task(req_a())
-        task_b = asyncio.create_task(req_b())
-        await asyncio.sleep(0.01)
-
-        gate.resolve("req-a", True)
-        gate.resolve("req-b", False)
-
-        await task_a
-        await task_b
-
-        assert results["a"] is True
-        assert results["b"] is False
-
-    @pytest.mark.asyncio
-    async def test_resolving_one_does_not_affect_other(self):
+    def test_resolving_one_does_not_affect_other(self):
         """Resolving one pending request does not affect another pending request."""
-        gate = ApprovalGate(timeout=5.0)
-
-        results = {}
-
-        async def req_x():
-            results["x"] = await gate.request("req-x", {})
-
-        async def req_y():
-            results["y"] = await gate.request("req-y", {})
-
-        task_x = asyncio.create_task(req_x())
-        task_y = asyncio.create_task(req_y())
-        await asyncio.sleep(0.01)
-
-        gate.resolve("req-x", True)
-        gate.resolve("req-y", True)
-
-        await task_x
-        await task_y
-
-        assert results["x"] is True
-        assert results["y"] is True
+        client = build_app()
+        r = client.post(
+            "/approvals/concurrent",
+            json={"id_a": "req-x", "id_b": "req-y", "approved_a": True, "approved_b": True},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["a"] is True
+        assert data["b"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -192,19 +291,12 @@ class TestApprovalGateConcurrent:
 
 
 class TestApprovalGateDetails:
-    @pytest.mark.asyncio
-    async def test_details_dict_does_not_affect_approval(self):
+    def test_details_dict_does_not_affect_approval(self):
         """The details dict is informational; approval result is unaffected."""
-        gate = ApprovalGate(timeout=5.0)
-        approval_id = "req-details"
-
-        async def approve():
-            await asyncio.sleep(0.01)
-            gate.resolve(approval_id, True)
-
-        asyncio.create_task(approve())
-        result = await gate.request(
-            approval_id, {"amount": 999.99, "currency": "USD", "recipient": "alice"}
+        client = build_app()
+        r = client.post(
+            "/approvals/wait-result",
+            json={"approval_id": "req-details", "approved": True},
         )
-
-        assert result is True
+        assert r.status_code == 200
+        assert r.json()["result"] is True

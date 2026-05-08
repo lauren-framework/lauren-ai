@@ -13,13 +13,19 @@ Tests:
   - HTMLLoader metadata type is 'html'
   - Loaders return non-empty text for non-empty input
   - Multiple formats produce consistent output structure
+
+NOTE: No from __future__ import annotations.
 """
 
 import re
+import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-import pytest
+from pydantic import BaseModel
+
+from lauren import Json, LaurenFactory, controller, module, post
+from lauren.testing import TestClient
 
 
 # ---------------------------------------------------------------------------
@@ -69,42 +75,177 @@ class StringLoader(DocumentLoader):
 
 
 # ---------------------------------------------------------------------------
+# Request models
+# ---------------------------------------------------------------------------
+
+
+class _ContentRequest(BaseModel):
+    content: str
+
+
+# ---------------------------------------------------------------------------
+# Controllers
+# ---------------------------------------------------------------------------
+
+
+@controller("/loaders")
+class LoaderController:
+    @post("/string")
+    async def string_loader(self, body: Json[_ContentRequest]) -> dict:
+        loader = StringLoader()
+        result = loader.load(body.content)
+        return {
+            "count": len(result),
+            "text": result[0]["text"],
+            "source": result[0]["metadata"]["source"],
+            "type": result[0]["metadata"]["type"],
+            "has_text_key": "text" in result[0],
+            "has_metadata_key": "metadata" in result[0],
+            "has_source_in_meta": "source" in result[0]["metadata"],
+            "has_type_in_meta": "type" in result[0]["metadata"],
+        }
+
+    @post("/text-file")
+    async def text_file_loader(self, body: Json[_ContentRequest]) -> dict:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", encoding="utf-8", delete=False
+        ) as f:
+            f.write(body.content)
+            tmp_path = f.name
+        loader = TextLoader()
+        result = loader.load(tmp_path)
+        Path(tmp_path).unlink(missing_ok=True)
+        return {
+            "text": result[0]["text"],
+            "type": result[0]["metadata"]["type"],
+            "source_has_path": tmp_path in result[0]["metadata"]["source"],
+        }
+
+    @post("/markdown")
+    async def markdown_loader(self, body: Json[_ContentRequest]) -> dict:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", encoding="utf-8", delete=False
+        ) as f:
+            f.write(body.content)
+            tmp_path = f.name
+        loader = MarkdownLoader()
+        result = loader.load(tmp_path)
+        Path(tmp_path).unlink(missing_ok=True)
+        return {
+            "text": result[0]["text"],
+            "type": result[0]["metadata"]["type"],
+            "no_hashes": "#" not in result[0]["text"],
+            "no_double_stars": "**" not in result[0]["text"],
+            "no_backticks": "`" not in result[0]["text"],
+        }
+
+    @post("/html")
+    async def html_loader(self, body: Json[_ContentRequest]) -> dict:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".html", encoding="utf-8", delete=False
+        ) as f:
+            f.write(body.content)
+            tmp_path = f.name
+        loader = HTMLLoader()
+        result = loader.load(tmp_path)
+        Path(tmp_path).unlink(missing_ok=True)
+        text = result[0]["text"]
+        return {
+            "text": text,
+            "type": result[0]["metadata"]["type"],
+            "no_lt": "<" not in text,
+            "no_gt": ">" not in text,
+            "no_double_space": "  " not in text.strip(),
+        }
+
+    @post("/structure-check")
+    async def structure_check(self, body: Json[dict]) -> dict:
+        loader_type = body.get("loader_type", "string")
+        content = body.get("content", "test")
+
+        if loader_type == "string":
+            loader = StringLoader()
+            result = loader.load(content)
+        else:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=f".{loader_type}",
+                encoding="utf-8",
+                delete=False,
+            ) as f:
+                f.write(content)
+                tmp_path = f.name
+            if loader_type == "txt":
+                loader = TextLoader()
+            elif loader_type == "md":
+                loader = MarkdownLoader()
+            else:
+                loader = HTMLLoader()
+            result = loader.load(tmp_path)
+            Path(tmp_path).unlink(missing_ok=True)
+
+        valid = (
+            isinstance(result, list)
+            and len(result) >= 1
+            and "text" in result[0]
+            and "metadata" in result[0]
+            and "source" in result[0]["metadata"]
+            and "type" in result[0]["metadata"]
+        )
+        return {"valid": valid}
+
+
+@module(controllers=[LoaderController])
+class DocumentLoadersModule: ...
+
+
+def build_app() -> TestClient:
+    return TestClient(LaurenFactory.create(DocumentLoadersModule))
+
+
+# ---------------------------------------------------------------------------
 # Tests: StringLoader
 # ---------------------------------------------------------------------------
 
 
 class TestStringLoader:
     def test_returns_list_with_one_dict(self):
-        loader = StringLoader()
-        result = loader.load("Hello world!")
-        assert isinstance(result, list)
-        assert len(result) == 1
+        client = build_app()
+        r = client.post("/loaders/string", json={"content": "Hello world!"})
+        assert r.status_code == 200
+        assert r.json()["count"] == 1
 
     def test_result_has_text_and_metadata_keys(self):
-        loader = StringLoader()
-        result = loader.load("Hello world!")[0]
-        assert "text" in result
-        assert "metadata" in result
+        client = build_app()
+        r = client.post("/loaders/string", json={"content": "Hello world!"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["has_text_key"] is True
+        assert data["has_metadata_key"] is True
 
     def test_text_matches_source(self):
-        loader = StringLoader()
-        result = loader.load("My test content")[0]
-        assert result["text"] == "My test content"
+        client = build_app()
+        r = client.post("/loaders/string", json={"content": "My test content"})
+        assert r.status_code == 200
+        assert r.json()["text"] == "My test content"
 
     def test_metadata_source_is_string(self):
-        loader = StringLoader()
-        result = loader.load("content")[0]
-        assert result["metadata"]["source"] == "string"
+        client = build_app()
+        r = client.post("/loaders/string", json={"content": "content"})
+        assert r.status_code == 200
+        assert r.json()["source"] == "string"
 
     def test_metadata_type_is_text(self):
-        loader = StringLoader()
-        result = loader.load("content")[0]
-        assert result["metadata"]["type"] == "text"
+        client = build_app()
+        r = client.post("/loaders/string", json={"content": "content"})
+        assert r.status_code == 200
+        assert r.json()["type"] == "text"
 
     def test_empty_string_returns_empty_text(self):
-        loader = StringLoader()
-        result = loader.load("")[0]
-        assert result["text"] == ""
+        client = build_app()
+        r = client.post("/loaders/string", json={"content": ""})
+        assert r.status_code == 200
+        assert r.json()["text"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -113,34 +254,30 @@ class TestStringLoader:
 
 
 class TestTextLoader:
-    def test_reads_file_content(self, tmp_path):
-        f = tmp_path / "test.txt"
-        f.write_text("File content here.", encoding="utf-8")
-        loader = TextLoader()
-        result = loader.load(f)[0]
-        assert result["text"] == "File content here."
+    def test_reads_file_content(self):
+        client = build_app()
+        r = client.post("/loaders/text-file", json={"content": "File content here."})
+        assert r.status_code == 200
+        assert r.json()["text"] == "File content here."
 
-    def test_metadata_type_is_text(self, tmp_path):
-        f = tmp_path / "doc.txt"
-        f.write_text("content", encoding="utf-8")
-        loader = TextLoader()
-        result = loader.load(f)[0]
-        assert result["metadata"]["type"] == "text"
+    def test_metadata_type_is_text(self):
+        client = build_app()
+        r = client.post("/loaders/text-file", json={"content": "content"})
+        assert r.status_code == 200
+        assert r.json()["type"] == "text"
 
-    def test_metadata_source_is_file_path(self, tmp_path):
-        f = tmp_path / "doc.txt"
-        f.write_text("content", encoding="utf-8")
-        loader = TextLoader()
-        result = loader.load(f)[0]
-        assert str(f) in result["metadata"]["source"]
+    def test_metadata_source_is_file_path(self):
+        client = build_app()
+        r = client.post("/loaders/text-file", json={"content": "content"})
+        assert r.status_code == 200
+        assert r.json()["source_has_path"] is True
 
-    def test_multiline_content(self, tmp_path):
+    def test_multiline_content(self):
+        client = build_app()
         content = "Line 1\nLine 2\nLine 3"
-        f = tmp_path / "multi.txt"
-        f.write_text(content, encoding="utf-8")
-        loader = TextLoader()
-        result = loader.load(f)[0]
-        assert result["text"] == content
+        r = client.post("/loaders/text-file", json={"content": content})
+        assert r.status_code == 200
+        assert r.json()["text"] == content
 
 
 # ---------------------------------------------------------------------------
@@ -149,46 +286,43 @@ class TestTextLoader:
 
 
 class TestMarkdownLoader:
-    def test_strips_headings(self, tmp_path):
-        content = "# Title\n## Section\nBody text"
-        f = tmp_path / "doc.md"
-        f.write_text(content, encoding="utf-8")
-        loader = MarkdownLoader()
-        result = loader.load(f)[0]
-        assert "#" not in result["text"]
-        assert "Body text" in result["text"]
+    def test_strips_headings(self):
+        client = build_app()
+        r = client.post("/loaders/markdown", json={"content": "# Title\n## Section\nBody text"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["no_hashes"] is True
+        assert "Body text" in data["text"]
 
-    def test_strips_bold_markers(self, tmp_path):
-        content = "This is **bold** text"
-        f = tmp_path / "bold.md"
-        f.write_text(content, encoding="utf-8")
-        loader = MarkdownLoader()
-        result = loader.load(f)[0]
-        assert "**" not in result["text"]
-        assert "bold" in result["text"]
+    def test_strips_bold_markers(self):
+        client = build_app()
+        r = client.post("/loaders/markdown", json={"content": "This is **bold** text"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["no_double_stars"] is True
+        assert "bold" in data["text"]
 
-    def test_strips_inline_code_markers(self, tmp_path):
-        content = "Use `print()` to output"
-        f = tmp_path / "code.md"
-        f.write_text(content, encoding="utf-8")
-        loader = MarkdownLoader()
-        result = loader.load(f)[0]
-        assert "`" not in result["text"]
-        assert "print()" in result["text"]
+    def test_strips_inline_code_markers(self):
+        client = build_app()
+        r = client.post("/loaders/markdown", json={"content": "Use `print()` to output"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["no_backticks"] is True
+        assert "print()" in data["text"]
 
-    def test_metadata_type_is_markdown(self, tmp_path):
-        f = tmp_path / "doc.md"
-        f.write_text("# Hello", encoding="utf-8")
-        loader = MarkdownLoader()
-        result = loader.load(f)[0]
-        assert result["metadata"]["type"] == "markdown"
+    def test_metadata_type_is_markdown(self):
+        client = build_app()
+        r = client.post("/loaders/markdown", json={"content": "# Hello"})
+        assert r.status_code == 200
+        assert r.json()["type"] == "markdown"
 
-    def test_returns_non_empty_text_for_real_content(self, tmp_path):
-        f = tmp_path / "content.md"
-        f.write_text("# Title\n\nSome body text here.", encoding="utf-8")
-        loader = MarkdownLoader()
-        result = loader.load(f)[0]
-        assert len(result["text"]) > 0
+    def test_returns_non_empty_text_for_real_content(self):
+        client = build_app()
+        r = client.post(
+            "/loaders/markdown", json={"content": "# Title\n\nSome body text here."}
+        )
+        assert r.status_code == 200
+        assert len(r.json()["text"]) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -197,39 +331,41 @@ class TestMarkdownLoader:
 
 
 class TestHTMLLoader:
-    def test_strips_html_tags(self, tmp_path):
-        html = "<html><body><h1>Title</h1><p>Content</p></body></html>"
-        f = tmp_path / "doc.html"
-        f.write_text(html, encoding="utf-8")
-        loader = HTMLLoader()
-        result = loader.load(f)[0]
-        assert "<" not in result["text"]
-        assert ">" not in result["text"]
+    def test_strips_html_tags(self):
+        client = build_app()
+        r = client.post(
+            "/loaders/html",
+            json={"content": "<html><body><h1>Title</h1><p>Content</p></body></html>"},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["no_lt"] is True
+        assert data["no_gt"] is True
 
-    def test_preserves_text_content(self, tmp_path):
-        html = "<p>Hello <strong>world</strong></p>"
-        f = tmp_path / "doc.html"
-        f.write_text(html, encoding="utf-8")
-        loader = HTMLLoader()
-        result = loader.load(f)[0]
-        assert "Hello" in result["text"]
-        assert "world" in result["text"]
+    def test_preserves_text_content(self):
+        client = build_app()
+        r = client.post(
+            "/loaders/html",
+            json={"content": "<p>Hello <strong>world</strong></p>"},
+        )
+        assert r.status_code == 200
+        text = r.json()["text"]
+        assert "Hello" in text
+        assert "world" in text
 
-    def test_metadata_type_is_html(self, tmp_path):
-        f = tmp_path / "page.html"
-        f.write_text("<p>content</p>", encoding="utf-8")
-        loader = HTMLLoader()
-        result = loader.load(f)[0]
-        assert result["metadata"]["type"] == "html"
+    def test_metadata_type_is_html(self):
+        client = build_app()
+        r = client.post("/loaders/html", json={"content": "<p>content</p>"})
+        assert r.status_code == 200
+        assert r.json()["type"] == "html"
 
-    def test_collapses_whitespace(self, tmp_path):
-        html = "<p>Hello   </p>   <p>World</p>"
-        f = tmp_path / "doc.html"
-        f.write_text(html, encoding="utf-8")
-        loader = HTMLLoader()
-        result = loader.load(f)[0]
-        # Multiple spaces should be collapsed
-        assert "  " not in result["text"].strip()
+    def test_collapses_whitespace(self):
+        client = build_app()
+        r = client.post(
+            "/loaders/html", json={"content": "<p>Hello   </p>   <p>World</p>"}
+        )
+        assert r.status_code == 200
+        assert r.json()["no_double_space"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -238,33 +374,30 @@ class TestHTMLLoader:
 
 
 class TestLoaderOutputStructure:
-    def _verify_structure(self, result: list[dict]) -> None:
-        assert isinstance(result, list)
-        assert len(result) >= 1
-        for item in result:
-            assert "text" in item
-            assert "metadata" in item
-            assert "source" in item["metadata"]
-            assert "type" in item["metadata"]
-
     def test_string_loader_output_structure(self):
-        loader = StringLoader()
-        self._verify_structure(loader.load("test content"))
+        client = build_app()
+        r = client.post("/loaders/structure-check", json={"loader_type": "string", "content": "test content"})
+        assert r.status_code == 200
+        assert r.json()["valid"] is True
 
-    def test_text_loader_output_structure(self, tmp_path):
-        f = tmp_path / "t.txt"
-        f.write_text("content", encoding="utf-8")
-        loader = TextLoader()
-        self._verify_structure(loader.load(f))
+    def test_text_loader_output_structure(self):
+        client = build_app()
+        r = client.post("/loaders/structure-check", json={"loader_type": "txt", "content": "content"})
+        assert r.status_code == 200
+        assert r.json()["valid"] is True
 
-    def test_markdown_loader_output_structure(self, tmp_path):
-        f = tmp_path / "t.md"
-        f.write_text("# Title\nBody", encoding="utf-8")
-        loader = MarkdownLoader()
-        self._verify_structure(loader.load(f))
+    def test_markdown_loader_output_structure(self):
+        client = build_app()
+        r = client.post(
+            "/loaders/structure-check", json={"loader_type": "md", "content": "# Title\nBody"}
+        )
+        assert r.status_code == 200
+        assert r.json()["valid"] is True
 
-    def test_html_loader_output_structure(self, tmp_path):
-        f = tmp_path / "t.html"
-        f.write_text("<p>content</p>", encoding="utf-8")
-        loader = HTMLLoader()
-        self._verify_structure(loader.load(f))
+    def test_html_loader_output_structure(self):
+        client = build_app()
+        r = client.post(
+            "/loaders/structure-check", json={"loader_type": "html", "content": "<p>content</p>"}
+        )
+        assert r.status_code == 200
+        assert r.json()["valid"] is True

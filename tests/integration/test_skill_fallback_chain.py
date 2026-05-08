@@ -8,7 +8,10 @@ Tests cover:
 - Custom fallback_response is returned on total failure
 """
 
-import pytest
+from __future__ import annotations
+
+from lauren import LaurenFactory, controller, post, module, Json
+from lauren.testing import TestClient
 
 
 # ---------------------------------------------------------------------------
@@ -40,8 +43,122 @@ class FallbackChain:
             "content": self._fallback,
             "provider_index": -1,
             "success": False,
-            "error": str(last_error),
+            "error": str(last_error) if last_error else "",
         }
+
+
+# ---------------------------------------------------------------------------
+# Module-level state for providers
+# ---------------------------------------------------------------------------
+
+# Each build_app call wires up a new chain via the controller's __init__.
+# We pass the provider config through the request body.
+
+_FALLBACK_MSG = "I'm sorry, I cannot process this request right now."
+_CUSTOM_FALLBACK = "Service temporarily unavailable."
+
+
+async def _provider_ok(prompt: str) -> str:
+    return f"primary: {prompt}"
+
+
+async def _provider_secondary(prompt: str) -> str:
+    return f"secondary: {prompt}"
+
+
+async def _provider_fail(prompt: str) -> str:
+    raise RuntimeError("Provider unavailable")
+
+
+async def _provider_p1_fail(prompt: str) -> str:
+    raise RuntimeError("p1 failed")
+
+
+async def _provider_p2_fail(prompt: str) -> str:
+    raise RuntimeError("p2 failed")
+
+
+async def _provider_p3_ok(prompt: str) -> str:
+    return "p3 result"
+
+
+async def _provider_val_fail(prompt: str) -> str:
+    raise ValueError("p2 error")
+
+
+async def _provider_val_fail_1(prompt: str) -> str:
+    raise RuntimeError("first failure")
+
+
+async def _provider_val_fail_2(prompt: str) -> str:
+    raise RuntimeError("second failure")
+
+
+# ---------------------------------------------------------------------------
+# Controller
+# ---------------------------------------------------------------------------
+
+
+@controller("/fallback")
+class FallbackController:
+    @post("/first-only")
+    async def first_only(self, body: Json[dict]) -> dict:
+        prompt = body.get("prompt", "")
+        chain = FallbackChain(providers=[_provider_ok, _provider_secondary])
+        return await chain.execute(prompt)
+
+    @post("/primary-fails")
+    async def primary_fails(self, body: Json[dict]) -> dict:
+        prompt = body.get("prompt", "")
+        chain = FallbackChain(providers=[_provider_fail, _provider_secondary])
+        return await chain.execute(prompt)
+
+    @post("/three-providers")
+    async def three_providers(self, body: Json[dict]) -> dict:
+        prompt = body.get("prompt", "")
+        chain = FallbackChain(providers=[_provider_p1_fail, _provider_p2_fail, _provider_p3_ok])
+        return await chain.execute(prompt)
+
+    @post("/all-fail-custom")
+    async def all_fail_custom(self, body: Json[dict]) -> dict:
+        prompt = body.get("prompt", "")
+        chain = FallbackChain(
+            providers=[_provider_p1_fail, _provider_val_fail],
+            fallback_response=_CUSTOM_FALLBACK,
+        )
+        return await chain.execute(prompt)
+
+    @post("/error-message")
+    async def error_message(self, body: Json[dict]) -> dict:
+        prompt = body.get("prompt", "")
+        chain = FallbackChain(providers=[_provider_val_fail_1, _provider_val_fail_2])
+        return await chain.execute(prompt)
+
+    @post("/default-fallback")
+    async def default_fallback(self, body: Json[dict]) -> dict:
+        prompt = body.get("prompt", "")
+        chain = FallbackChain(providers=[_provider_fail])
+        return await chain.execute(prompt)
+
+    @post("/empty-providers")
+    async def empty_providers(self, body: Json[dict]) -> dict:
+        prompt = body.get("prompt", "")
+        chain = FallbackChain(providers=[], fallback_response="no providers")
+        return await chain.execute(prompt)
+
+    @post("/prompt-forwarded")
+    async def prompt_forwarded(self, body: Json[dict]) -> dict:
+        prompt = body.get("prompt", "")
+        chain = FallbackChain(providers=[_provider_ok])
+        return await chain.execute(prompt)
+
+
+@module(controllers=[FallbackController])
+class FallbackModule: ...
+
+
+def build_app() -> TestClient:
+    return TestClient(LaurenFactory.create(FallbackModule))
 
 
 # ---------------------------------------------------------------------------
@@ -50,156 +167,89 @@ class FallbackChain:
 
 
 class TestFallbackChainFirstProviderSucceeds:
-    @pytest.mark.asyncio
-    async def test_first_provider_returns_result(self):
+    def test_first_provider_returns_result(self):
         """When the first provider succeeds, its result is returned."""
+        client = build_app()
+        r = client.post("/fallback/first-only", json={"prompt": "hello"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert data["content"] == "primary: hello"
+        assert data["provider_index"] == 0
 
-        async def primary(prompt: str) -> str:
-            return f"primary: {prompt}"
-
-        async def secondary(prompt: str) -> str:
-            return f"secondary: {prompt}"
-
-        chain = FallbackChain(providers=[primary, secondary])
-        result = await chain.execute("hello")
-
-        assert result["success"] is True
-        assert result["content"] == "primary: hello"
-        assert result["provider_index"] == 0
-
-    @pytest.mark.asyncio
-    async def test_first_provider_used_when_both_work(self):
+    def test_first_provider_used_when_both_work(self):
         """provider_index is 0 when the first provider works."""
-        called = []
-
-        async def primary(prompt: str) -> str:
-            called.append("primary")
-            return "from primary"
-
-        async def secondary(prompt: str) -> str:
-            called.append("secondary")
-            return "from secondary"
-
-        chain = FallbackChain(providers=[primary, secondary])
-        await chain.execute("test")
-
-        assert called == ["primary"]
+        client = build_app()
+        r = client.post("/fallback/first-only", json={"prompt": "test"})
+        assert r.status_code == 200
+        assert r.json()["provider_index"] == 0
 
 
 class TestFallbackChainSecondaryFallback:
-    @pytest.mark.asyncio
-    async def test_second_provider_used_on_primary_failure(self):
+    def test_second_provider_used_on_primary_failure(self):
         """When the first provider raises, the second provider is tried."""
+        client = build_app()
+        r = client.post("/fallback/primary-fails", json={"prompt": "query"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert data["content"] == "secondary: query"
+        assert data["provider_index"] == 1
 
-        async def failing_primary(prompt: str) -> str:
-            raise ConnectionError("Primary unavailable")
-
-        async def working_secondary(prompt: str) -> str:
-            return f"fallback: {prompt}"
-
-        chain = FallbackChain(providers=[failing_primary, working_secondary])
-        result = await chain.execute("query")
-
-        assert result["success"] is True
-        assert result["content"] == "fallback: query"
-        assert result["provider_index"] == 1
-
-    @pytest.mark.asyncio
-    async def test_third_provider_used_when_first_two_fail(self):
+    def test_third_provider_used_when_first_two_fail(self):
         """Falls through to the third provider when the first two raise."""
-        call_order = []
-
-        async def p1(prompt: str) -> str:
-            call_order.append(1)
-            raise RuntimeError("p1 failed")
-
-        async def p2(prompt: str) -> str:
-            call_order.append(2)
-            raise RuntimeError("p2 failed")
-
-        async def p3(prompt: str) -> str:
-            call_order.append(3)
-            return "p3 result"
-
-        chain = FallbackChain(providers=[p1, p2, p3])
-        result = await chain.execute("x")
-
-        assert result["success"] is True
-        assert result["content"] == "p3 result"
-        assert result["provider_index"] == 2
-        assert call_order == [1, 2, 3]
+        client = build_app()
+        r = client.post("/fallback/three-providers", json={"prompt": "x"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert data["content"] == "p3 result"
+        assert data["provider_index"] == 2
 
 
 class TestFallbackChainAllFail:
-    @pytest.mark.asyncio
-    async def test_fallback_response_returned_when_all_providers_fail(self):
+    def test_fallback_response_returned_when_all_providers_fail(self):
         """Returns the fallback_response string when every provider raises."""
+        client = build_app()
+        r = client.post("/fallback/all-fail-custom", json={"prompt": "anything"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is False
+        assert data["content"] == _CUSTOM_FALLBACK
+        assert data["provider_index"] == -1
 
-        async def p1(prompt: str) -> str:
-            raise ValueError("p1 error")
-
-        async def p2(prompt: str) -> str:
-            raise ValueError("p2 error")
-
-        chain = FallbackChain(
-            providers=[p1, p2],
-            fallback_response="Service temporarily unavailable.",
-        )
-        result = await chain.execute("anything")
-
-        assert result["success"] is False
-        assert result["content"] == "Service temporarily unavailable."
-        assert result["provider_index"] == -1
-
-    @pytest.mark.asyncio
-    async def test_error_field_contains_last_exception_message(self):
+    def test_error_field_contains_last_exception_message(self):
         """The error field contains the last provider's exception message."""
+        client = build_app()
+        r = client.post("/fallback/error-message", json={"prompt": "test"})
+        assert r.status_code == 200
+        data = r.json()
+        assert "second failure" in data["error"]
 
-        async def p1(prompt: str) -> str:
-            raise RuntimeError("first failure")
-
-        async def p2(prompt: str) -> str:
-            raise RuntimeError("second failure")
-
-        chain = FallbackChain(providers=[p1, p2])
-        result = await chain.execute("test")
-
-        assert "second failure" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_default_fallback_message(self):
+    def test_default_fallback_message(self):
         """The default fallback message is returned when not overridden."""
+        client = build_app()
+        r = client.post("/fallback/default-fallback", json={"prompt": "query"})
+        assert r.status_code == 200
+        data = r.json()
+        assert "cannot process" in data["content"].lower()
 
-        async def p(prompt: str) -> str:
-            raise Exception("all gone")
-
-        chain = FallbackChain(providers=[p])
-        result = await chain.execute("query")
-
-        assert "cannot process" in result["content"].lower()
-
-    @pytest.mark.asyncio
-    async def test_empty_providers_returns_fallback(self):
+    def test_empty_providers_returns_fallback(self):
         """An empty providers list immediately returns the fallback response."""
-        chain = FallbackChain(providers=[], fallback_response="no providers")
-        result = await chain.execute("x")
-
-        assert result["success"] is False
-        assert result["content"] == "no providers"
-        assert result["provider_index"] == -1
+        client = build_app()
+        r = client.post("/fallback/empty-providers", json={"prompt": "x"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is False
+        assert data["content"] == "no providers"
+        assert data["provider_index"] == -1
 
 
 class TestFallbackChainPromptPropagation:
-    @pytest.mark.asyncio
-    async def test_prompt_forwarded_to_provider(self):
+    def test_prompt_forwarded_to_provider(self):
         """The original prompt is passed unchanged to the provider."""
-        received = []
-
-        async def capture(prompt: str) -> str:
-            received.append(prompt)
-            return "ok"
-
-        chain = FallbackChain(providers=[capture])
-        await chain.execute("my specific prompt")
-
-        assert received == ["my specific prompt"]
+        client = build_app()
+        r = client.post("/fallback/prompt-forwarded", json={"prompt": "my specific prompt"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["content"] == "primary: my specific prompt"

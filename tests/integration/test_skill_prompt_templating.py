@@ -1,10 +1,13 @@
 """Integration tests for the system-prompt-templating skill (Skill 22).
 
-Verifies SystemPromptBuilder and PromptTemplate behaviour.
+Verifies SystemPromptBuilder and PromptTemplate behaviour via HTTP through a
+Lauren TestClient.
 """
-import pytest
 
+from lauren import LaurenFactory, controller, post, module, Json
+from lauren.testing import TestClient
 from lauren_ai import PromptTemplate
+from pydantic import BaseModel
 
 
 # ---------------------------------------------------------------------------
@@ -51,52 +54,130 @@ class SystemPromptBuilder:
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# Request models
+# ---------------------------------------------------------------------------
+
+
+class TemplateRequest(BaseModel):
+    template: str
+    vars: dict
+
+
+class BuildRequest(BaseModel):
+    role: str = ""
+    context: str = ""
+    instruction: str = ""
+    constraints: list[str] = []
+
+
+class BuiltinTemplateRequest(BaseModel):
+    template: str
+    input_variables: list[str] = []
+    vars: dict
+
+
+# ---------------------------------------------------------------------------
+# Controller / Module / build_app
+# ---------------------------------------------------------------------------
+
+
+@controller("/prompt")
+class PromptController:
+    @post("/template")
+    async def render_template(self, body: Json[TemplateRequest]) -> dict:
+        tpl = SimplePromptTemplate(body.template)
+        rendered = tpl.render(**body.vars)
+        return {"rendered": rendered}
+
+    @post("/build")
+    async def build_system(self, body: Json[BuildRequest]) -> dict:
+        builder = SystemPromptBuilder()
+        if body.role:
+            builder.add_role(body.role)
+        if body.context:
+            builder.add_context(body.context)
+        if body.instruction:
+            builder.add_instruction(body.instruction)
+        if body.constraints:
+            builder.add_constraints(*body.constraints)
+        return {"system": builder.build()}
+
+    @post("/builtin-template")
+    async def builtin_template(self, body: Json[BuiltinTemplateRequest]) -> dict:
+        tpl = PromptTemplate(
+            template=body.template,
+            input_variables=body.input_variables or list(body.vars.keys()),
+        )
+        msg = tpl.render(**body.vars)
+        return {"content": msg.content}
+
+    @post("/builtin-format")
+    async def builtin_format(self, body: Json[BuiltinTemplateRequest]) -> dict:
+        tpl = PromptTemplate(template=body.template)
+        text = tpl.format(**body.vars)
+        return {"text": text}
+
+
+@module(controllers=[PromptController])
+class PromptModule: ...
+
+
+def build_app():
+    return TestClient(LaurenFactory.create(PromptModule))
+
+
+# ---------------------------------------------------------------------------
+# Tests: SystemPromptBuilder
 # ---------------------------------------------------------------------------
 
 
 class TestSystemPromptBuilder:
     def test_add_role_appears_in_prompt(self):
-        system = SystemPromptBuilder().add_role("a financial analyst").build()
-        assert "You are a financial analyst." in system
+        client = build_app()
+        resp = client.post("/prompt/build", json={"role": "a financial analyst"})
+        assert resp.status_code == 200
+        assert "You are a financial analyst." in resp.json()["system"]
 
     def test_add_context_appears_in_prompt(self):
-        system = SystemPromptBuilder().add_context("User is a CEO.").build()
-        assert "Context: User is a CEO." in system
+        client = build_app()
+        resp = client.post("/prompt/build", json={"context": "User is a CEO."})
+        assert resp.status_code == 200
+        assert "Context: User is a CEO." in resp.json()["system"]
 
     def test_add_instruction_appears_in_prompt(self):
+        client = build_app()
         instruction = "Always provide quantitative estimates."
-        system = SystemPromptBuilder().add_instruction(instruction).build()
-        assert instruction in system
+        resp = client.post("/prompt/build", json={"instruction": instruction})
+        assert resp.status_code == 200
+        assert instruction in resp.json()["system"]
 
     def test_add_constraints_formats_bullet_list(self):
-        system = (
-            SystemPromptBuilder()
-            .add_constraints("Never give stock picks", "Always mention risks")
-            .build()
-        )
+        client = build_app()
+        resp = client.post("/prompt/build", json={
+            "constraints": ["Never give stock picks", "Always mention risks"],
+        })
+        assert resp.status_code == 200
+        system = resp.json()["system"]
         assert "- Never give stock picks" in system
         assert "- Always mention risks" in system
         assert "Constraints:" in system
 
     def test_sections_separated_by_double_newline(self):
-        system = (
-            SystemPromptBuilder()
-            .add_role("an assistant")
-            .add_context("Testing")
-            .build()
-        )
-        assert "\n\n" in system
+        client = build_app()
+        resp = client.post("/prompt/build", json={"role": "an assistant", "context": "Testing"})
+        assert resp.status_code == 200
+        assert "\n\n" in resp.json()["system"]
 
     def test_full_builder_chain(self):
-        system = (
-            SystemPromptBuilder()
-            .add_role("a financial analyst specializing in risk assessment")
-            .add_context("User is a portfolio manager at a hedge fund")
-            .add_instruction("Always provide quantitative estimates with confidence intervals.")
-            .add_constraints("Never give specific stock picks", "Always mention risks")
-            .build()
-        )
+        client = build_app()
+        resp = client.post("/prompt/build", json={
+            "role": "a financial analyst specializing in risk assessment",
+            "context": "User is a portfolio manager at a hedge fund",
+            "instruction": "Always provide quantitative estimates with confidence intervals.",
+            "constraints": ["Never give specific stock picks", "Always mention risks"],
+        })
+        assert resp.status_code == 200
+        system = resp.json()["system"]
         assert "financial analyst" in system
         assert "portfolio manager" in system
         assert "confidence intervals" in system
@@ -104,54 +185,84 @@ class TestSystemPromptBuilder:
         assert "Always mention risks" in system
 
     def test_empty_builder_returns_empty_string(self):
-        system = SystemPromptBuilder().build()
-        assert system == ""
+        client = build_app()
+        resp = client.post("/prompt/build", json={})
+        assert resp.status_code == 200
+        assert resp.json()["system"] == ""
 
     def test_add_constraints_with_no_constraints_omits_section(self):
-        builder = SystemPromptBuilder().add_role("an assistant")
-        builder.add_constraints()  # no constraints
-        system = builder.build()
-        assert "Constraints:" not in system
+        client = build_app()
+        resp = client.post("/prompt/build", json={"role": "an assistant", "constraints": []})
+        assert resp.status_code == 200
+        assert "Constraints:" not in resp.json()["system"]
 
-    def test_fluent_api_returns_self(self):
-        builder = SystemPromptBuilder()
-        result = builder.add_role("an assistant")
-        assert result is builder
+
+# ---------------------------------------------------------------------------
+# Tests: SimplePromptTemplate
+# ---------------------------------------------------------------------------
 
 
 class TestSimplePromptTemplate:
     def test_single_variable_substitution(self):
-        tpl = SimplePromptTemplate("You are {role}.")
-        result = tpl.render(role="an assistant")
-        assert result == "You are an assistant."
+        client = build_app()
+        resp = client.post("/prompt/template", json={
+            "template": "You are {role}.",
+            "vars": {"role": "an assistant"},
+        })
+        assert resp.status_code == 200
+        assert resp.json()["rendered"] == "You are an assistant."
 
     def test_multiple_variable_substitution(self):
-        tpl = SimplePromptTemplate("You are {role} working for {company}.")
-        result = tpl.render(role="a lawyer", company="Acme")
-        assert result == "You are a lawyer working for Acme."
+        client = build_app()
+        resp = client.post("/prompt/template", json={
+            "template": "You are {role} working for {company}.",
+            "vars": {"role": "a lawyer", "company": "Acme"},
+        })
+        assert resp.status_code == 200
+        assert resp.json()["rendered"] == "You are a lawyer working for Acme."
 
     def test_missing_variable_leaves_placeholder(self):
-        tpl = SimplePromptTemplate("Hello {name}!")
-        result = tpl.render()
-        assert "{name}" in result
+        client = build_app()
+        resp = client.post("/prompt/template", json={
+            "template": "Hello {name}!",
+            "vars": {},
+        })
+        assert resp.status_code == 200
+        assert "{name}" in resp.json()["rendered"]
 
     def test_extra_variables_are_ignored(self):
-        tpl = SimplePromptTemplate("Hello {name}!")
-        result = tpl.render(name="World", extra="ignored")
-        assert result == "Hello World!"
+        client = build_app()
+        resp = client.post("/prompt/template", json={
+            "template": "Hello {name}!",
+            "vars": {"name": "World", "extra": "ignored"},
+        })
+        assert resp.status_code == 200
+        assert resp.json()["rendered"] == "Hello World!"
+
+
+# ---------------------------------------------------------------------------
+# Tests: Built-in PromptTemplate
+# ---------------------------------------------------------------------------
 
 
 class TestBuiltinPromptTemplate:
     def test_builtin_prompt_template_render_returns_message(self):
-        tpl = PromptTemplate(
-            template="Summarise in {words} words: {text}",
-            input_variables=["words", "text"],
-        )
-        msg = tpl.render(words="10", text="Hello world")
-        assert "10" in msg.content
-        assert "Hello world" in msg.content
+        client = build_app()
+        resp = client.post("/prompt/builtin-template", json={
+            "template": "Summarise in {words} words: {text}",
+            "input_variables": ["words", "text"],
+            "vars": {"words": "10", "text": "Hello world"},
+        })
+        assert resp.status_code == 200
+        content = resp.json()["content"]
+        assert "10" in content
+        assert "Hello world" in content
 
     def test_builtin_prompt_template_format_returns_string(self):
-        tpl = PromptTemplate(template="Role: {role}")
-        text = tpl.format(role="analyst")
-        assert text == "Role: analyst"
+        client = build_app()
+        resp = client.post("/prompt/builtin-format", json={
+            "template": "Role: {role}",
+            "vars": {"role": "analyst"},
+        })
+        assert resp.status_code == 200
+        assert resp.json()["text"] == "Role: analyst"

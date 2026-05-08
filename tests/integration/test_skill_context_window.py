@@ -14,8 +14,12 @@ NOTE: from __future__ import annotations IS safe here (no @tool definitions).
 
 from __future__ import annotations
 
+from pydantic import BaseModel
+
 import pytest
 
+from lauren import LaurenFactory, controller, post, module, Json
+from lauren.testing import TestClient
 from lauren_ai import ShortTermMemory, agent
 from lauren_ai._memory._stores import InMemoryConversationStore
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
@@ -27,6 +31,7 @@ from lauren_ai._transport._mock import MockTransport
 # ---------------------------------------------------------------------------
 # Helper utilities from the skill
 # ---------------------------------------------------------------------------
+
 
 def trim_messages(messages: list[dict], max_turns: int = 10) -> list[dict]:
     """Keep system message + last max_turns turns (user+assistant pairs)."""
@@ -42,9 +47,19 @@ def estimate_tokens(messages: list[dict]) -> int:
     return sum(len(str(m.get("content", ""))) // 4 for m in messages)
 
 
+def _build_messages(n_turns: int) -> list[dict]:
+    """Build n_turns of user+assistant messages."""
+    msgs = []
+    for i in range(n_turns):
+        msgs.append({"role": "user", "content": f"User message {i}"})
+        msgs.append({"role": "assistant", "content": f"Assistant reply {i}"})
+    return msgs
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _completion(content="OK", *, n=1, stop_reason="end_turn"):
     return Completion(
@@ -61,18 +76,44 @@ def _make_runner(mock=None):
     return runner, mock
 
 
-def _build_messages(n_turns: int) -> list[dict]:
-    """Build n_turns of user+assistant messages."""
-    msgs = []
-    for i in range(n_turns):
-        msgs.append({"role": "user", "content": f"User message {i}"})
-        msgs.append({"role": "assistant", "content": f"Assistant reply {i}"})
-    return msgs
+# ---------------------------------------------------------------------------
+# Controllers
+# ---------------------------------------------------------------------------
+
+
+class _TrimRequest(BaseModel):
+    messages: list[dict]
+    max_turns: int = 10
+
+
+class _EstimateRequest(BaseModel):
+    messages: list[dict]
+
+
+@controller("/trim")
+class TrimController:
+    @post("/trim-messages")
+    async def trim(self, body: Json[_TrimRequest]) -> dict:
+        trimmed = trim_messages(body.messages, body.max_turns)
+        return {"messages": trimmed, "count": len(trimmed)}
+
+    @post("/estimate-tokens")
+    async def estimate(self, body: Json[_EstimateRequest]) -> dict:
+        return {"tokens": estimate_tokens(body.messages)}
+
+
+@module(controllers=[TrimController])
+class TrimModule: ...
+
+
+def build_app() -> TestClient:
+    return TestClient(LaurenFactory.create(TrimModule))
 
 
 # ---------------------------------------------------------------------------
-# Tests: trim_messages helper
+# Tests: trim_messages helper (direct + via HTTP)
 # ---------------------------------------------------------------------------
+
 
 class TestTrimMessages:
     def test_trim_keeps_last_n_turns(self):
@@ -105,10 +146,20 @@ class TestTrimMessages:
         non_system = [m for m in trimmed if m.get("role") != "system"]
         assert len(non_system) == 20
 
+    def test_trim_via_http(self):
+        client = build_app()
+        msgs = _build_messages(20)
+        r = client.post("/trim/trim-messages", json={"messages": msgs, "max_turns": 5})
+        assert r.status_code == 200
+        data = r.json()
+        non_system = [m for m in data["messages"] if m.get("role") != "system"]
+        assert len(non_system) == 10
+
 
 # ---------------------------------------------------------------------------
 # Tests: estimate_tokens
 # ---------------------------------------------------------------------------
+
 
 class TestEstimateTokens:
     def test_estimate_non_zero_for_non_empty(self):
@@ -129,10 +180,18 @@ class TestEstimateTokens:
         total = estimate_tokens(msgs)
         assert total > 0
 
+    def test_estimate_via_http(self):
+        client = build_app()
+        msgs = [{"role": "user", "content": "Hello, how are you today?"}]
+        r = client.post("/trim/estimate-tokens", json={"messages": msgs})
+        assert r.status_code == 200
+        assert r.json()["tokens"] > 0
+
 
 # ---------------------------------------------------------------------------
 # Tests: ShortTermMemory sliding window
 # ---------------------------------------------------------------------------
+
 
 class TestShortTermMemory:
     def test_short_term_memory_configurable(self):
@@ -206,6 +265,7 @@ class TestShortTermMemory:
 # ---------------------------------------------------------------------------
 # Tests: agent with ShortTermMemory via runner
 # ---------------------------------------------------------------------------
+
 
 class TestAgentWithShortTermMemory:
     async def test_agent_runs_with_memory_config(self):

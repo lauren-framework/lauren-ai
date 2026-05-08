@@ -13,11 +13,14 @@ NOTE: Class-form tools must annotate ctx as ToolContext for context injection.
 """
 
 import pytest
+from pydantic import BaseModel
 
+from lauren import LaurenFactory, controller, get, post, module, injectable, Scope, use_value, Json
+from lauren.testing import TestClient
 from lauren_ai._agents import agent, use_tools
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
 from lauren_ai._config import LLMConfig
-from lauren_ai._tools import ToolContext, _add_to_tool_map, tool
+from lauren_ai._tools import ToolContext, TOOL_META, _add_to_tool_map, tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
 
@@ -92,17 +95,107 @@ class DelegateToTechSupport:
 
 
 # ---------------------------------------------------------------------------
+# Module-level mocks: one for orchestrator, one for specialist
+# The controller is built fresh per test via build_app()
+# ---------------------------------------------------------------------------
+
+
+class _DelegateRequest(BaseModel):
+    task: str = "Do something"
+    specialist: str = "billing"
+
+
+# We build a fresh app every call; the controller captures both mocks via closure.
+
+
+def build_app(
+    orch_responses: list | None = None,
+    spec_responses: list[str] | None = None,
+) -> tuple[TestClient, MockTransport, MockTransport]:
+    """Build TestClient with two separate mocks for orchestrator and specialist.
+
+    Returns (client, orch_mock, spec_mock).
+    """
+    orch_mock = MockTransport()
+    spec_mock = MockTransport()
+
+    if orch_responses:
+        for item in orch_responses:
+            if isinstance(item, tuple) and item[0] == "tool_use":
+                orch_mock.queue_tool_use(item[1], item[2])
+            else:
+                val = item[0] if isinstance(item, tuple) else item
+                orch_mock.queue_response(_completion(val))
+
+    if spec_responses:
+        for content in spec_responses:
+            spec_mock.queue_response(_completion(content))
+
+    # Capture mocks in closure for the controller
+    _orch = orch_mock
+    _spec = spec_mock
+
+    @controller("/delegate")
+    class BoundDelegateController:
+        @post("/run")
+        async def run(self, body: Json[_DelegateRequest]) -> dict:
+            spec_cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
+            spec_runner = AgentRunner(transport=_spec, tools={}, config=spec_cfg)
+
+            orch_cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
+
+            if body.specialist == "billing":
+                delegate_tool = DelegateToBilling(specialist_runner=spec_runner)
+                orch_tools = {}
+                _add_to_tool_map(orch_tools, DelegateToBilling, instance=delegate_tool)
+                orch_runner = AgentRunner(transport=_orch, tools=orch_tools, config=orch_cfg)
+
+                @use_tools(DelegateToBilling)
+                @agent(model="mock-model", system="Route to specialists.")
+                class OrchestratorAgent: ...
+
+                resp = await orch_runner.run(OrchestratorAgent(), body.task)
+            else:
+                delegate_tool = DelegateToTechSupport(specialist_runner=spec_runner)
+                orch_tools = {}
+                _add_to_tool_map(orch_tools, DelegateToTechSupport, instance=delegate_tool)
+                orch_runner = AgentRunner(transport=_orch, tools=orch_tools, config=orch_cfg)
+
+                @use_tools(DelegateToTechSupport)
+                @agent(model="mock-model")
+                class TechOrchestratorAgent: ...
+
+                resp = await orch_runner.run(TechOrchestratorAgent(), body.task)
+
+            specialist_messages = []
+            if _spec.calls:
+                for m in _spec.calls[0].messages:
+                    specialist_messages.append(str(m))
+
+            return {
+                "content": resp.content,
+                "orch_calls": len(_orch.calls),
+                "spec_calls": len(_spec.calls),
+                "tool_calls_made": [t.name for t in resp.tool_calls_made],
+                "specialist_messages": specialist_messages,
+            }
+
+    @module(controllers=[BoundDelegateController])
+    class BoundModule: ...
+
+    return TestClient(LaurenFactory.create(BoundModule)), orch_mock, spec_mock
+
+
+# ---------------------------------------------------------------------------
 # TestDelegationToolInstantiation
 # ---------------------------------------------------------------------------
 
 
 class TestDelegationToolInstantiation:
     def test_delegate_to_billing_has_tool_meta(self):
-        from lauren_ai._tools import TOOL_META
         assert hasattr(DelegateToBilling, TOOL_META)
 
     def test_delegate_to_tech_support_has_tool_meta(self):
-        from lauren_ai._tools import TOOL_META
         assert hasattr(DelegateToTechSupport, TOOL_META)
 
     def test_delegate_tool_instantiates_with_runner(self):
@@ -114,126 +207,48 @@ class TestDelegationToolInstantiation:
 
 
 # ---------------------------------------------------------------------------
-# TestOrchestratorDelegation (two separate mocks: one for orchestrator, one for specialist)
+# TestOrchestratorDelegation (via TestClient)
 # ---------------------------------------------------------------------------
 
 
 class TestOrchestratorDelegation:
-    async def test_orchestrator_delegates_and_gets_result(self):
-        """
-        Two separate mocks: one for the orchestrator runner, one for the specialist runner.
-        The delegation tool uses the specialist runner internally.
-        Note: @tool() class name DelegateToBilling is stored as 'delegate_to_billing' (snake_case).
-        """
-        # Specialist mock: queue the billing specialist response
-        specialist_mock = MockTransport()
-        specialist_mock.queue_response(_completion("Refund processed for order #42.", n=1))
+    def test_orchestrator_delegates_and_gets_result(self):
+        client, _, _ = build_app(
+            orch_responses=[("tool_use", "delegate_to_billing", {"task": "Process refund for order #42"}), "Your refund has been processed."],
+            spec_responses=["Refund processed for order #42."],
+        )
+        r = client.post("/delegate/run", json={"task": "Process refund for order #42", "specialist": "billing"})
+        assert r.status_code == 200
+        assert r.json()["content"] == "Your refund has been processed."
 
-        specialist_cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        specialist_runner = AgentRunner(transport=specialist_mock, tools={}, config=specialist_cfg)
+    def test_orchestrator_two_llm_calls(self):
+        client, _, _ = build_app(
+            orch_responses=[("tool_use", "delegate_to_tech_support", {"task": "Fix login bug"}), "Issue has been resolved."],
+            spec_responses=["Tech issue resolved."],
+        )
+        r = client.post("/delegate/run", json={"task": "Fix login bug", "specialist": "tech"})
+        assert r.status_code == 200
+        assert r.json()["orch_calls"] == 2
 
-        # Build delegation tool instance
-        delegate_tool = DelegateToBilling(specialist_runner=specialist_runner)
+    def test_specialist_receives_task_message(self):
+        client, _, _ = build_app(
+            orch_responses=[("tool_use", "delegate_to_billing", {"task": "Handle refund for order X"}), "Done."],
+            spec_responses=["Handled."],
+        )
+        r = client.post("/delegate/run", json={"task": "Handle refund for order X", "specialist": "billing"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["spec_calls"] == 1
+        specialist_messages_str = str(data["specialist_messages"])
+        assert "Handle refund for order X" in specialist_messages_str
 
-        # Orchestrator mock: tool_call with snake_case name → final answer
-        orch_mock = MockTransport()
-        orch_mock.queue_tool_use("delegate_to_billing", {"task": "Process refund for order #42"})
-        orch_mock.queue_response(_completion("Your refund has been processed.", n=2))
-
-        tools = {}
-        _add_to_tool_map(tools, DelegateToBilling, instance=delegate_tool)
-        orch_cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        orch_runner = AgentRunner(transport=orch_mock, tools=tools, config=orch_cfg)
-
-        @use_tools(DelegateToBilling)
-        @agent(model="mock-model", system="Route to specialists.")
-        class OrchestratorAgent: ...
-
-        resp = await orch_runner.run(OrchestratorAgent(), "Process refund for order #42")
-        assert resp.content == "Your refund has been processed."
-
-    async def test_orchestrator_two_llm_calls(self):
-        specialist_mock = MockTransport()
-        specialist_mock.queue_response(_completion("Tech issue resolved.", n=1))
-
-        specialist_cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        specialist_runner = AgentRunner(transport=specialist_mock, tools={}, config=specialist_cfg)
-
-        delegate_tool = DelegateToTechSupport(specialist_runner=specialist_runner)
-
-        orch_mock = MockTransport()
-        # Tool name is snake_case: delegate_to_tech_support
-        orch_mock.queue_tool_use("delegate_to_tech_support", {"task": "Fix login bug"})
-        orch_mock.queue_response(_completion("Issue has been resolved.", n=2))
-
-        tools = {}
-        _add_to_tool_map(tools, DelegateToTechSupport, instance=delegate_tool)
-        orch_cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        orch_runner = AgentRunner(transport=orch_mock, tools=tools, config=orch_cfg)
-
-        @use_tools(DelegateToTechSupport)
-        @agent(model="mock-model")
-        class OrchestratorAgent: ...
-
-        await orch_runner.run(OrchestratorAgent(), "Fix login bug")
-        # Orchestrator: tool_use call + final answer call = 2
-        assert len(orch_mock.calls) == 2
-
-    async def test_specialist_receives_task_message(self):
-        specialist_mock = MockTransport()
-        specialist_mock.queue_response(_completion("Handled.", n=1))
-
-        specialist_cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        specialist_runner = AgentRunner(transport=specialist_mock, tools={}, config=specialist_cfg)
-
-        delegate_tool = DelegateToBilling(specialist_runner=specialist_runner)
-
-        orch_mock = MockTransport()
-        orch_mock.queue_tool_use("delegate_to_billing", {"task": "Handle refund for order X"})
-        orch_mock.queue_response(_completion("Done.", n=2))
-
-        tools = {}
-        _add_to_tool_map(tools, DelegateToBilling, instance=delegate_tool)
-        orch_cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        orch_runner = AgentRunner(transport=orch_mock, tools=tools, config=orch_cfg)
-
-        @use_tools(DelegateToBilling)
-        @agent(model="mock-model")
-        class OrchestratorAgent: ...
-
-        await orch_runner.run(OrchestratorAgent(), "Handle refund for order X")
-
-        # Specialist mock should have received 1 call
-        assert len(specialist_mock.calls) == 1
-        specialist_messages = specialist_mock.calls[0].messages
-        # The task should appear in the user message
-        user_contents = [
-            m["content"] for m in specialist_messages
-            if isinstance(m.get("content"), str) and m.get("role") == "user"
-        ]
-        assert any("Handle refund for order X" in c for c in user_contents)
-
-    async def test_delegation_result_in_tool_calls_made(self):
-        specialist_mock = MockTransport()
-        specialist_mock.queue_response(_completion("Billing done.", n=1))
-
-        specialist_cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        specialist_runner = AgentRunner(transport=specialist_mock, tools={}, config=specialist_cfg)
-        delegate_tool = DelegateToBilling(specialist_runner=specialist_runner)
-
-        orch_mock = MockTransport()
-        orch_mock.queue_tool_use("delegate_to_billing", {"task": "Refund order 9"})
-        orch_mock.queue_response(_completion("Refund done.", n=2))
-
-        tools = {}
-        _add_to_tool_map(tools, DelegateToBilling, instance=delegate_tool)
-        orch_cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        orch_runner = AgentRunner(transport=orch_mock, tools=tools, config=orch_cfg)
-
-        @use_tools(DelegateToBilling)
-        @agent(model="mock-model")
-        class OrchestratorAgent: ...
-
-        resp = await orch_runner.run(OrchestratorAgent(), "Refund order 9")
-        assert len(resp.tool_calls_made) == 1
-        assert resp.tool_calls_made[0].name == "delegate_to_billing"
+    def test_delegation_result_in_tool_calls_made(self):
+        client, _, _ = build_app(
+            orch_responses=[("tool_use", "delegate_to_billing", {"task": "Refund order 9"}), "Refund done."],
+            spec_responses=["Billing done."],
+        )
+        r = client.post("/delegate/run", json={"task": "Refund order 9", "specialist": "billing"})
+        assert r.status_code == 200
+        data = r.json()
+        assert len(data["tool_calls_made"]) == 1
+        assert data["tool_calls_made"][0] == "delegate_to_billing"

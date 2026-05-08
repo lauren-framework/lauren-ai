@@ -27,6 +27,7 @@ __all__ = [
     "ToolMeta",
     "ToolResult",
     "ToolSchema",
+    "get_tool_context_from_func_args",
     "tool",
 ]
 
@@ -110,6 +111,65 @@ class ToolContext:
         if self.agent_context is not None and hasattr(self.agent_context, "get_metadata"):
             return self.agent_context.get_metadata(key, default)
         return default
+
+
+# ---------------------------------------------------------------------------
+# Context extraction helper
+# ---------------------------------------------------------------------------
+
+
+def get_tool_context_from_func_args(*args: Any, **kwargs: Any) -> "ToolContext | None":
+    """Return the first :class:`ToolContext` found in a tool call's arguments.
+
+    The tool executor injects :class:`ToolContext` as a named keyword argument
+    (using whatever parameter name was annotated ``ToolContext`` in the tool's
+    signature), but when writing a decorator that wraps a ``run()`` method or
+    a function-form tool, the decorator typically receives the raw ``*args`` /
+    ``**kwargs`` and does not know the parameter name ahead of time.
+
+    This helper scans both positional and keyword arguments so that decorators
+    work regardless of whether the context was passed positionally (e.g. as
+    ``self, ctx, ...`` in a class-form ``run()`` method) or as a keyword
+    argument::
+
+        import functools
+        from lauren_ai import tool, ToolContext, get_tool_context_from_func_args
+
+        def require_auth(fn):
+            \"\"\"Decorator: reject the tool call when no authenticated user is present.\"\"\"
+            @functools.wraps(fn)
+            async def wrapper(*args, **kwargs):
+                ctx = get_tool_context_from_func_args(*args, **kwargs)
+                if ctx is None:
+                    raise RuntimeError("require_auth: ToolContext not found in arguments")
+                exec_ctx = ctx.execution_context
+                if exec_ctx is None or exec_ctx.request is None:
+                    return {"error": "Authentication required — no request context"}
+                user_id = exec_ctx.request.state.get("user_id")
+                if not user_id:
+                    return {"error": "Authentication required"}
+                return await fn(*args, **kwargs)
+            return wrapper
+
+        @tool()
+        class MyTool:
+            @require_auth
+            async def run(self, ctx: ToolContext, query: str) -> dict:
+                return {"result": query, "user": ctx.execution_context.request.state.user_id}
+
+    :param args: Positional arguments forwarded from the wrapping function.
+    :param kwargs: Keyword arguments forwarded from the wrapping function.
+    :returns: The :class:`ToolContext` instance if present in the call
+        arguments, or ``None`` if no ``ToolContext`` was found.
+    :rtype: ToolContext | None
+    """
+    for arg in args:
+        if isinstance(arg, ToolContext):
+            return arg
+    for val in kwargs.values():
+        if isinstance(val, ToolContext):
+            return val
+    return None
 
 
 # ---------------------------------------------------------------------------

@@ -9,8 +9,13 @@ Tests cover:
 - Permission metadata propagated via AgentContext
 """
 
-import pytest
+from __future__ import annotations
+
 from enum import Enum
+
+from lauren import LaurenFactory, controller, post, module, Json
+from lauren.testing import TestClient
+from lauren_ai._tools import tool, ToolContext
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +63,7 @@ def require_permission(required: Permission):
 
 
 # ---------------------------------------------------------------------------
-# Minimal ToolContext stub (tests run without the full DI stack)
+# Minimal ToolContext stub
 # ---------------------------------------------------------------------------
 
 
@@ -73,10 +78,8 @@ class _StubContext:
 
 
 # ---------------------------------------------------------------------------
-# Tool definitions (no from __future__ import annotations)
+# Tool definitions
 # ---------------------------------------------------------------------------
-
-from lauren_ai._tools import tool, ToolContext
 
 
 @tool()
@@ -119,52 +122,97 @@ class ReadRecordTool:
 
 
 # ---------------------------------------------------------------------------
+# Controllers / Module
+# ---------------------------------------------------------------------------
+
+
+@controller("/tools")
+class ToolsController:
+    @post("/update-record")
+    async def update_record(self, body: Json[dict]) -> dict:
+        record_id = body.get("record_id", "1")
+        data = body.get("data", "")
+        permission = body.get("permission", None)
+        ctx = _StubContext(permission)
+        tool_instance = UpdateRecordTool()
+        return await tool_instance.run(ctx, record_id=record_id, data=data)
+
+    @post("/delete-record")
+    async def delete_record(self, body: Json[dict]) -> dict:
+        record_id = body.get("record_id", "1")
+        permission = body.get("permission", None)
+        ctx = _StubContext(permission)
+        tool_instance = DeleteRecordTool()
+        return await tool_instance.run(ctx, record_id=record_id)
+
+    @post("/read-record")
+    async def read_record(self, body: Json[dict]) -> dict:
+        record_id = body.get("record_id", "1")
+        permission = body.get("permission", None)
+        ctx = _StubContext(permission)
+        tool_instance = ReadRecordTool()
+        return await tool_instance.run(ctx, record_id=record_id)
+
+
+@module(controllers=[ToolsController])
+class PermissionsModule: ...
+
+
+def build_app() -> TestClient:
+    return TestClient(LaurenFactory.create(PermissionsModule))
+
+
+# ---------------------------------------------------------------------------
 # Tests: UpdateRecordTool (requires MUTATE)
 # ---------------------------------------------------------------------------
 
 
 class TestUpdateRecordToolPermissions:
-    @pytest.mark.asyncio
-    async def test_read_only_denied(self):
+    def test_read_only_denied(self):
         """READ_ONLY permission is denied when MUTATE is required."""
-        tool_instance = UpdateRecordTool()
-        ctx = _StubContext(Permission.READ_ONLY.value)
-        result = await tool_instance.run(ctx, record_id="42", data="new data")
+        client = build_app()
+        r = client.post("/tools/update-record", json={
+            "record_id": "42", "data": "new data", "permission": "read_only"
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert "error" in data
+        assert "Permission denied" in data["error"]
+        assert "mutate" in data["error"]
 
-        assert "error" in result
-        assert "Permission denied" in result["error"]
-        assert "mutate" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_mutate_succeeds(self):
+    def test_mutate_succeeds(self):
         """MUTATE permission succeeds when MUTATE is required."""
-        tool_instance = UpdateRecordTool()
-        ctx = _StubContext(Permission.MUTATE.value)
-        result = await tool_instance.run(ctx, record_id="42", data="new data")
+        client = build_app()
+        r = client.post("/tools/update-record", json={
+            "record_id": "42", "data": "new data", "permission": "mutate"
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert "error" not in data
+        assert data["updated"] == "42"
+        assert data["data"] == "new data"
 
-        assert "error" not in result
-        assert result["updated"] == "42"
-        assert result["data"] == "new data"
-
-    @pytest.mark.asyncio
-    async def test_admin_succeeds_for_mutate_tool(self):
+    def test_admin_succeeds_for_mutate_tool(self):
         """ADMIN permission (higher rank) succeeds when MUTATE is required."""
-        tool_instance = UpdateRecordTool()
-        ctx = _StubContext(Permission.ADMIN.value)
-        result = await tool_instance.run(ctx, record_id="99", data="admin update")
+        client = build_app()
+        r = client.post("/tools/update-record", json={
+            "record_id": "99", "data": "admin update", "permission": "admin"
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert "error" not in data
+        assert data["updated"] == "99"
 
-        assert "error" not in result
-        assert result["updated"] == "99"
-
-    @pytest.mark.asyncio
-    async def test_no_permission_defaults_to_read_only_and_denied(self):
+    def test_no_permission_defaults_to_read_only_and_denied(self):
         """When no permission is set, defaults to READ_ONLY and is denied."""
-        tool_instance = UpdateRecordTool()
-        ctx = _StubContext(None)
-        result = await tool_instance.run(ctx, record_id="1", data="x")
-
-        assert "error" in result
-        assert "Permission denied" in result["error"]
+        client = build_app()
+        r = client.post("/tools/update-record", json={
+            "record_id": "1", "data": "x"
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert "error" in data
+        assert "Permission denied" in data["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -173,34 +221,36 @@ class TestUpdateRecordToolPermissions:
 
 
 class TestDeleteRecordToolPermissions:
-    @pytest.mark.asyncio
-    async def test_read_only_denied_for_admin_tool(self):
+    def test_read_only_denied_for_admin_tool(self):
         """READ_ONLY is denied when ADMIN is required."""
-        tool_instance = DeleteRecordTool()
-        ctx = _StubContext(Permission.READ_ONLY.value)
-        result = await tool_instance.run(ctx, record_id="5")
+        client = build_app()
+        r = client.post("/tools/delete-record", json={
+            "record_id": "5", "permission": "read_only"
+        })
+        assert r.status_code == 200
+        assert "error" in r.json()
 
-        assert "error" in result
-
-    @pytest.mark.asyncio
-    async def test_mutate_denied_for_admin_tool(self):
+    def test_mutate_denied_for_admin_tool(self):
         """MUTATE is denied when ADMIN is required."""
-        tool_instance = DeleteRecordTool()
-        ctx = _StubContext(Permission.MUTATE.value)
-        result = await tool_instance.run(ctx, record_id="5")
+        client = build_app()
+        r = client.post("/tools/delete-record", json={
+            "record_id": "5", "permission": "mutate"
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert "error" in data
+        assert "admin" in data["error"]
 
-        assert "error" in result
-        assert "admin" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_admin_succeeds_for_admin_tool(self):
+    def test_admin_succeeds_for_admin_tool(self):
         """ADMIN permission succeeds when ADMIN is required."""
-        tool_instance = DeleteRecordTool()
-        ctx = _StubContext(Permission.ADMIN.value)
-        result = await tool_instance.run(ctx, record_id="5")
-
-        assert "error" not in result
-        assert result["deleted"] == "5"
+        client = build_app()
+        r = client.post("/tools/delete-record", json={
+            "record_id": "5", "permission": "admin"
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert "error" not in data
+        assert data["deleted"] == "5"
 
 
 # ---------------------------------------------------------------------------
@@ -209,12 +259,11 @@ class TestDeleteRecordToolPermissions:
 
 
 class TestReadRecordToolNoGuard:
-    @pytest.mark.asyncio
-    async def test_read_tool_accessible_without_permission(self):
+    def test_read_tool_accessible_without_permission(self):
         """An unguarded tool is accessible regardless of permission level."""
-        tool_instance = ReadRecordTool()
-        ctx = _StubContext(None)
-        result = await tool_instance.run(ctx, record_id="7")
-
-        assert result["id"] == "7"
-        assert result["value"] == "data"
+        client = build_app()
+        r = client.post("/tools/read-record", json={"record_id": "7"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["id"] == "7"
+        assert data["value"] == "data"

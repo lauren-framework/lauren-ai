@@ -10,16 +10,18 @@ Tests cover:
 - base_url prefix is prepended to path URLs
 """
 
+from __future__ import annotations
+
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
+from lauren import LaurenFactory, controller, post, module, Json
+from lauren.testing import TestClient
 from lauren_ai._tools import tool, ToolContext
 
 
 # ---------------------------------------------------------------------------
-# RestAPITool implementation (inline for test isolation)
+# RestAPITool implementation
 # ---------------------------------------------------------------------------
 
 
@@ -108,71 +110,118 @@ def _mock_response(status: int = 200, text: str = "ok") -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
+# Controllers / Module
+# ---------------------------------------------------------------------------
+
+
+@controller("/api-tool")
+class APIToolController:
+    @post("/call")
+    async def call(self, body: Json[dict]) -> dict:
+        url = body.get("url", "")
+        method = body.get("method", "GET")
+        req_body = body.get("body", "")
+        headers = body.get("headers", "")
+        auth = body.get("auth", None)
+        base_url = body.get("base_url", "")
+        static_auth = body.get("static_auth", None)
+
+        tool_instance = RestAPITool(base_url=base_url, auth_header=static_auth)
+        ctx = _make_stub_ctx(auth)
+        return await tool_instance.run(ctx, url=url, method=method, body=req_body, headers=headers)
+
+    @post("/call-with-mock")
+    async def call_with_mock(self, body: Json[dict]) -> dict:
+        """Call the tool with a fully mocked httpx client."""
+        url = body.get("url", "")
+        method = body.get("method", "GET")
+        req_body = body.get("body", "")
+        auth = body.get("auth", None)
+        base_url = body.get("base_url", "")
+        static_auth = body.get("static_auth", None)
+        mock_status = body.get("mock_status", 200)
+        mock_text = body.get("mock_text", "ok")
+        mock_error = body.get("mock_error", None)
+
+        tool_instance = RestAPITool(base_url=base_url, auth_header=static_auth)
+        ctx = _make_stub_ctx(auth)
+
+        mock_resp = _mock_response(mock_status, mock_text)
+        mock_method_fn = AsyncMock(return_value=mock_resp)
+        if mock_error:
+            mock_method_fn = AsyncMock(side_effect=Exception(mock_error))
+
+        mock_client = MagicMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        setattr(mock_client, method.lower(), mock_method_fn)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await tool_instance.run(ctx, url=url, method=method, body=req_body)
+
+        # Also capture what was called
+        if not mock_error and mock_method_fn.called:
+            call_kwargs = mock_method_fn.call_args
+            called_url = call_kwargs.args[0] if call_kwargs.args else None
+            result["_called_url"] = called_url
+            result["_call_json"] = call_kwargs.kwargs.get("json")
+            result["_call_headers"] = call_kwargs.kwargs.get("headers", {})
+        return result
+
+
+@module(controllers=[APIToolController])
+class RestAPIModule: ...
+
+
+def build_app() -> TestClient:
+    return TestClient(LaurenFactory.create(RestAPIModule))
+
+
+# ---------------------------------------------------------------------------
 # Tests: HTTP method dispatch
 # ---------------------------------------------------------------------------
 
 
 class TestRestAPIToolMethods:
-    @pytest.mark.asyncio
-    async def test_get_request_is_made(self):
+    def test_get_request_is_made(self):
         """A GET request is dispatched to the provided URL."""
-        tool_instance = RestAPITool()
-        ctx = _make_stub_ctx()
+        client = build_app()
+        r = client.post("/api-tool/call-with-mock", json={
+            "url": "https://api.example.com/data",
+            "method": "GET",
+            "mock_status": 200,
+            "mock_text": '{"ok": true}',
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == 200
 
-        mock_get = AsyncMock(return_value=_mock_response(200, '{"ok": true}'))
-        mock_client = MagicMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.get = mock_get
-
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await tool_instance.run(ctx, "https://api.example.com/data")
-
-        assert result["status"] == 200
-        mock_get.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_post_request_sends_body(self):
+    def test_post_request_sends_body(self):
         """A POST request is dispatched with the parsed JSON body."""
-        tool_instance = RestAPITool()
-        ctx = _make_stub_ctx()
+        client = build_app()
+        r = client.post("/api-tool/call-with-mock", json={
+            "url": "https://api.example.com/users",
+            "method": "POST",
+            "body": json.dumps({"name": "Alice"}),
+            "mock_status": 201,
+            "mock_text": "created",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == 201
+        assert data["_call_json"] == {"name": "Alice"}
 
-        mock_post = AsyncMock(return_value=_mock_response(201, "created"))
-        mock_client = MagicMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.post = mock_post
-
-        body = json.dumps({"name": "Alice"})
-
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await tool_instance.run(
-                ctx, "https://api.example.com/users", method="POST", body=body
-            )
-
-        assert result["status"] == 201
-        call_kwargs = mock_post.call_args
-        assert call_kwargs.kwargs.get("json") == {"name": "Alice"}
-
-    @pytest.mark.asyncio
-    async def test_delete_request_is_dispatched(self):
+    def test_delete_request_is_dispatched(self):
         """A DELETE request is dispatched correctly."""
-        tool_instance = RestAPITool()
-        ctx = _make_stub_ctx()
-
-        mock_delete = AsyncMock(return_value=_mock_response(204, ""))
-        mock_client = MagicMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.delete = mock_delete
-
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await tool_instance.run(
-                ctx, "https://api.example.com/item/1", method="DELETE"
-            )
-
-        assert result["status"] == 204
-        mock_delete.assert_called_once()
+        client = build_app()
+        r = client.post("/api-tool/call-with-mock", json={
+            "url": "https://api.example.com/item/1",
+            "method": "DELETE",
+            "mock_status": 204,
+            "mock_text": "",
+        })
+        assert r.status_code == 200
+        assert r.json()["status"] == 204
 
 
 # ---------------------------------------------------------------------------
@@ -181,49 +230,33 @@ class TestRestAPIToolMethods:
 
 
 class TestRestAPIToolURL:
-    @pytest.mark.asyncio
-    async def test_path_is_prepended_with_base_url(self):
+    def test_path_is_prepended_with_base_url(self):
         """When url starts with '/', base_url is prepended."""
-        tool_instance = RestAPITool(base_url="https://api.example.com")
-        ctx = _make_stub_ctx()
-        called_url = None
+        client = build_app()
+        r = client.post("/api-tool/call-with-mock", json={
+            "url": "/users",
+            "method": "GET",
+            "base_url": "https://api.example.com",
+            "mock_status": 200,
+            "mock_text": "ok",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["_called_url"] == "https://api.example.com/users"
 
-        async def mock_get(url, **kwargs):
-            nonlocal called_url
-            called_url = url
-            return _mock_response()
-
-        mock_client = MagicMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.get = AsyncMock(side_effect=mock_get)
-
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            await tool_instance.run(ctx, "/users")
-
-        assert called_url == "https://api.example.com/users"
-
-    @pytest.mark.asyncio
-    async def test_absolute_url_ignores_base_url(self):
+    def test_absolute_url_ignores_base_url(self):
         """When url is absolute (no leading '/'), base_url is NOT prepended."""
-        tool_instance = RestAPITool(base_url="https://base.example.com")
-        ctx = _make_stub_ctx()
-        called_url = None
-
-        async def mock_get(url, **kwargs):
-            nonlocal called_url
-            called_url = url
-            return _mock_response()
-
-        mock_client = MagicMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.get = AsyncMock(side_effect=mock_get)
-
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            await tool_instance.run(ctx, "https://other.example.com/path")
-
-        assert called_url == "https://other.example.com/path"
+        client = build_app()
+        r = client.post("/api-tool/call-with-mock", json={
+            "url": "https://other.example.com/path",
+            "method": "GET",
+            "base_url": "https://base.example.com",
+            "mock_status": 200,
+            "mock_text": "ok",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["_called_url"] == "https://other.example.com/path"
 
 
 # ---------------------------------------------------------------------------
@@ -232,47 +265,34 @@ class TestRestAPIToolURL:
 
 
 class TestRestAPIToolAuth:
-    @pytest.mark.asyncio
-    async def test_static_auth_header_is_sent(self):
+    def test_static_auth_header_is_sent(self):
         """A static auth_header configured on the tool is sent with every request."""
-        tool_instance = RestAPITool(auth_header="Bearer static-token")
-        ctx = _make_stub_ctx()
-        sent_headers = {}
+        client = build_app()
+        r = client.post("/api-tool/call-with-mock", json={
+            "url": "https://api.example.com/secure",
+            "method": "GET",
+            "static_auth": "Bearer static-token",
+            "mock_status": 200,
+            "mock_text": "ok",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["_call_headers"].get("Authorization") == "Bearer static-token"
 
-        async def mock_get(url, **kwargs):
-            sent_headers.update(kwargs.get("headers", {}))
-            return _mock_response()
-
-        mock_client = MagicMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.get = AsyncMock(side_effect=mock_get)
-
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            await tool_instance.run(ctx, "https://api.example.com/secure")
-
-        assert sent_headers.get("Authorization") == "Bearer static-token"
-
-    @pytest.mark.asyncio
-    async def test_auth_from_execution_context_overrides_static(self):
+    def test_auth_from_execution_context_overrides_static(self):
         """Auth from execution_context.request overrides the static auth_header."""
-        tool_instance = RestAPITool(auth_header="Bearer static-token")
-        ctx = _make_stub_ctx(auth="Bearer request-token")
-        sent_headers = {}
-
-        async def mock_get(url, **kwargs):
-            sent_headers.update(kwargs.get("headers", {}))
-            return _mock_response()
-
-        mock_client = MagicMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.get = AsyncMock(side_effect=mock_get)
-
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            await tool_instance.run(ctx, "https://api.example.com/secure")
-
-        assert sent_headers.get("Authorization") == "Bearer request-token"
+        client = build_app()
+        r = client.post("/api-tool/call-with-mock", json={
+            "url": "https://api.example.com/secure",
+            "method": "GET",
+            "static_auth": "Bearer static-token",
+            "auth": "Bearer request-token",
+            "mock_status": 200,
+            "mock_text": "ok",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["_call_headers"].get("Authorization") == "Bearer request-token"
 
 
 # ---------------------------------------------------------------------------
@@ -281,37 +301,29 @@ class TestRestAPIToolAuth:
 
 
 class TestRestAPIToolErrors:
-    @pytest.mark.asyncio
-    async def test_network_error_returns_error_dict(self):
+    def test_network_error_returns_error_dict(self):
         """Network errors (e.g. connection refused) return an error dict."""
-        tool_instance = RestAPITool()
-        ctx = _make_stub_ctx()
+        client = build_app()
+        r = client.post("/api-tool/call-with-mock", json={
+            "url": "https://unreachable.example.com/",
+            "method": "GET",
+            "mock_error": "Connection refused",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert "error" in data
+        assert "Connection refused" in data["error"]
 
-        mock_client = MagicMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.get = AsyncMock(side_effect=Exception("Connection refused"))
-
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await tool_instance.run(ctx, "https://unreachable.example.com/")
-
-        assert "error" in result
-        assert "Connection refused" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_non_2xx_status_is_returned(self):
+    def test_non_2xx_status_is_returned(self):
         """A 404 or 500 response is returned as-is (not raised as exception)."""
-        tool_instance = RestAPITool()
-        ctx = _make_stub_ctx()
-
-        mock_get = AsyncMock(return_value=_mock_response(404, "Not Found"))
-        mock_client = MagicMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.get = mock_get
-
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            result = await tool_instance.run(ctx, "https://api.example.com/missing")
-
-        assert result["status"] == 404
-        assert "error" not in result
+        client = build_app()
+        r = client.post("/api-tool/call-with-mock", json={
+            "url": "https://api.example.com/missing",
+            "method": "GET",
+            "mock_status": 404,
+            "mock_text": "Not Found",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == 404
+        assert "error" not in data

@@ -12,9 +12,11 @@ Tests cover:
 NOTE: No `from __future__ import annotations` — @tool() needs live annotations.
 """
 
-import pytest
+from pydantic import BaseModel
 
-from lauren_ai._tools import ToolContext
+from lauren import LaurenFactory, controller, delete, get, post, module, injectable, Scope, use_value, Json
+from lauren.testing import TestClient
+from lauren_ai._tools import tool, ToolContext
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
 from lauren_ai._config import LLMConfig
 from lauren_ai._transport import Completion, TokenUsage
@@ -26,8 +28,6 @@ from lauren_ai._tools import _add_to_tool_map
 # ---------------------------------------------------------------------------
 # Tool definition (module level — no future annotations)
 # ---------------------------------------------------------------------------
-
-from lauren_ai._tools import tool
 
 
 @tool()
@@ -67,12 +67,66 @@ class ShoppingCartTool:
 
 
 # ---------------------------------------------------------------------------
-# Mock context helper (shared state simulates same run)
+# Controller — holds shared state across requests (singleton scope)
 # ---------------------------------------------------------------------------
 
-class MockContext:
-    def __init__(self):
-        self.state = {}
+
+class _ActionRequest(BaseModel):
+    action: str
+    item: str = ""
+    quantity: int = 1
+
+
+@injectable(scope=Scope.SINGLETON)
+class CartController:
+    def __init__(self) -> None:
+        self._tool = ShoppingCartTool()
+        self._state: dict = {}  # simulates ToolContext.state carried across calls
+
+    @property
+    def _ctx(self) -> "_MockCtx":
+        # Return a shared context that reuses the same state dict
+        ctx = _MockCtx(state=self._state)
+        return ctx
+
+    async def action(self, req: _ActionRequest) -> dict:
+        return await self._tool.run(self._ctx, req.action, req.item, req.quantity)
+
+    async def clear(self) -> dict:
+        result = await self._tool.run(self._ctx, "clear")
+        return result
+
+    def reset(self) -> None:
+        self._state.clear()
+
+
+@controller("/cart")
+@injectable(scope=Scope.SINGLETON)
+class CartHttpController:
+    def __init__(self, cart: CartController) -> None:
+        self._cart = cart
+
+    @post("/action")
+    async def action(self, body: Json[_ActionRequest]) -> dict:
+        return await self._cart.action(body)
+
+    @delete("/clear")
+    async def clear(self) -> dict:
+        return await self._cart.clear()
+
+
+@module(controllers=[CartHttpController], providers=[CartController])
+class CartModule: ...
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+class _MockCtx:
+    def __init__(self, state: "dict | None" = None) -> None:
+        self.state: dict = state if state is not None else {}
         self.execution_context = None
         self.agent_context = None
         self.tool_use_id = "t1"
@@ -83,10 +137,6 @@ class MockContext:
         return default
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def _completion(content="OK", *, n=1, stop_reason="end_turn"):
     return Completion(
         id=f"c{n}", model="mock-model", content=content, tool_calls=[],
@@ -94,113 +144,113 @@ def _completion(content="OK", *, n=1, stop_reason="end_turn"):
     )
 
 
-def _make_runner(mock=None):
-    if mock is None:
-        mock = MockTransport()
-    cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, tools={}, config=cfg)
-    return runner, mock
+def build_app() -> TestClient:
+    return TestClient(LaurenFactory.create(CartModule))
 
 
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestShoppingCartAdd:
-    async def test_add_single_item(self):
-        cart = ShoppingCartTool()
-        ctx = MockContext()
-        result = await cart.run(ctx, "add", item="apple")
-        assert result["added"] == "apple"
-        assert result["quantity"] == 1
+    def test_add_single_item(self):
+        client = build_app()
+        r = client.post("/cart/action", json={"action": "add", "item": "apple"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["added"] == "apple"
+        assert data["quantity"] == 1
 
-    async def test_add_accumulates_quantity(self):
-        cart = ShoppingCartTool()
-        ctx = MockContext()
-        await cart.run(ctx, "add", item="apple")
-        result = await cart.run(ctx, "add", item="apple")
-        assert result["quantity"] == 2
+    def test_add_accumulates_quantity(self):
+        client = build_app()
+        client.post("/cart/action", json={"action": "add", "item": "apple"})
+        r = client.post("/cart/action", json={"action": "add", "item": "apple"})
+        assert r.status_code == 200
+        assert r.json()["quantity"] == 2
 
-    async def test_add_multiple_items_accumulate(self):
-        cart = ShoppingCartTool()
-        ctx = MockContext()
-        await cart.run(ctx, "add", item="apple")
-        await cart.run(ctx, "add", item="banana")
-        result = await cart.run(ctx, "view")
-        assert "apple" in result["cart"]
-        assert "banana" in result["cart"]
+    def test_add_multiple_items_accumulate(self):
+        client = build_app()
+        client.post("/cart/action", json={"action": "add", "item": "apple"})
+        client.post("/cart/action", json={"action": "add", "item": "banana"})
+        r = client.post("/cart/action", json={"action": "view"})
+        assert r.status_code == 200
+        cart = r.json()["cart"]
+        assert "apple" in cart
+        assert "banana" in cart
 
-    async def test_add_with_explicit_quantity(self):
-        cart = ShoppingCartTool()
-        ctx = MockContext()
-        result = await cart.run(ctx, "add", item="milk", quantity=3)
-        assert result["quantity"] == 3
+    def test_add_with_explicit_quantity(self):
+        client = build_app()
+        r = client.post("/cart/action", json={"action": "add", "item": "milk", "quantity": 3})
+        assert r.status_code == 200
+        assert r.json()["quantity"] == 3
 
-    async def test_add_missing_item_returns_error(self):
-        cart = ShoppingCartTool()
-        ctx = MockContext()
-        result = await cart.run(ctx, "add")
-        assert "error" in result
+    def test_add_missing_item_returns_error(self):
+        client = build_app()
+        r = client.post("/cart/action", json={"action": "add", "item": ""})
+        assert r.status_code == 200
+        assert "error" in r.json()
 
 
 class TestShoppingCartView:
-    async def test_view_empty_cart(self):
-        cart = ShoppingCartTool()
-        ctx = MockContext()
-        result = await cart.run(ctx, "view")
-        assert result["cart"] == {}
-        assert result["total_items"] == 0
+    def test_view_empty_cart(self):
+        client = build_app()
+        r = client.post("/cart/action", json={"action": "view"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["cart"] == {}
+        assert data["total_items"] == 0
 
-    async def test_view_after_adds(self):
-        cart = ShoppingCartTool()
-        ctx = MockContext()
-        await cart.run(ctx, "add", item="apple", quantity=2)
-        await cart.run(ctx, "add", item="bread", quantity=1)
-        result = await cart.run(ctx, "view")
-        assert result["total_items"] == 3
+    def test_view_after_adds(self):
+        client = build_app()
+        client.post("/cart/action", json={"action": "add", "item": "apple", "quantity": 2})
+        client.post("/cart/action", json={"action": "add", "item": "bread", "quantity": 1})
+        r = client.post("/cart/action", json={"action": "view"})
+        assert r.status_code == 200
+        assert r.json()["total_items"] == 3
 
-    async def test_state_persists_across_invocations(self):
-        """State dict is shared across calls on the same MockContext."""
-        cart = ShoppingCartTool()
-        ctx = MockContext()  # same context = same run state
-        await cart.run(ctx, "add", item="item1")
-        await cart.run(ctx, "add", item="item2")
-        await cart.run(ctx, "add", item="item3")
-        result = await cart.run(ctx, "view")
-        assert len(result["cart"]) == 3
+    def test_state_persists_across_invocations(self):
+        client = build_app()
+        client.post("/cart/action", json={"action": "add", "item": "item1"})
+        client.post("/cart/action", json={"action": "add", "item": "item2"})
+        client.post("/cart/action", json={"action": "add", "item": "item3"})
+        r = client.post("/cart/action", json={"action": "view"})
+        assert r.status_code == 200
+        assert len(r.json()["cart"]) == 3
 
 
 class TestShoppingCartRemove:
-    async def test_remove_existing_item(self):
-        cart = ShoppingCartTool()
-        ctx = MockContext()
-        await cart.run(ctx, "add", item="apple")
-        result = await cart.run(ctx, "remove", item="apple")
-        assert "apple" not in result["cart"]
+    def test_remove_existing_item(self):
+        client = build_app()
+        client.post("/cart/action", json={"action": "add", "item": "apple"})
+        r = client.post("/cart/action", json={"action": "remove", "item": "apple"})
+        assert r.status_code == 200
+        assert "apple" not in r.json()["cart"]
 
-    async def test_remove_nonexistent_item_no_error(self):
-        cart = ShoppingCartTool()
-        ctx = MockContext()
-        result = await cart.run(ctx, "remove", item="nonexistent")
-        assert "error" not in result
+    def test_remove_nonexistent_item_no_error(self):
+        client = build_app()
+        r = client.post("/cart/action", json={"action": "remove", "item": "nonexistent"})
+        assert r.status_code == 200
+        assert "error" not in r.json()
 
 
 class TestShoppingCartClear:
-    async def test_clear_resets_state(self):
-        cart = ShoppingCartTool()
-        ctx = MockContext()
-        await cart.run(ctx, "add", item="apple")
-        await cart.run(ctx, "add", item="banana")
-        await cart.run(ctx, "clear")
-        result = await cart.run(ctx, "view")
-        assert result["cart"] == {}
-        assert result["total_items"] == 0
+    def test_clear_resets_state(self):
+        client = build_app()
+        client.post("/cart/action", json={"action": "add", "item": "apple"})
+        client.post("/cart/action", json={"action": "add", "item": "banana"})
+        client.delete("/cart/clear")
+        r = client.post("/cart/action", json={"action": "view"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["cart"] == {}
+        assert data["total_items"] == 0
 
-    async def test_clear_returns_cleared_true(self):
-        cart = ShoppingCartTool()
-        ctx = MockContext()
-        result = await cart.run(ctx, "clear")
-        assert result["cleared"] is True
+    def test_clear_returns_cleared_true(self):
+        client = build_app()
+        r = client.delete("/cart/clear")
+        assert r.status_code == 200
+        assert r.json()["cleared"] is True
 
 
 class TestShoppingCartAgentRunner:

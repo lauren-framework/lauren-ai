@@ -14,11 +14,13 @@ NOTE: from __future__ import annotations is safe here.
 
 from __future__ import annotations
 
-import pytest
 from collections import defaultdict
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
+from pydantic import BaseModel
+
+from lauren import LaurenFactory, controller, get, post, module, injectable, Scope, use_value, Json
+from lauren.testing import TestClient
 from lauren_ai import SignalBus, ModelCallComplete, AgentRunComplete
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
 from lauren_ai._config import LLMConfig
@@ -30,6 +32,7 @@ from lauren_ai._agents import agent
 # ---------------------------------------------------------------------------
 # AgentTelemetry implementation (inline)
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class ModelMetrics:
@@ -78,18 +81,28 @@ class AgentTelemetry:
             },
         }
 
+    def clear(self) -> None:
+        self._metrics.clear()
+        self._run_count = 0
+
 
 # ---------------------------------------------------------------------------
 # Agent definitions
 # ---------------------------------------------------------------------------
+
 
 @agent(model=None, system="You are helpful.")
 class TelemetryAgent: ...
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Module-level objects
 # ---------------------------------------------------------------------------
+
+_MOCK = MockTransport()
+_bus = SignalBus()
+_telemetry = AgentTelemetry(_bus)
+
 
 def _completion(content="OK", *, n=1, stop_reason="end_turn"):
     return Completion(
@@ -98,17 +111,63 @@ def _completion(content="OK", *, n=1, stop_reason="end_turn"):
     )
 
 
-def _make_runner_with_bus(bus: SignalBus, mock=None):
-    if mock is None:
-        mock = MockTransport()
+def _make_runner_with_bus(bus: SignalBus, mock: MockTransport) -> AgentRunner:
     cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, tools={}, config=cfg, signals=bus)
-    return runner, mock
+    return AgentRunner(transport=mock, tools={}, config=cfg, signals=bus)
+
+
+# ---------------------------------------------------------------------------
+# Controllers
+# ---------------------------------------------------------------------------
+
+
+class _RunRequest(BaseModel):
+    prompt: str = "Hi"
+
+
+@controller("/agent")
+class TelemetryAgentController:
+    def __init__(self, mock: MockTransport) -> None:
+        self._mock = mock
+
+    @post("/run")
+    async def run(self, body: Json[_RunRequest]) -> dict:
+        runner = _make_runner_with_bus(_bus, self._mock)
+        resp = await runner.run(TelemetryAgent(), body.prompt)
+        return {"content": resp.content, "turns": resp.turns}
+
+
+@controller("/telemetry")
+class TelemetryController:
+    @get("/summary")
+    async def summary(self) -> dict:
+        return _telemetry.get_summary()
+
+
+@module(
+    controllers=[TelemetryAgentController, TelemetryController],
+    providers=[use_value(provide=MockTransport, value=_MOCK)],
+)
+class TelemetryModule: ...
+
+
+# ---------------------------------------------------------------------------
+# Build app helper
+# ---------------------------------------------------------------------------
+
+
+def build_app(*responses: str) -> TestClient:
+    _MOCK.reset()
+    _telemetry.clear()
+    for c in responses:
+        _MOCK.queue_response(_completion(c))
+    return TestClient(LaurenFactory.create(TelemetryModule))
 
 
 # ---------------------------------------------------------------------------
 # Tests: SignalBus basics
 # ---------------------------------------------------------------------------
+
 
 class TestSignalBus:
     async def test_signal_bus_on_decorator(self):
@@ -149,6 +208,7 @@ class TestSignalBus:
 # ---------------------------------------------------------------------------
 # Tests: AgentTelemetry via direct event emission
 # ---------------------------------------------------------------------------
+
 
 class TestAgentTelemetryEvents:
     async def test_initial_summary_is_zero(self):
@@ -267,55 +327,40 @@ class TestAgentTelemetryEvents:
 
 
 # ---------------------------------------------------------------------------
-# Tests: AgentTelemetry via real agent runner
+# Tests: AgentTelemetry via HTTP / real agent runner
 # ---------------------------------------------------------------------------
 
+
 class TestAgentTelemetryIntegration:
-    async def test_runner_emits_model_call_complete(self):
-        bus = SignalBus()
-        telemetry = AgentTelemetry(bus)
-        runner, mock = _make_runner_with_bus(bus)
-        mock.queue_response(_completion("Hello!"))
+    def test_runner_emits_model_call_complete(self):
+        client = build_app("Hello!")
+        client.post("/agent/run", json={"prompt": "Hi"})
+        r = client.get("/telemetry/summary")
+        assert r.status_code == 200
+        assert r.json()["total_llm_calls"] == 1
 
-        await runner.run(TelemetryAgent(), "Hi")
+    def test_runner_emits_agent_run_complete(self):
+        client = build_app("Done")
+        client.post("/agent/run", json={"prompt": "Go"})
+        r = client.get("/telemetry/summary")
+        assert r.status_code == 200
+        assert r.json()["total_agent_runs"] == 1
 
-        summary = telemetry.get_summary()
-        assert summary["total_llm_calls"] == 1
+    def test_two_runs_tracked_correctly(self):
+        client = build_app("Run 1", "Run 2")
+        client.post("/agent/run", json={"prompt": "First"})
+        client.post("/agent/run", json={"prompt": "Second"})
+        r = client.get("/telemetry/summary")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["total_agent_runs"] == 2
+        assert data["total_llm_calls"] == 2
 
-    async def test_runner_emits_agent_run_complete(self):
-        bus = SignalBus()
-        telemetry = AgentTelemetry(bus)
-        runner, mock = _make_runner_with_bus(bus)
-        mock.queue_response(_completion("Done"))
-
-        await runner.run(TelemetryAgent(), "Go")
-
-        summary = telemetry.get_summary()
-        assert summary["total_agent_runs"] == 1
-
-    async def test_two_runs_tracked_correctly(self):
-        bus = SignalBus()
-        telemetry = AgentTelemetry(bus)
-        runner, mock = _make_runner_with_bus(bus)
-        mock.queue_response(_completion("Run 1"))
-        mock.queue_response(_completion("Run 2"))
-
-        await runner.run(TelemetryAgent(), "First")
-        await runner.run(TelemetryAgent(), "Second")
-
-        summary = telemetry.get_summary()
-        assert summary["total_agent_runs"] == 2
-        assert summary["total_llm_calls"] == 2
-
-    async def test_token_usage_captured_from_runner(self):
-        bus = SignalBus()
-        telemetry = AgentTelemetry(bus)
-        runner, mock = _make_runner_with_bus(bus)
-        mock.queue_response(_completion("result"))
-
-        await runner.run(TelemetryAgent(), "prompt")
-
-        summary = telemetry.get_summary()
-        model_data = summary["per_model"].get("mock-model", {})
+    def test_token_usage_captured_from_runner(self):
+        client = build_app("result")
+        client.post("/agent/run", json={"prompt": "prompt"})
+        r = client.get("/telemetry/summary")
+        assert r.status_code == 200
+        model_data = r.json()["per_model"].get("mock-model", {})
         assert model_data.get("input_tokens", 0) > 0
         assert model_data.get("output_tokens", 0) > 0

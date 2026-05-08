@@ -8,13 +8,13 @@ Tests cover:
 - parse_structured_response helper function pattern
 """
 
-from __future__ import annotations
-
 import json
 
 import pytest
 from pydantic import BaseModel
 
+from lauren import LaurenFactory, controller, get, post, module, injectable, Scope, use_value, Json
+from lauren.testing import TestClient
 from lauren_ai import LLMConfig, PydanticOutputParser
 from lauren_ai._agents import agent
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
@@ -25,27 +25,8 @@ from lauren_ai._transport._structured import StructuredLLM
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helper functions (pure Python — no HTTP needed)
 # ---------------------------------------------------------------------------
-
-
-def _completion(content: str = "OK") -> Completion:
-    return Completion(
-        id="c1",
-        model="mock-model",
-        content=content,
-        tool_calls=[],
-        stop_reason="end_turn",
-        usage=TokenUsage(input_tokens=10, output_tokens=5),
-    )
-
-
-def _make_runner(mock: MockTransport | None = None) -> tuple[AgentRunner, MockTransport]:
-    if mock is None:
-        mock = MockTransport()
-    cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, tools={}, config=cfg)
-    return runner, mock
 
 
 def parse_structured_response(content: str, schema: type[BaseModel]) -> BaseModel:
@@ -72,6 +53,72 @@ class ProductInfo(BaseModel):
     name: str
     price: float
     in_stock: bool
+
+
+# ---------------------------------------------------------------------------
+# Module-level mock
+# ---------------------------------------------------------------------------
+
+_MOCK = MockTransport()
+
+
+def _completion(content: str = "OK") -> Completion:
+    return Completion(
+        id="c1",
+        model="mock-model",
+        content=content,
+        tool_calls=[],
+        stop_reason="end_turn",
+        usage=TokenUsage(input_tokens=10, output_tokens=5),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Controller / Module
+# ---------------------------------------------------------------------------
+
+
+class _ParseRequest(BaseModel):
+    text: str
+
+
+@controller("/parse")
+class ParseController:
+    def __init__(self, mock: MockTransport) -> None:
+        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
+        self._runner = AgentRunner(transport=mock, tools={}, config=cfg)
+
+    @post("/sentiment")
+    async def sentiment(self, body: Json[_ParseRequest]) -> dict:
+        @agent(model="mock-model", system="Return JSON only.")
+        class JSONAgent: ...
+
+        resp = await self._runner.run(JSONAgent(), body.text)
+        result = parse_structured_response(resp.content, SentimentResult)
+        return {"label": result.label, "score": result.score, "reasoning": result.reasoning}
+
+    @post("/product")
+    async def product(self, body: Json[_ParseRequest]) -> dict:
+        @agent(model="mock-model")
+        class ProductAgent: ...
+
+        resp = await self._runner.run(ProductAgent(), body.text)
+        result = parse_structured_response(resp.content, ProductInfo)
+        return {"name": result.name, "price": result.price, "in_stock": result.in_stock}
+
+
+@module(
+    controllers=[ParseController],
+    providers=[use_value(provide=MockTransport, value=_MOCK)],
+)
+class StructuredOutputModule: ...
+
+
+def build_app(*responses: str) -> TestClient:
+    _MOCK.reset()
+    for content in responses:
+        _MOCK.queue_response(_completion(content))
+    return TestClient(LaurenFactory.create(StructuredOutputModule))
 
 
 # ---------------------------------------------------------------------------
@@ -184,31 +231,22 @@ class TestStructuredLLMWithMock:
 
 
 # ---------------------------------------------------------------------------
-# TestAgentJSONCompletion
+# TestAgentJSONCompletion (via TestClient)
 # ---------------------------------------------------------------------------
 
 
 class TestAgentJSONCompletion:
-    async def test_agent_json_content_can_be_parsed(self):
-        runner, mock = _make_runner()
+    def test_agent_json_content_can_be_parsed(self):
         json_content = '{"label": "positive", "score": 0.8, "reasoning": "Sounds happy"}'
-        mock.queue_response(_completion(json_content))
+        client = build_app(json_content)
+        r = client.post("/parse/sentiment", json={"text": "Analyze: I love this!"})
+        assert r.status_code == 200
+        assert r.json()["label"] == "positive"
 
-        @agent(model="mock-model", system="Return JSON only.")
-        class JSONAgent: ...
-
-        resp = await runner.run(JSONAgent(), "Analyze: I love this!")
-        result = parse_structured_response(resp.content, SentimentResult)
-        assert result.label == "positive"
-
-    async def test_agent_product_json_parses_correctly(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion('{"name": "Laptop", "price": 999.0, "in_stock": true}'))
-
-        @agent(model="mock-model")
-        class ProductAgent: ...
-
-        resp = await runner.run(ProductAgent(), "Describe product")
-        result = parse_structured_response(resp.content, ProductInfo)
-        assert result.name == "Laptop"
-        assert result.in_stock is True
+    def test_agent_product_json_parses_correctly(self):
+        client = build_app('{"name": "Laptop", "price": 999.0, "in_stock": true}')
+        r = client.post("/parse/product", json={"text": "Describe product"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["name"] == "Laptop"
+        assert data["in_stock"] is True

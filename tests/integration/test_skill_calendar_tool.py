@@ -13,22 +13,19 @@ Tests cover:
 NOTE: No `from __future__ import annotations` — @tool() needs live annotations.
 """
 
-import pytest
-
-from lauren_ai._tools import ToolContext
-from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
-from lauren_ai._config import LLMConfig
-from lauren_ai._transport import Completion, TokenUsage
-from lauren_ai._transport._mock import MockTransport
 from dataclasses import dataclass, field
 from uuid import uuid4
+
+from pydantic import BaseModel
+
+from lauren import LaurenFactory, controller, delete, get, post, module, Json, Query
+from lauren.testing import TestClient
+from lauren_ai._tools import tool, ToolContext
 
 
 # ---------------------------------------------------------------------------
 # Tool definition (module level — no future annotations)
 # ---------------------------------------------------------------------------
-
-from lauren_ai._tools import tool
 
 
 @dataclass
@@ -98,12 +95,55 @@ class CalendarTool:
 
 
 # ---------------------------------------------------------------------------
-# Mock context helper
+# Module-level mutable state to hold the current tool
 # ---------------------------------------------------------------------------
 
-class MockContext:
-    def __init__(self):
-        self.state = {}
+_cal_state: dict = {}
+
+
+# ---------------------------------------------------------------------------
+# Controller
+# ---------------------------------------------------------------------------
+
+
+class _CreateRequest(BaseModel):
+    title: str
+    start_time: str
+    attendees: str = ""
+
+
+@controller("/calendar")
+class CalendarController:
+    @post("/create")
+    async def create(self, body: Json[_CreateRequest]) -> dict:
+        ctx = _MockCtx()
+        return await _cal_state["tool"].run(
+            ctx, "create", title=body.title, start_time=body.start_time, attendees=body.attendees
+        )
+
+    @get("/query")
+    async def query(self, date: Query[str] = "") -> dict:
+        ctx = _MockCtx()
+        return await _cal_state["tool"].run(ctx, "query", date=date)
+
+    @delete("/cancel/{event_id}")
+    async def cancel(self, event_id: str) -> dict:
+        ctx = _MockCtx()
+        return await _cal_state["tool"].run(ctx, "cancel", event_id=event_id)
+
+
+@module(controllers=[CalendarController])
+class CalendarModule: ...
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+class _MockCtx:
+    def __init__(self) -> None:
+        self.state: dict = {}
         self.execution_context = None
         self.agent_context = None
         self.tool_use_id = "t1"
@@ -114,117 +154,126 @@ class MockContext:
         return default
 
 
+def build_app() -> TestClient:
+    _cal_state["tool"] = CalendarTool()
+    return TestClient(LaurenFactory.create(CalendarModule))
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestCalendarCreate:
-    async def test_create_returns_event_id(self):
-        cal = CalendarTool()
-        ctx = MockContext()
-        result = await cal.run(ctx, "create", title="Team Standup", start_time="2026-01-15T09:00:00")
-        assert "created" in result
-        assert isinstance(result["created"], str)
-        assert len(result["created"]) == 8
+    def test_create_returns_event_id(self):
+        client = build_app()
+        r = client.post("/calendar/create", json={"title": "Team Standup", "start_time": "2026-01-15T09:00:00"})
+        assert r.status_code == 200
+        data = r.json()
+        assert "created" in data
+        assert isinstance(data["created"], str)
+        assert len(data["created"]) == 8
 
-    async def test_create_returns_title(self):
-        cal = CalendarTool()
-        ctx = MockContext()
-        result = await cal.run(ctx, "create", title="My Meeting", start_time="2026-01-15T10:00:00")
-        assert result["title"] == "My Meeting"
+    def test_create_returns_title(self):
+        client = build_app()
+        r = client.post("/calendar/create", json={"title": "My Meeting", "start_time": "2026-01-15T10:00:00"})
+        assert r.status_code == 200
+        assert r.json()["title"] == "My Meeting"
 
-    async def test_create_returns_start_time(self):
-        cal = CalendarTool()
-        ctx = MockContext()
-        result = await cal.run(ctx, "create", title="Event", start_time="2026-03-20T14:30:00")
-        assert result["start"] == "2026-03-20T14:30:00"
+    def test_create_returns_start_time(self):
+        client = build_app()
+        r = client.post("/calendar/create", json={"title": "Event", "start_time": "2026-03-20T14:30:00"})
+        assert r.status_code == 200
+        assert r.json()["start"] == "2026-03-20T14:30:00"
 
-    async def test_create_without_title_returns_error(self):
-        cal = CalendarTool()
-        ctx = MockContext()
-        result = await cal.run(ctx, "create", start_time="2026-01-15T10:00:00")
-        assert "error" in result
+    def test_create_without_title_returns_error(self):
+        client = build_app()
+        r = client.post("/calendar/create", json={"title": "", "start_time": "2026-01-15T10:00:00"})
+        assert r.status_code == 200
+        assert "error" in r.json()
 
-    async def test_create_without_start_time_returns_error(self):
-        cal = CalendarTool()
-        ctx = MockContext()
-        result = await cal.run(ctx, "create", title="No time")
-        assert "error" in result
+    def test_create_without_start_time_returns_error(self):
+        client = build_app()
+        r = client.post("/calendar/create", json={"title": "No time", "start_time": ""})
+        assert r.status_code == 200
+        assert "error" in r.json()
 
-    async def test_create_with_attendees(self):
-        cal = CalendarTool()
-        ctx = MockContext()
-        result = await cal.run(
-            ctx, "create",
-            title="Workshop", start_time="2026-02-01T13:00:00",
-            attendees="alice@example.com,bob@example.com"
-        )
-        assert "created" in result
-        eid = result["created"]
-        event = cal._events[eid]
-        assert "alice@example.com" in event.attendees
+    def test_create_with_attendees(self):
+        client = build_app()
+        r = client.post("/calendar/create", json={
+            "title": "Workshop",
+            "start_time": "2026-02-01T13:00:00",
+            "attendees": "alice@example.com,bob@example.com",
+        })
+        assert r.status_code == 200
+        assert "created" in r.json()
 
 
 class TestCalendarQuery:
-    async def test_query_all_events(self):
-        cal = CalendarTool()
-        ctx = MockContext()
-        await cal.run(ctx, "create", title="A", start_time="2026-01-10T09:00:00")
-        await cal.run(ctx, "create", title="B", start_time="2026-01-11T09:00:00")
-        result = await cal.run(ctx, "query")
-        assert len(result["events"]) == 2
+    def test_query_all_events(self):
+        client = build_app()
+        client.post("/calendar/create", json={"title": "A", "start_time": "2026-01-10T09:00:00"})
+        client.post("/calendar/create", json={"title": "B", "start_time": "2026-01-11T09:00:00"})
+        r = client.get("/calendar/query")
+        assert r.status_code == 200
+        assert len(r.json()["events"]) == 2
 
-    async def test_query_by_date_filters(self):
-        cal = CalendarTool()
-        ctx = MockContext()
-        await cal.run(ctx, "create", title="Jan Event", start_time="2026-01-15T09:00:00")
-        await cal.run(ctx, "create", title="Feb Event", start_time="2026-02-15T09:00:00")
-        result = await cal.run(ctx, "query", date="2026-01")
-        assert len(result["events"]) == 1
-        assert result["events"][0]["title"] == "Jan Event"
+    def test_query_by_date_filters(self):
+        client = build_app()
+        client.post("/calendar/create", json={"title": "Jan Event", "start_time": "2026-01-15T09:00:00"})
+        client.post("/calendar/create", json={"title": "Feb Event", "start_time": "2026-02-15T09:00:00"})
+        r = client.get("/calendar/query?date=2026-01")
+        assert r.status_code == 200
+        events = r.json()["events"]
+        assert len(events) == 1
+        assert events[0]["title"] == "Jan Event"
 
-    async def test_query_empty_returns_empty_list(self):
-        cal = CalendarTool()
-        ctx = MockContext()
-        result = await cal.run(ctx, "query")
-        assert result["events"] == []
+    def test_query_empty_returns_empty_list(self):
+        client = build_app()
+        r = client.get("/calendar/query")
+        assert r.status_code == 200
+        assert r.json()["events"] == []
 
-    async def test_query_no_match_date_returns_empty(self):
-        cal = CalendarTool()
-        ctx = MockContext()
-        await cal.run(ctx, "create", title="Event", start_time="2026-01-15T09:00:00")
-        result = await cal.run(ctx, "query", date="2027-06")
-        assert result["events"] == []
+    def test_query_no_match_date_returns_empty(self):
+        client = build_app()
+        client.post("/calendar/create", json={"title": "Event", "start_time": "2026-01-15T09:00:00"})
+        r = client.get("/calendar/query?date=2027-06")
+        assert r.status_code == 200
+        assert r.json()["events"] == []
 
 
 class TestCalendarCancel:
-    async def test_cancel_existing_event(self):
-        cal = CalendarTool()
-        ctx = MockContext()
-        create_result = await cal.run(ctx, "create", title="To Cancel", start_time="2026-01-01T08:00:00")
-        eid = create_result["created"]
-        cancel_result = await cal.run(ctx, "cancel", event_id=eid)
-        assert cancel_result["cancelled"] == eid
+    def test_cancel_existing_event(self):
+        client = build_app()
+        create_r = client.post("/calendar/create", json={"title": "To Cancel", "start_time": "2026-01-01T08:00:00"})
+        eid = create_r.json()["created"]
+        r = client.delete(f"/calendar/cancel/{eid}")
+        assert r.status_code == 200
+        assert r.json()["cancelled"] == eid
 
-    async def test_cancel_removes_from_storage(self):
-        cal = CalendarTool()
-        ctx = MockContext()
-        create_result = await cal.run(ctx, "create", title="Doomed", start_time="2026-01-01T08:00:00")
-        eid = create_result["created"]
-        await cal.run(ctx, "cancel", event_id=eid)
-        assert eid not in cal._events
+    def test_cancel_removes_from_storage(self):
+        client = build_app()
+        create_r = client.post("/calendar/create", json={"title": "Doomed", "start_time": "2026-01-01T08:00:00"})
+        eid = create_r.json()["created"]
+        client.delete(f"/calendar/cancel/{eid}")
+        r = client.get("/calendar/query")
+        event_ids = [e["id"] for e in r.json()["events"]]
+        assert eid not in event_ids
 
-    async def test_cancel_nonexistent_returns_error(self):
-        cal = CalendarTool()
-        ctx = MockContext()
-        result = await cal.run(ctx, "cancel", event_id="nonexistent")
-        assert "error" in result
+    def test_cancel_nonexistent_returns_error(self):
+        client = build_app()
+        r = client.delete("/calendar/cancel/nonexistent")
+        assert r.status_code == 200
+        assert "error" in r.json()
 
-    async def test_cancel_leaves_other_events(self):
-        cal = CalendarTool()
-        ctx = MockContext()
-        r1 = await cal.run(ctx, "create", title="Keep", start_time="2026-01-01T08:00:00")
-        r2 = await cal.run(ctx, "create", title="Delete", start_time="2026-01-02T08:00:00")
-        await cal.run(ctx, "cancel", event_id=r2["created"])
-        assert r1["created"] in cal._events
-        assert r2["created"] not in cal._events
+    def test_cancel_leaves_other_events(self):
+        client = build_app()
+        r1 = client.post("/calendar/create", json={"title": "Keep", "start_time": "2026-01-01T08:00:00"})
+        r2 = client.post("/calendar/create", json={"title": "Delete", "start_time": "2026-01-02T08:00:00"})
+        eid1 = r1.json()["created"]
+        eid2 = r2.json()["created"]
+        client.delete(f"/calendar/cancel/{eid2}")
+        r = client.get("/calendar/query")
+        event_ids = [e["id"] for e in r.json()["events"]]
+        assert eid1 in event_ids
+        assert eid2 not in event_ids

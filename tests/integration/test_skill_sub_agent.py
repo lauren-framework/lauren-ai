@@ -12,8 +12,12 @@ NOTE: No `from __future__ import annotations` here at the top.
 """
 
 import asyncio
-import pytest
 
+import pytest
+from pydantic import BaseModel
+
+from lauren import LaurenFactory, controller, post, module, injectable, Scope, use_value, Json
+from lauren.testing import TestClient
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
 from lauren_ai._config import LLMConfig
 from lauren_ai._transport import Completion, TokenUsage
@@ -38,8 +42,11 @@ class SummarySubAgent: ...
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Module-level mock
 # ---------------------------------------------------------------------------
+
+_MOCK = MockTransport()
+
 
 def _completion(content="OK", *, n=1, stop_reason="end_turn"):
     return Completion(
@@ -48,149 +55,143 @@ def _completion(content="OK", *, n=1, stop_reason="end_turn"):
     )
 
 
-def _make_runner(mock=None):
-    if mock is None:
-        mock = MockTransport()
+def _make_runner(mock: MockTransport) -> AgentRunner:
     cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, tools={}, config=cfg)
-    return runner, mock
+    return AgentRunner(transport=mock, tools={}, config=cfg)
 
 
 # ---------------------------------------------------------------------------
-# Sequential aggregation
+# Controllers
 # ---------------------------------------------------------------------------
 
-async def spawn_and_aggregate_sequential(runner, agents_prompts: list) -> list:
-    """Run sub-agents sequentially, collect results."""
-    results = []
-    for sub_agent, prompt in agents_prompts:
-        response = await runner.run(sub_agent, prompt)
-        results.append(response.content)
-    return results
+
+class _SpawnRequest(BaseModel):
+    tasks: list[str]
 
 
-async def spawn_and_aggregate_parallel(runner, agents_prompts: list) -> list:
-    """Run sub-agents in parallel, collect results."""
-    tasks = [runner.run(sub_agent, prompt) for sub_agent, prompt in agents_prompts]
-    responses = await asyncio.gather(*tasks)
-    return [r.content for r in responses]
+@controller("/spawn")
+class SpawnController:
+    def __init__(self, mock: MockTransport) -> None:
+        self._mock = mock
+
+    @post("/sequential")
+    async def sequential(self, body: Json[_SpawnRequest]) -> dict:
+        runner = _make_runner(self._mock)
+        results = []
+        for task in body.tasks:
+            resp = await runner.run(ResearchSubAgent(), task)
+            results.append(resp.content)
+        return {"results": results}
+
+    @post("/parallel")
+    async def parallel(self, body: Json[_SpawnRequest]) -> dict:
+        runner = _make_runner(self._mock)
+        coros = [runner.run(ResearchSubAgent(), task) for task in body.tasks]
+        responses = await asyncio.gather(*coros)
+        return {"results": [r.content for r in responses]}
+
+    @post("/run-once")
+    async def run_once(self, body: Json[dict]) -> dict:
+        runner = _make_runner(self._mock)
+        resp = await runner.run(ResearchSubAgent(), body.get("prompt", ""))
+        return {"content": resp.content, "turns": resp.turns}
+
+
+@module(
+    controllers=[SpawnController],
+    providers=[use_value(provide=MockTransport, value=_MOCK)],
+)
+class SpawnModule: ...
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# build_app helper
 # ---------------------------------------------------------------------------
+
+
+def build_app(*responses: str) -> TestClient:
+    _MOCK.reset()
+    for c in responses:
+        _MOCK.queue_response(_completion(c))
+    return TestClient(LaurenFactory.create(SpawnModule))
+
+
+# ---------------------------------------------------------------------------
+# Tests: Sequential sub-agents
+# ---------------------------------------------------------------------------
+
 
 class TestSequentialSubAgents:
-    async def test_sequential_single_agent(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("Research result"))
+    def test_sequential_single_agent(self):
+        client = build_app("Research result")
+        r = client.post("/spawn/sequential", json={"tasks": ["Research topic A"]})
+        assert r.status_code == 200
+        assert r.json()["results"] == ["Research result"]
 
-        results = await spawn_and_aggregate_sequential(
-            runner, [(ResearchSubAgent(), "Research topic A")]
-        )
-        assert results == ["Research result"]
-
-    async def test_sequential_two_agents_correct_order(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("First result"))
-        mock.queue_response(_completion("Second result"))
-
-        results = await spawn_and_aggregate_sequential(
-            runner, [
-                (ResearchSubAgent(), "Topic A"),
-                (WritingSubAgent(), "Write about A"),
-            ]
-        )
+    def test_sequential_two_agents_correct_order(self):
+        client = build_app("First result", "Second result")
+        r = client.post("/spawn/sequential", json={"tasks": ["Topic A", "Write about A"]})
+        assert r.status_code == 200
+        results = r.json()["results"]
         assert results[0] == "First result"
         assert results[1] == "Second result"
 
-    async def test_sequential_three_agents(self):
-        runner, mock = _make_runner()
-        for i in range(3):
-            mock.queue_response(_completion(f"Result {i}"))
-
-        results = await spawn_and_aggregate_sequential(
-            runner, [
-                (ResearchSubAgent(), "Research"),
-                (WritingSubAgent(), "Write"),
-                (SummarySubAgent(), "Summarise"),
-            ]
-        )
+    def test_sequential_three_agents(self):
+        client = build_app("Result 0", "Result 1", "Result 2")
+        r = client.post("/spawn/sequential", json={"tasks": ["Research", "Write", "Summarise"]})
+        assert r.status_code == 200
+        results = r.json()["results"]
         assert len(results) == 3
         assert results == ["Result 0", "Result 1", "Result 2"]
 
-    async def test_sequential_preserves_response_content(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("Detailed research findings about AI"))
-
-        results = await spawn_and_aggregate_sequential(
-            runner, [(ResearchSubAgent(), "Research AI")]
-        )
-        assert "AI" in results[0]
+    def test_sequential_preserves_response_content(self):
+        client = build_app("Detailed research findings about AI")
+        r = client.post("/spawn/sequential", json={"tasks": ["Research AI"]})
+        assert r.status_code == 200
+        assert "AI" in r.json()["results"][0]
 
 
 class TestParallelSubAgents:
-    async def test_parallel_single_agent(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("Parallel result"))
-
-        results = await spawn_and_aggregate_parallel(
-            runner, [(ResearchSubAgent(), "Topic")]
-        )
+    def test_parallel_single_agent(self):
+        client = build_app("Parallel result")
+        r = client.post("/spawn/parallel", json={"tasks": ["Topic"]})
+        assert r.status_code == 200
+        results = r.json()["results"]
         assert len(results) == 1
         assert results[0] == "Parallel result"
 
-    async def test_parallel_two_agents_all_results_collected(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("Result A"))
-        mock.queue_response(_completion("Result B"))
-
-        results = await spawn_and_aggregate_parallel(
-            runner, [
-                (ResearchSubAgent(), "Topic A"),
-                (WritingSubAgent(), "Topic B"),
-            ]
-        )
+    def test_parallel_two_agents_all_results_collected(self):
+        client = build_app("Result A", "Result B")
+        r = client.post("/spawn/parallel", json={"tasks": ["Topic A", "Topic B"]})
+        assert r.status_code == 200
+        results = r.json()["results"]
         assert len(results) == 2
         assert set(results) == {"Result A", "Result B"}
 
-    async def test_parallel_results_are_strings(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("content one"))
-        mock.queue_response(_completion("content two"))
-
-        results = await spawn_and_aggregate_parallel(
-            runner, [
-                (ResearchSubAgent(), "Q1"),
-                (WritingSubAgent(), "Q2"),
-            ]
-        )
-        for r in results:
-            assert isinstance(r, str)
+    def test_parallel_results_are_strings(self):
+        client = build_app("content one", "content two")
+        r = client.post("/spawn/parallel", json={"tasks": ["Q1", "Q2"]})
+        assert r.status_code == 200
+        for res in r.json()["results"]:
+            assert isinstance(res, str)
 
 
 class TestSubAgentRunnerApi:
-    async def test_runner_run_returns_agent_response(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("Hello from sub-agent"))
+    def test_runner_run_returns_agent_response(self):
+        client = build_app("Hello from sub-agent")
+        r = client.post("/spawn/run-once", json={"prompt": "Hello"})
+        assert r.status_code == 200
+        assert r.json()["content"] == "Hello from sub-agent"
 
-        response = await runner.run(ResearchSubAgent(), "Hello")
-        assert response.content == "Hello from sub-agent"
+    def test_runner_records_turns(self):
+        client = build_app("Done")
+        r = client.post("/spawn/run-once", json={"prompt": "Summarise this"})
+        assert r.status_code == 200
+        assert r.json()["turns"] >= 1
 
-    async def test_runner_records_turns(self):
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("Done"))
-
-        response = await runner.run(SummarySubAgent(), "Summarise this")
-        assert response.turns >= 1
-
-    async def test_runner_run_multiple_times_sequential(self):
-        """Same runner can be called multiple times."""
-        runner, mock = _make_runner()
-        mock.queue_response(_completion("First"))
-        mock.queue_response(_completion("Second"))
-
-        r1 = await runner.run(ResearchSubAgent(), "First prompt")
-        r2 = await runner.run(WritingSubAgent(), "Second prompt")
-        assert r1.content == "First"
-        assert r2.content == "Second"
+    def test_runner_run_multiple_times_sequential(self):
+        client = build_app("First", "Second")
+        r1 = client.post("/spawn/run-once", json={"prompt": "First prompt"})
+        r2 = client.post("/spawn/run-once", json={"prompt": "Second prompt"})
+        assert r1.json()["content"] == "First"
+        assert r2.json()["content"] == "Second"

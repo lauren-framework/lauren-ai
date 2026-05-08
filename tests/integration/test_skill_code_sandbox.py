@@ -13,16 +13,18 @@ Tests cover:
 - Timeout flag returns success=False with timeout message
 """
 
+from __future__ import annotations
+
 import asyncio
 import io
-import sys
 from contextlib import redirect_stdout
 
-import pytest
+from lauren import LaurenFactory, controller, post, module, Json
+from lauren.testing import TestClient
 
 
 # ---------------------------------------------------------------------------
-# CodeExecutionTool implementation (inline for test isolation)
+# CodeExecutionTool implementation
 # ---------------------------------------------------------------------------
 
 _BLOCKED = {"open", "exec", "eval", "__import__", "compile", "globals", "locals"}
@@ -52,8 +54,6 @@ class CodeExecutionTool:
         stdout_capture = io.StringIO()
         local_vars: dict = {}
 
-        # exec() is synchronous and CPU-bound — run it in a thread so the
-        # event loop can enforce the timeout via asyncio.wait_for.
         import time as _time
         safe_globals = {"__builtins__": SAFE_BUILTINS, "time": _time}
 
@@ -83,7 +83,31 @@ class CodeExecutionTool:
             return {"error": str(e), "success": False}
 
 
-_CTX = None  # tool.run(ctx, ...) — ctx is not used in sandbox
+_CTX = None  # ctx not used in sandbox
+
+
+# ---------------------------------------------------------------------------
+# Controllers / Module
+# ---------------------------------------------------------------------------
+
+
+@controller("/sandbox")
+class SandboxController:
+    @post("/run")
+    async def run(self, body: Json[dict]) -> dict:
+        code = body.get("code", "")
+        timeout = body.get("timeout", 5.0)
+        tool_timeout = body.get("tool_timeout", 5.0)
+        sandbox = CodeExecutionTool(timeout=tool_timeout)
+        return await sandbox.run(_CTX, code=code, timeout=timeout)
+
+
+@module(controllers=[SandboxController])
+class CodeSandboxModule: ...
+
+
+def build_app() -> TestClient:
+    return TestClient(LaurenFactory.create(CodeSandboxModule))
 
 
 # ---------------------------------------------------------------------------
@@ -92,72 +116,78 @@ _CTX = None  # tool.run(ctx, ...) — ctx is not used in sandbox
 
 
 class TestCodeExecutionSuccess:
-    @pytest.mark.asyncio
-    async def test_print_captured_in_stdout(self):
+    def test_print_captured_in_stdout(self):
         """print() output is captured in the stdout field."""
-        sandbox = CodeExecutionTool()
-        result = await sandbox.run(_CTX, 'print("hello world")')
+        client = build_app()
+        r = client.post("/sandbox/run", json={"code": 'print("hello world")', "timeout": 5.0})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert "hello world" in data["stdout"]
 
-        assert result["success"] is True
-        assert "hello world" in result["stdout"]
-
-    @pytest.mark.asyncio
-    async def test_math_expression_produces_correct_output(self):
+    def test_math_expression_produces_correct_output(self):
         """Arithmetic evaluates correctly and output is captured."""
-        sandbox = CodeExecutionTool()
-        result = await sandbox.run(_CTX, "print(2 + 3 * 4)")
+        client = build_app()
+        r = client.post("/sandbox/run", json={"code": "print(2 + 3 * 4)", "timeout": 5.0})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert "14" in data["stdout"]
 
-        assert result["success"] is True
-        assert "14" in result["stdout"]
-
-    @pytest.mark.asyncio
-    async def test_local_variables_are_reported(self):
+    def test_local_variables_are_reported(self):
         """Variables defined in the code appear in the locals dict."""
-        sandbox = CodeExecutionTool()
-        result = await sandbox.run(_CTX, "x = 42\ny = 'hello'")
+        client = build_app()
+        r = client.post("/sandbox/run", json={"code": "x = 42\ny = 'hello'", "timeout": 5.0})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert "x" in data["locals"]
+        assert "y" in data["locals"]
+        assert "42" in data["locals"]["x"]
 
-        assert result["success"] is True
-        assert "x" in result["locals"]
-        assert "y" in result["locals"]
-        assert "42" in result["locals"]["x"]
-
-    @pytest.mark.asyncio
-    async def test_list_comprehension_executes(self):
+    def test_list_comprehension_executes(self):
         """List comprehensions execute without errors."""
-        sandbox = CodeExecutionTool()
-        result = await sandbox.run(_CTX, "squares = [i**2 for i in range(5)]\nprint(squares)")
+        client = build_app()
+        r = client.post("/sandbox/run", json={
+            "code": "squares = [i**2 for i in range(5)]\nprint(squares)",
+            "timeout": 5.0,
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert "[0, 1, 4, 9, 16]" in data["stdout"]
 
-        assert result["success"] is True
-        assert "[0, 1, 4, 9, 16]" in result["stdout"]
-
-    @pytest.mark.asyncio
-    async def test_private_variables_excluded_from_locals(self):
+    def test_private_variables_excluded_from_locals(self):
         """Variables starting with _ are excluded from the locals report."""
-        sandbox = CodeExecutionTool()
-        result = await sandbox.run(_CTX, "_hidden = 'secret'\npublic = 1")
+        client = build_app()
+        r = client.post("/sandbox/run", json={
+            "code": "_hidden = 'secret'\npublic = 1",
+            "timeout": 5.0,
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert "_hidden" not in data["locals"]
+        assert "public" in data["locals"]
 
-        assert result["success"] is True
-        assert "_hidden" not in result["locals"]
-        assert "public" in result["locals"]
-
-    @pytest.mark.asyncio
-    async def test_empty_code_succeeds(self):
+    def test_empty_code_succeeds(self):
         """Empty code string executes without error."""
-        sandbox = CodeExecutionTool()
-        result = await sandbox.run(_CTX, "")
+        client = build_app()
+        r = client.post("/sandbox/run", json={"code": "", "timeout": 5.0})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert data["stdout"] == ""
 
-        assert result["success"] is True
-        assert result["stdout"] == ""
-
-    @pytest.mark.asyncio
-    async def test_multiline_code_executes(self):
+    def test_multiline_code_executes(self):
         """Multi-line code with a function definition executes correctly."""
-        sandbox = CodeExecutionTool()
+        client = build_app()
         code = "def add(a, b):\n    return a + b\nresult = add(3, 4)\nprint(result)"
-        result = await sandbox.run(_CTX, code)
-
-        assert result["success"] is True
-        assert "7" in result["stdout"]
+        r = client.post("/sandbox/run", json={"code": code, "timeout": 5.0})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert "7" in data["stdout"]
 
 
 # ---------------------------------------------------------------------------
@@ -166,51 +196,48 @@ class TestCodeExecutionSuccess:
 
 
 class TestCodeExecutionBlocked:
-    @pytest.mark.asyncio
-    async def test_open_is_blocked(self):
+    def test_open_is_blocked(self):
         """open() is not available in the sandbox."""
-        sandbox = CodeExecutionTool()
-        result = await sandbox.run(_CTX, "f = open('/etc/passwd', 'r')")
+        client = build_app()
+        r = client.post("/sandbox/run", json={"code": "f = open('/etc/passwd', 'r')", "timeout": 5.0})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is False
+        assert "error" in data
+        assert "open" in data["error"] or "not defined" in data["error"]
 
-        assert result["success"] is False
-        assert "error" in result
-        # The error message should mention 'open' not being defined
-        assert "open" in result["error"] or "not defined" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_exec_is_blocked(self):
+    def test_exec_is_blocked(self):
         """exec() is not available in the sandbox."""
-        sandbox = CodeExecutionTool()
-        result = await sandbox.run(_CTX, "exec('import os')")
+        client = build_app()
+        r = client.post("/sandbox/run", json={"code": "exec('import os')", "timeout": 5.0})
+        assert r.status_code == 200
+        assert r.json()["success"] is False
 
-        assert result["success"] is False
-
-    @pytest.mark.asyncio
-    async def test_import_via_dunder_is_blocked(self):
+    def test_import_via_dunder_is_blocked(self):
         """__import__ is not available in the sandbox."""
-        sandbox = CodeExecutionTool()
-        result = await sandbox.run(_CTX, "__import__('os')")
+        client = build_app()
+        r = client.post("/sandbox/run", json={"code": "__import__('os')", "timeout": 5.0})
+        assert r.status_code == 200
+        assert r.json()["success"] is False
 
-        assert result["success"] is False
-
-    @pytest.mark.asyncio
-    async def test_exception_in_code_returns_error(self):
+    def test_exception_in_code_returns_error(self):
         """A ZeroDivisionError in code returns an error dict."""
-        sandbox = CodeExecutionTool()
-        result = await sandbox.run(_CTX, "x = 1 / 0")
+        client = build_app()
+        r = client.post("/sandbox/run", json={"code": "x = 1 / 0", "timeout": 5.0})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is False
+        assert "error" in data
+        assert "ZeroDivisionError" in data["error"] or "division by zero" in data["error"]
 
-        assert result["success"] is False
-        assert "error" in result
-        assert "ZeroDivisionError" in result["error"] or "division by zero" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_name_error_is_caught(self):
+    def test_name_error_is_caught(self):
         """Using an undefined name returns a NameError in the error field."""
-        sandbox = CodeExecutionTool()
-        result = await sandbox.run(_CTX, "y = undefined_variable")
-
-        assert result["success"] is False
-        assert "error" in result
+        client = build_app()
+        r = client.post("/sandbox/run", json={"code": "y = undefined_variable", "timeout": 5.0})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is False
+        assert "error" in data
 
 
 # ---------------------------------------------------------------------------
@@ -219,34 +246,29 @@ class TestCodeExecutionBlocked:
 
 
 class TestCodeExecutionTimeout:
-    @pytest.mark.asyncio
-    async def test_timeout_returns_success_false(self):
+    def test_timeout_returns_success_false(self):
         """Code slower than the timeout returns success=False with a timeout error."""
-        sandbox = CodeExecutionTool(timeout=0.05)
-        # time.sleep is interruptible via asyncio.wait_for / run_in_executor
-        # cancellation: the future resolves as TimeoutError while the thread
-        # finishes the sleep in the background (harmless for tests).
-        # time is pre-imported in the sandbox globals, so no import needed
-        result = await sandbox.run(
-            _CTX,
-            "time.sleep(2)",
-            timeout=0.05,
-        )
+        client = build_app()
+        r = client.post("/sandbox/run", json={
+            "code": "time.sleep(2)",
+            "timeout": 0.05,
+            "tool_timeout": 0.05,
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is False
+        assert "error" in data
+        assert "timed out" in data["error"].lower() or "timeout" in data["error"].lower()
 
-        assert result["success"] is False
-        assert "error" in result
-        assert "timed out" in result["error"].lower() or "timeout" in result["error"].lower()
-
-    @pytest.mark.asyncio
-    async def test_tool_timeout_caps_per_call_timeout(self):
+    def test_tool_timeout_caps_per_call_timeout(self):
         """Tool-level timeout is the effective cap when it is smaller than per-call timeout."""
-        # Tool has 0.05s cap; per-call asks for 10s → effective = 0.05s
-        sandbox = CodeExecutionTool(timeout=0.05)
-        result = await sandbox.run(
-            _CTX,
-            "time.sleep(2)",
-            timeout=10.0,
-        )
-
-        assert result["success"] is False
-        assert "timed out" in result["error"].lower() or "timeout" in result["error"].lower()
+        client = build_app()
+        r = client.post("/sandbox/run", json={
+            "code": "time.sleep(2)",
+            "timeout": 10.0,
+            "tool_timeout": 0.05,
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is False
+        assert "timed out" in data["error"].lower() or "timeout" in data["error"].lower()
