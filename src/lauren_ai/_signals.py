@@ -342,6 +342,21 @@ class SignalBus:
 
         return decorator
 
+    def clear(self, event_type: type) -> None:
+        """Remove all registered handlers for *event_type*.
+
+        No-op when no handlers are registered for *event_type*.
+
+        Use this to prevent handler accumulation when a subscriber class is
+        re-instantiated in the same process (e.g. hot-reload, or multiple
+        ``LaurenFactory.create()`` calls in integration tests that share a
+        module-level ``SignalBus`` singleton).
+
+        :param event_type: The event class whose handlers should be removed.
+        :type event_type: type
+        """
+        self._handlers.pop(event_type, None)
+
     async def emit(self, event: Any) -> None:
         """Emit *event* to all registered handlers for its type.
 

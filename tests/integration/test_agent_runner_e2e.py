@@ -131,6 +131,7 @@ class TestRunNoGuardrails:
             return {}
 
         from lauren_ai._tools import _add_to_tool_map
+
         tools = {}
         _add_to_tool_map(tools, noop_tool)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
@@ -189,6 +190,7 @@ class TestRunNoGuardrails:
             return {"echo": msg}
 
         from lauren_ai._tools import _add_to_tool_map
+
         tools = {}
         _add_to_tool_map(tools, echo_tool)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
@@ -600,6 +602,7 @@ class TestRunOutputGuardrails:
             return {}
 
         from lauren_ai._tools import _add_to_tool_map
+
         tools = {}
         _add_to_tool_map(tools, noop)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
@@ -612,12 +615,16 @@ class TestRunOutputGuardrails:
         class MultiAgent: ...
 
         # Turn 1: tool_use (content = "thinking..."), Turn 2: end_turn
-        mock.queue_response(Completion(
-            id="c1", model="mock", content="thinking...",
-            tool_calls=[ToolCall(tool_use_id="t1", name="noop", input={})],
-            stop_reason="tool_use",
-            usage=TokenUsage(input_tokens=5, output_tokens=5),
-        ))
+        mock.queue_response(
+            Completion(
+                id="c1",
+                model="mock",
+                content="thinking...",
+                tool_calls=[ToolCall(tool_use_id="t1", name="noop", input={})],
+                stop_reason="tool_use",
+                usage=TokenUsage(input_tokens=5, output_tokens=5),
+            )
+        )
         mock.queue_response(_completion("final"))
 
         await runner.run(MultiAgent(), "do it")
@@ -631,8 +638,10 @@ class TestRunOutputGuardrails:
 
         class _Turn2Guard:
             call_count = 0
+
             def __init__(self):
                 self.calls: list[str] = []
+
             async def check(self, text, ctx):
                 self.calls.append(text)
                 self.call_count += 1
@@ -648,6 +657,7 @@ class TestRunOutputGuardrails:
             return {}
 
         from lauren_ai._tools import _add_to_tool_map
+
         tools = {}
         _add_to_tool_map(tools, noop)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
@@ -659,12 +669,16 @@ class TestRunOutputGuardrails:
         @agent(model="mock-model")
         class TwoTurnAgent: ...
 
-        mock.queue_response(Completion(
-            id="c1", model="mock", content="before tool",
-            tool_calls=[ToolCall(tool_use_id="t1", name="noop", input={})],
-            stop_reason="tool_use",
-            usage=TokenUsage(input_tokens=5, output_tokens=5),
-        ))
+        mock.queue_response(
+            Completion(
+                id="c1",
+                model="mock",
+                content="before tool",
+                tool_calls=[ToolCall(tool_use_id="t1", name="noop", input={})],
+                stop_reason="tool_use",
+                usage=TokenUsage(input_tokens=5, output_tokens=5),
+            )
+        )
         mock.queue_response(_completion("final hallucination"))
 
         resp = await runner.run(TwoTurnAgent(), "go")
@@ -823,6 +837,7 @@ class TestRunStreamNoGuardrails:
             return {"pong": True}
 
         from lauren_ai._tools import _add_to_tool_map
+
         tools = {}
         _add_to_tool_map(tools, ping)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
@@ -834,17 +849,17 @@ class TestRunStreamNoGuardrails:
         class PingAgent: ...
 
         # Use proper ToolCallDelta chunks so the streaming runner can see the tool call
-        mock.queue_stream([
-            CompletionChunk(
-                tool_call_delta=ToolCallDelta(
-                    tool_use_id="t1", name="ping", input_delta="{}"
-                )
-            ),
-            CompletionChunk(
-                stop_reason="tool_use",
-                usage=TokenUsage(input_tokens=5, output_tokens=5),
-            ),
-        ])
+        mock.queue_stream(
+            [
+                CompletionChunk(
+                    tool_call_delta=ToolCallDelta(tool_use_id="t1", name="ping", input_delta="{}")
+                ),
+                CompletionChunk(
+                    stop_reason="tool_use",
+                    usage=TokenUsage(input_tokens=5, output_tokens=5),
+                ),
+            ]
+        )
         mock.queue_stream(_stream_chunks("pong received"))
 
         chunks = []
@@ -894,7 +909,9 @@ class TestRunStreamNoGuardrails:
         chunks_with_thinking = [
             CompletionChunk(thinking_delta="Let me think..."),
             CompletionChunk(delta="Answer"),
-            CompletionChunk(stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=5)),
+            CompletionChunk(
+                stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=5)
+            ),
         ]
         mock.queue_stream(chunks_with_thinking)
 
@@ -1300,6 +1317,7 @@ class TestRunStreamOutputGuardrails:
 
         from lauren_ai._tools import _add_to_tool_map
         from lauren_ai._transport import ToolCallDelta
+
         tools = {}
         _add_to_tool_map(tools, should_not_run)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
@@ -1315,18 +1333,20 @@ class TestRunStreamOutputGuardrails:
 
         # Stream that includes both text AND a tool call delta
         # Guardrail fires on the text → tool should not execute
-        mock.queue_stream([
-            CompletionChunk(delta="some text"),
-            CompletionChunk(
-                tool_call_delta=ToolCallDelta(
-                    tool_use_id="t1", name="should_not_run", input_delta='{"msg":"test"}'
-                )
-            ),
-            CompletionChunk(
-                stop_reason="tool_use",
-                usage=TokenUsage(input_tokens=5, output_tokens=5),
-            ),
-        ])
+        mock.queue_stream(
+            [
+                CompletionChunk(delta="some text"),
+                CompletionChunk(
+                    tool_call_delta=ToolCallDelta(
+                        tool_use_id="t1", name="should_not_run", input_delta='{"msg":"test"}'
+                    )
+                ),
+                CompletionChunk(
+                    stop_reason="tool_use",
+                    usage=TokenUsage(input_tokens=5, output_tokens=5),
+                ),
+            ]
+        )
 
         async for _ in await runner_with_tools.run_stream(ToolGuardAgent(), "hi"):
             pass
@@ -1421,6 +1441,7 @@ class TestRunStreamOutputGuardrails:
             return {}
 
         from lauren_ai._tools import _add_to_tool_map
+
         tools = {}
         _add_to_tool_map(tools, noop)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
@@ -1433,12 +1454,16 @@ class TestRunStreamOutputGuardrails:
         class MultiTurnAgent: ...
 
         # Turn 1: tool_use with text content
-        mock.queue_response(Completion(
-            id="c1", model="mock", content="thinking",
-            tool_calls=[ToolCall(tool_use_id="t1", name="noop", input={})],
-            stop_reason="tool_use",
-            usage=TokenUsage(input_tokens=5, output_tokens=5),
-        ))
+        mock.queue_response(
+            Completion(
+                id="c1",
+                model="mock",
+                content="thinking",
+                tool_calls=[ToolCall(tool_use_id="t1", name="noop", input={})],
+                stop_reason="tool_use",
+                usage=TokenUsage(input_tokens=5, output_tokens=5),
+            )
+        )
         # Turn 2: final answer via stream
         mock.queue_stream(_stream_chunks("final answer"))
 
@@ -1672,7 +1697,8 @@ class TestRunMemoryAndStore:
         runner, mock = _make_runner()
         mock.queue_response(_completion("OK"))
         await runner.run(
-            MetaStoreAgent(), "hi",
+            MetaStoreAgent(),
+            "hi",
             conversation_id="s",
             conversation_store=override_store,
         )
@@ -1757,6 +1783,7 @@ class TestRunLifecycleHooks:
             return {}
 
         from lauren_ai._tools import _add_to_tool_map
+
         tools = {}
         _add_to_tool_map(tools, noop)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
@@ -1769,12 +1796,16 @@ class TestRunLifecycleHooks:
             async def on_turn_complete(self, completion, ctx):
                 turns_seen.append(ctx.turn)
 
-        mock.queue_response(Completion(
-            id="c1", model="mock", content="thinking",
-            tool_calls=[ToolCall(tool_use_id="t1", name="noop", input={})],
-            stop_reason="tool_use",
-            usage=TokenUsage(input_tokens=5, output_tokens=5),
-        ))
+        mock.queue_response(
+            Completion(
+                id="c1",
+                model="mock",
+                content="thinking",
+                tool_calls=[ToolCall(tool_use_id="t1", name="noop", input={})],
+                stop_reason="tool_use",
+                usage=TokenUsage(input_tokens=5, output_tokens=5),
+            )
+        )
         mock.queue_response(_completion("done"))
 
         await runner.run(HookAgent(), "hi")
@@ -1790,6 +1821,7 @@ class TestRunLifecycleHooks:
             return {"value": x}
 
         from lauren_ai._tools import _add_to_tool_map
+
         tools = {}
         _add_to_tool_map(tools, spy_tool)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
@@ -1867,6 +1899,7 @@ class TestRunSignals:
             return {}
 
         from lauren_ai._tools import _add_to_tool_map
+
         tools = {}
         _add_to_tool_map(tools, sig_tool)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
@@ -1898,6 +1931,7 @@ class TestRunSignals:
             return {"ok": True}
 
         from lauren_ai._tools import _add_to_tool_map
+
         tools = {}
         _add_to_tool_map(tools, done_tool)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
@@ -1967,6 +2001,7 @@ class TestRunEdgeCases:
             raise ValueError("tool exploded")
 
         from lauren_ai._tools import _add_to_tool_map
+
         tools = {}
         _add_to_tool_map(tools, bad_tool)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
@@ -1993,6 +2028,7 @@ class TestRunEdgeCases:
             raise ValueError("tool exploded")
 
         from lauren_ai._tools import _add_to_tool_map
+
         tools = {}
         _add_to_tool_map(tools, bad_tool)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
@@ -2037,16 +2073,18 @@ class TestRunEdgeCases:
 
         runner, mock = _make_runner()
         # Mix empty deltas with real content
-        mock.queue_stream([
-            CompletionChunk(delta=""),       # empty — should not add to accumulated
-            CompletionChunk(delta="real"),
-            CompletionChunk(delta=""),       # empty — should not add to accumulated
-            CompletionChunk(delta=" text"),
-            CompletionChunk(
-                stop_reason="end_turn",
-                usage=TokenUsage(input_tokens=5, output_tokens=5),
-            ),
-        ])
+        mock.queue_stream(
+            [
+                CompletionChunk(delta=""),  # empty — should not add to accumulated
+                CompletionChunk(delta="real"),
+                CompletionChunk(delta=""),  # empty — should not add to accumulated
+                CompletionChunk(delta=" text"),
+                CompletionChunk(
+                    stop_reason="end_turn",
+                    usage=TokenUsage(input_tokens=5, output_tokens=5),
+                ),
+            ]
+        )
 
         async for _ in await runner.run_stream(CaptureAgent(), "hi"):
             pass

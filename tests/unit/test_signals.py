@@ -100,3 +100,92 @@ class TestSignalBus:
                 stop_reason="end_turn",
             )
         )
+
+    # ── clear() tests ────────────────────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_clear_removes_all_handlers(self):
+        bus = SignalBus()
+        received = []
+
+        @bus.on(ModelCallStarted)
+        async def h1(event):
+            received.append("h1")
+
+        @bus.on(ModelCallStarted)
+        async def h2(event):
+            received.append("h2")
+
+        bus.clear(ModelCallStarted)
+        await bus.emit(ModelCallStarted(model="test", messages_count=0))
+        assert received == []
+
+    @pytest.mark.asyncio
+    async def test_clear_unregistered_type_is_noop(self):
+        bus = SignalBus()
+        bus.clear(ModelCallStarted)  # should not raise
+
+    @pytest.mark.asyncio
+    async def test_clear_one_type_leaves_others(self):
+        bus = SignalBus()
+        model_calls = []
+        run_calls = []
+
+        @bus.on(ModelCallStarted)
+        async def on_model(event):
+            model_calls.append(event)
+
+        @bus.on(AgentRunComplete)
+        async def on_run(event):
+            run_calls.append(event)
+
+        bus.clear(ModelCallStarted)
+
+        await bus.emit(ModelCallStarted(model="t", messages_count=0))
+        assert model_calls == []  # cleared
+
+        usage = TokenUsage(input_tokens=0, output_tokens=0)
+        await bus.emit(
+            AgentRunComplete(turns=1, total_usage=usage, total_cost_usd=0.0, stop_reason="end_turn")
+        )
+        assert len(run_calls) == 1  # untouched
+
+    @pytest.mark.asyncio
+    async def test_clear_then_re_register_works(self):
+        """After clear(), new handlers can be registered and receive events."""
+        bus = SignalBus()
+        first, second = [], []
+
+        @bus.on(ModelCallStarted)
+        async def h_first(event):
+            first.append(event)
+
+        bus.clear(ModelCallStarted)
+
+        @bus.on(ModelCallStarted)
+        async def h_second(event):
+            second.append(event)
+
+        await bus.emit(ModelCallStarted(model="t", messages_count=0))
+        assert first == []
+        assert len(second) == 1
+
+    @pytest.mark.asyncio
+    async def test_clear_prevents_handler_accumulation(self):
+        """Simulate multiple EventForwarder-style init() calls; clear() prevents N× duplication."""
+        bus = SignalBus()
+        received = []
+
+        async def make_handler(_r):
+            async def _h(event):
+                _r.append(event)
+
+            return _h
+
+        # Simulate N app creations each calling bus.on() for the same event type
+        for _ in range(5):
+            bus.clear(ModelCallStarted)  # reset before each registration
+            bus.on(ModelCallStarted)(await make_handler(received))
+
+        await bus.emit(ModelCallStarted(model="t", messages_count=0))
+        assert len(received) == 1  # exactly 1, not 5

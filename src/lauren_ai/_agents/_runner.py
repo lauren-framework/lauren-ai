@@ -378,9 +378,7 @@ class AgentRunnerBase(AgentRunner):
             try:
                 _inp_decision = await _run_input_guardrails(_input_guards, message, meta.name)
             except Exception as _exc:  # noqa: BLE001
-                logger.warning(
-                    "lauren_ai: input guardrail check failed — failing open: %s", _exc
-                )
+                logger.warning("lauren_ai: input guardrail check failed — failing open: %s", _exc)
                 _inp_decision = None
             if _inp_decision is not None:
                 _redirect = (
@@ -707,9 +705,7 @@ class AgentRunnerBase(AgentRunner):
                     _stream_input_guards, message, meta.name
                 )
             except Exception as _exc:  # noqa: BLE001
-                logger.warning(
-                    "lauren_ai: input guardrail check failed — failing open: %s", _exc
-                )
+                logger.warning("lauren_ai: input guardrail check failed — failing open: %s", _exc)
                 _inp_decision = None
             if _inp_decision is not None:
                 _redirect = (
