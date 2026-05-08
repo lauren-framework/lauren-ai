@@ -15,26 +15,18 @@ NOTE: No `from __future__ import annotations` — @tool() used.
 
 import json
 
-import pytest
-from pydantic import BaseModel
-
-from lauren import LaurenFactory, controller, get, post, module, injectable, Scope, use_value, Json
-from lauren.testing import TestClient
 from lauren_ai._agents import agent
-from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
-from lauren_ai._config import LLMConfig
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
+from lauren_ai.testing import TestClient
 
 
 # ---------------------------------------------------------------------------
-# Module-level mock
+# Helpers
 # ---------------------------------------------------------------------------
 
-_MOCK = MockTransport()
 
-
-def _completion(content: str, *, id: str = "c1") -> Completion:
+def _c(content: str, *, id: str = "c1") -> Completion:
     return Completion(
         id=id,
         model="mock-model",
@@ -46,75 +38,41 @@ def _completion(content: str, *, id: str = "c1") -> Completion:
 
 
 # ---------------------------------------------------------------------------
-# plan_and_execute helper (pure async utility)
+# Agent definitions
 # ---------------------------------------------------------------------------
 
 
-async def plan_and_execute(
-    runner: AgentRunner,
-    request: str,
-    planner,
-    executor,
-) -> list[str]:
-    """Run the plan-and-execute pattern. Returns a list of step results."""
-    plan_response = await runner.run(planner, request)
-    try:
-        plan = json.loads(plan_response.content)
-    except json.JSONDecodeError:
-        return []
+@agent(model="mock-model", system="Return JSON plan", max_turns=1)
+class PlannerAgent: ...
 
+
+@agent(model="mock-model", system="Execute step")
+class ExecutorAgent: ...
+
+
+# ---------------------------------------------------------------------------
+# plan_and_execute helper (uses two clients sharing a mock)
+# ---------------------------------------------------------------------------
+
+
+async def plan_and_execute(mock: MockTransport, request: str) -> tuple[list[str], int]:
+    """Run the plan-and-execute pattern using a shared mock transport.
+
+    Returns (step_results, total_llm_calls).
+    """
+    planner_client = TestClient(PlannerAgent(), mock)
+    plan_resp = await planner_client.run_async(request)
+    try:
+        plan = json.loads(plan_resp.content)
+    except json.JSONDecodeError:
+        return [], len(mock.calls)
+
+    executor_client = TestClient(ExecutorAgent(), mock)
     results = []
     for step in plan.get("steps", []):
-        result = await runner.run(executor, step)
+        result = await executor_client.run_async(step)
         results.append(result.content)
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Controller / Module
-# ---------------------------------------------------------------------------
-
-
-class _PlanRequest(BaseModel):
-    request: str = "Do something"
-
-
-@controller("/plan-execute")
-class PlanExecuteController:
-    def __init__(self, mock: MockTransport) -> None:
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        self._runner = AgentRunner(transport=mock, tools={}, config=cfg)
-        self._mock = mock
-
-    @post("/run")
-    async def run(self, body: Json[_PlanRequest]) -> dict:
-        @agent(model="mock-model", system="Return JSON plan", max_turns=1)
-        class PlannerAgent: ...
-
-        @agent(model="mock-model", system="Execute step")
-        class ExecutorAgent: ...
-
-        results = await plan_and_execute(
-            self._runner, body.request, PlannerAgent(), ExecutorAgent()
-        )
-        return {
-            "results": results,
-            "total_calls": len(self._mock.calls),
-        }
-
-
-@module(
-    controllers=[PlanExecuteController],
-    providers=[use_value(provide=MockTransport, value=_MOCK)],
-)
-class PlanExecuteModule: ...
-
-
-def build_app(*responses: str) -> TestClient:
-    _MOCK.reset()
-    for content in responses:
-        _MOCK.queue_response(_completion(content))
-    return TestClient(LaurenFactory.create(PlanExecuteModule))
+    return results, len(mock.calls)
 
 
 # ---------------------------------------------------------------------------
@@ -123,36 +81,32 @@ def build_app(*responses: str) -> TestClient:
 
 
 class TestPlannerPhase:
-    def test_planner_returns_valid_json(self):
-        client = build_app(
-            '{"steps": ["step1", "step2"]}',
-            "step1 done",
-            "step2 done",
-        )
-        r = client.post("/plan-execute/run", json={"request": "Do two things"})
-        assert r.status_code == 200
-        assert len(r.json()["results"]) == 2
+    async def test_planner_returns_valid_json(self):
+        mock = MockTransport()
+        mock.queue_response(_c('{"steps": ["step1", "step2"]}'))
+        mock.queue_response(_c("step1 done"))
+        mock.queue_response(_c("step2 done"))
+        results, _ = await plan_and_execute(mock, "Do two things")
+        assert len(results) == 2
 
-    def test_planner_single_step(self):
-        client = build_app(
-            '{"steps": ["only step"]}',
-            "only step done",
-        )
-        r = client.post("/plan-execute/run", json={"request": "Do one thing"})
-        assert r.status_code == 200
-        assert len(r.json()["results"]) == 1
+    async def test_planner_single_step(self):
+        mock = MockTransport()
+        mock.queue_response(_c('{"steps": ["only step"]}'))
+        mock.queue_response(_c("only step done"))
+        results, _ = await plan_and_execute(mock, "Do one thing")
+        assert len(results) == 1
 
-    def test_planner_empty_steps(self):
-        client = build_app('{"steps": []}')
-        r = client.post("/plan-execute/run", json={"request": "Do nothing"})
-        assert r.status_code == 200
-        assert r.json()["results"] == []
+    async def test_planner_empty_steps(self):
+        mock = MockTransport()
+        mock.queue_response(_c('{"steps": []}'))
+        results, _ = await plan_and_execute(mock, "Do nothing")
+        assert results == []
 
-    def test_planner_invalid_json_returns_empty(self):
-        client = build_app("Not valid JSON at all")
-        r = client.post("/plan-execute/run", json={"request": "do it"})
-        assert r.status_code == 200
-        assert r.json()["results"] == []
+    async def test_planner_invalid_json_returns_empty(self):
+        mock = MockTransport()
+        mock.queue_response(_c("Not valid JSON at all"))
+        results, _ = await plan_and_execute(mock, "do it")
+        assert results == []
 
 
 # ---------------------------------------------------------------------------
@@ -161,45 +115,36 @@ class TestPlannerPhase:
 
 
 class TestExecutorPhase:
-    def test_executor_runs_for_each_step(self):
-        client = build_app(
-            '{"steps": ["A", "B", "C"]}',
-            "result A",
-            "result B",
-            "result C",
-        )
-        r = client.post("/plan-execute/run", json={"request": "Three steps"})
-        assert r.status_code == 200
-        assert len(r.json()["results"]) == 3
+    async def test_executor_runs_for_each_step(self):
+        mock = MockTransport()
+        mock.queue_response(_c('{"steps": ["A", "B", "C"]}'))
+        mock.queue_response(_c("result A"))
+        mock.queue_response(_c("result B"))
+        mock.queue_response(_c("result C"))
+        results, _ = await plan_and_execute(mock, "Three steps")
+        assert len(results) == 3
 
-    def test_executor_result_content_matches(self):
-        client = build_app(
-            '{"steps": ["fetch data"]}',
-            "Data fetched successfully.",
-        )
-        r = client.post("/plan-execute/run", json={"request": "fetch something"})
-        assert r.status_code == 200
-        assert r.json()["results"][0] == "Data fetched successfully."
+    async def test_executor_result_content_matches(self):
+        mock = MockTransport()
+        mock.queue_response(_c('{"steps": ["fetch data"]}'))
+        mock.queue_response(_c("Data fetched successfully."))
+        results, _ = await plan_and_execute(mock, "fetch something")
+        assert results[0] == "Data fetched successfully."
 
-    def test_total_llm_calls_equals_steps_plus_one(self):
-        client = build_app(
-            '{"steps": ["s1", "s2"]}',
-            "r1",
-            "r2",
-        )
-        r = client.post("/plan-execute/run", json={"request": "do two steps"})
-        assert r.status_code == 200
+    async def test_total_llm_calls_equals_steps_plus_one(self):
+        mock = MockTransport()
+        mock.queue_response(_c('{"steps": ["s1", "s2"]}'))
+        mock.queue_response(_c("r1"))
+        mock.queue_response(_c("r2"))
+        _, total_calls = await plan_and_execute(mock, "do two steps")
         # 1 planner call + 2 executor calls = 3
-        assert r.json()["total_calls"] == 3
+        assert total_calls == 3
 
-    def test_executor_receives_step_as_message(self):
-        client = build_app(
-            '{"steps": ["analyze metrics"]}',
-            "Metrics analyzed.",
-        )
-        r = client.post("/plan-execute/run", json={"request": "analyze"})
-        assert r.status_code == 200
-        # Verify the step text appeared in mock calls
-        assert len(_MOCK.calls) == 2
-        executor_call = _MOCK.calls[1]
+    async def test_executor_receives_step_as_message(self):
+        mock = MockTransport()
+        mock.queue_response(_c('{"steps": ["analyze metrics"]}'))
+        mock.queue_response(_c("Metrics analyzed."))
+        _, total_calls = await plan_and_execute(mock, "analyze")
+        assert total_calls == 2
+        executor_call = mock.calls[1]
         assert "analyze metrics" in str(executor_call.messages)

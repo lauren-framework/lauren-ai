@@ -1,21 +1,14 @@
 """Integration tests for the async agent background worker pattern (Skill 35).
 
-All tests go through the TestClient / HTTP layer.
-
-Uses threading.Thread + queue.Queue instead of asyncio primitives so that
-the background worker survives across separate TestClient request cycles
-(each request may use a different event-loop iteration).
+All tests call AgentTaskQueue methods directly (no HTTP layer).
+Uses threading.Thread + queue.Queue so the background worker can run
+async handlers in a dedicated thread-local event loop.
 """
-
-from __future__ import annotations
 
 import queue
 import threading
 from dataclasses import dataclass
 from uuid import uuid4
-
-from lauren import LaurenFactory, controller, get, post, module, Json, Path
-from lauren.testing import TestClient
 
 
 # ---------------------------------------------------------------------------
@@ -33,14 +26,9 @@ class AgentTask:
 
 
 class AgentTaskQueue:
-    """Thread-safe task queue backed by stdlib threading primitives.
+    """Thread-safe task queue backed by stdlib threading primitives."""
 
-    Using threading (not asyncio) here means the worker and queue state
-    survive across separate TestClient request cycles without event-loop
-    binding issues.
-    """
-
-    _STOP = object()  # sentinel value to stop the worker thread
+    _STOP = object()
 
     def __init__(self) -> None:
         self._queue: queue.Queue = queue.Queue()
@@ -80,7 +68,6 @@ class AgentTaskQueue:
         self.stop_worker()
         with self._lock:
             self._tasks.clear()
-        # drain any leftover items
         while not self._queue.empty():
             try:
                 self._queue.get_nowait()
@@ -89,7 +76,6 @@ class AgentTaskQueue:
                 break
 
     def _run_worker(self, handler_fn) -> None:
-        """Run async handlers inside a dedicated thread-local event loop."""
         import asyncio
 
         loop = asyncio.new_event_loop()
@@ -138,218 +124,123 @@ async def sometimes_failing_handler(prompt: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Module-level queue + Controllers / Module
-# ---------------------------------------------------------------------------
-
-_queue = AgentTaskQueue()
-
-_HANDLERS = {
-    "echo": echo_handler,
-    "failing": failing_handler,
-    "slow": slow_handler,
-    "sometimes_failing": sometimes_failing_handler,
-}
-
-
-@controller("/jobs")
-class JobsController:
-    @post("/submit")
-    async def submit(self, body: Json[dict]) -> dict:
-        task_id = _queue.submit(body.get("prompt", ""))
-        return {"task_id": task_id}
-
-    @post("/start-worker")
-    async def start_worker(self, body: Json[dict]) -> dict:
-        handler = _HANDLERS.get(body.get("handler", "echo"), echo_handler)
-        _queue.start_worker(handler)
-        return {"started": True}
-
-    @post("/drain")
-    async def drain(self, body: Json[dict]) -> dict:
-        _queue.drain()
-        return {"drained": True}
-
-    @post("/stop-worker")
-    async def stop_worker(self, body: Json[dict]) -> dict:
-        _queue.stop_worker()
-        return {"stopped": True}
-
-    @get("/result/{task_id}")
-    async def get_result(self, task_id: Path[str]) -> dict:
-        task = _queue.get_result(task_id)
-        if task is None:
-            return {"status": "not_found"}
-        return {
-            "task_id": task.task_id,
-            "status": task.status,
-            "result": task.result,
-            "error": task.error,
-        }
-
-    @get("/task-status/{task_id}")
-    async def task_status(self, task_id: Path[str]) -> dict:
-        task = _queue.get_result(task_id)
-        if task is None:
-            return {"found": False}
-        return {"found": True, "status": task.status}
-
-    @post("/reset")
-    async def reset(self, body: Json[dict]) -> dict:
-        _queue.reset()
-        return {"reset": True}
-
-
-@module(controllers=[JobsController])
-class AsyncBackgroundModule: ...
-
-
-def build_app() -> TestClient:
-    return TestClient(LaurenFactory.create(AsyncBackgroundModule))
-
-
-# ---------------------------------------------------------------------------
-# Tests — all through TestClient
+# Tests
 # ---------------------------------------------------------------------------
 
 
 class TestAgentTaskQueueSubmit:
     def test_submit_returns_task_id_string(self):
-        client = build_app()
-        client.post("/jobs/reset", json={})
-        r = client.post("/jobs/submit", json={"prompt": "Hello"})
-        assert r.status_code == 200
-        data = r.json()
-        assert isinstance(data["task_id"], str)
-        assert len(data["task_id"]) > 0
+        q = AgentTaskQueue()
+        task_id = q.submit("Hello")
+        assert isinstance(task_id, str)
+        assert len(task_id) > 0
+        q.reset()
 
     def test_submitted_task_is_initially_pending(self):
-        client = build_app()
-        client.post("/jobs/reset", json={})
-        r = client.post("/jobs/submit", json={"prompt": "Test"})
-        task_id = r.json()["task_id"]
-        r2 = client.get(f"/jobs/task-status/{task_id}")
-        assert r2.status_code == 200
-        data = r2.json()
-        assert data["found"] is True
-        assert data["status"] == "pending"
+        q = AgentTaskQueue()
+        task_id = q.submit("Test")
+        task = q.get_result(task_id)
+        assert task is not None
+        assert task.status == "pending"
+        q.reset()
 
-    def test_get_result_returns_not_found_for_unknown_id(self):
-        client = build_app()
-        client.post("/jobs/reset", json={})
-        r = client.get("/jobs/result/nonexistent-id")
-        assert r.status_code == 200
-        assert r.json()["status"] == "not_found"
+    def test_get_result_returns_none_for_unknown_id(self):
+        q = AgentTaskQueue()
+        task = q.get_result("nonexistent-id")
+        assert task is None
 
 
 class TestAgentTaskQueueWorker:
     def test_task_status_is_done_after_processing(self):
-        client = build_app()
-        client.post("/jobs/reset", json={})
-        r = client.post("/jobs/submit", json={"prompt": "work"})
-        task_id = r.json()["task_id"]
-        client.post("/jobs/start-worker", json={"handler": "echo"})
-        client.post("/jobs/drain", json={})
-        client.post("/jobs/stop-worker", json={})
-        r2 = client.get(f"/jobs/result/{task_id}")
-        assert r2.status_code == 200
-        assert r2.json()["status"] == "done"
+        q = AgentTaskQueue()
+        task_id = q.submit("work")
+        q.start_worker(echo_handler)
+        q.drain()
+        q.stop_worker()
+        task = q.get_result(task_id)
+        assert task is not None
+        assert task.status == "done"
 
     def test_task_result_is_set_after_processing(self):
-        client = build_app()
-        client.post("/jobs/reset", json={})
-        r = client.post("/jobs/submit", json={"prompt": "my-prompt"})
-        task_id = r.json()["task_id"]
-        client.post("/jobs/start-worker", json={"handler": "echo"})
-        client.post("/jobs/drain", json={})
-        client.post("/jobs/stop-worker", json={})
-        r2 = client.get(f"/jobs/result/{task_id}")
-        assert r2.status_code == 200
-        assert r2.json()["result"] == "result:my-prompt"
+        q = AgentTaskQueue()
+        task_id = q.submit("my-prompt")
+        q.start_worker(echo_handler)
+        q.drain()
+        q.stop_worker()
+        task = q.get_result(task_id)
+        assert task is not None
+        assert task.result == "result:my-prompt"
 
     def test_prompt_is_forwarded_to_handler(self):
-        client = build_app()
-        client.post("/jobs/reset", json={})
-        r = client.post("/jobs/submit", json={"prompt": "specific prompt text"})
-        task_id = r.json()["task_id"]
-        client.post("/jobs/start-worker", json={"handler": "echo"})
-        client.post("/jobs/drain", json={})
-        client.post("/jobs/stop-worker", json={})
-        r2 = client.get(f"/jobs/result/{task_id}")
-        assert r2.status_code == 200
-        assert r2.json()["result"] == "result:specific prompt text"
+        q = AgentTaskQueue()
+        task_id = q.submit("specific prompt text")
+        q.start_worker(echo_handler)
+        q.drain()
+        q.stop_worker()
+        task = q.get_result(task_id)
+        assert task is not None
+        assert task.result == "result:specific prompt text"
 
 
 class TestAgentTaskQueueFailure:
     def test_failed_handler_sets_status_failed(self):
-        client = build_app()
-        client.post("/jobs/reset", json={})
-        r = client.post("/jobs/submit", json={"prompt": "doomed"})
-        task_id = r.json()["task_id"]
-        client.post("/jobs/start-worker", json={"handler": "failing"})
-        client.post("/jobs/drain", json={})
-        client.post("/jobs/stop-worker", json={})
-        r2 = client.get(f"/jobs/result/{task_id}")
-        assert r2.status_code == 200
-        assert r2.json()["status"] == "failed"
+        q = AgentTaskQueue()
+        task_id = q.submit("doomed")
+        q.start_worker(failing_handler)
+        q.drain()
+        q.stop_worker()
+        task = q.get_result(task_id)
+        assert task is not None
+        assert task.status == "failed"
 
     def test_failed_handler_sets_error_message(self):
-        client = build_app()
-        client.post("/jobs/reset", json={})
-        r = client.post("/jobs/submit", json={"prompt": "doomed"})
-        task_id = r.json()["task_id"]
-        client.post("/jobs/start-worker", json={"handler": "failing"})
-        client.post("/jobs/drain", json={})
-        client.post("/jobs/stop-worker", json={})
-        r2 = client.get(f"/jobs/result/{task_id}")
-        assert r2.status_code == 200
-        data = r2.json()
-        assert data["error"] is not None
-        assert "handler failed" in data["error"]
+        q = AgentTaskQueue()
+        task_id = q.submit("doomed")
+        q.start_worker(failing_handler)
+        q.drain()
+        q.stop_worker()
+        task = q.get_result(task_id)
+        assert task is not None
+        assert task.error is not None
+        assert "handler failed" in task.error
 
     def test_worker_continues_after_failure(self):
-        client = build_app()
-        client.post("/jobs/reset", json={})
-        r1 = client.post("/jobs/submit", json={"prompt": "fail"})
-        r2 = client.post("/jobs/submit", json={"prompt": "ok-prompt"})
-        id1 = r1.json()["task_id"]
-        id2 = r2.json()["task_id"]
-        client.post("/jobs/start-worker", json={"handler": "sometimes_failing"})
-        client.post("/jobs/drain", json={})
-        client.post("/jobs/stop-worker", json={})
-        t1 = client.get(f"/jobs/result/{id1}").json()
-        t2 = client.get(f"/jobs/result/{id2}").json()
-        assert t1["status"] == "failed"
-        assert t2["status"] == "done"
-        assert t2["result"] == "ok:ok-prompt"
+        q = AgentTaskQueue()
+        id1 = q.submit("fail")
+        id2 = q.submit("ok-prompt")
+        q.start_worker(sometimes_failing_handler)
+        q.drain()
+        q.stop_worker()
+        t1 = q.get_result(id1)
+        t2 = q.get_result(id2)
+        assert t1 is not None
+        assert t1.status == "failed"
+        assert t2 is not None
+        assert t2.status == "done"
+        assert t2.result == "ok:ok-prompt"
 
 
 class TestAgentTaskQueueMultipleTasks:
     def test_multiple_tasks_all_processed(self):
-        client = build_app()
-        client.post("/jobs/reset", json={})
+        q = AgentTaskQueue()
         prompts = [f"prompt-{i}" for i in range(5)]
-        task_ids = [
-            client.post("/jobs/submit", json={"prompt": p}).json()["task_id"]
-            for p in prompts
-        ]
-        client.post("/jobs/start-worker", json={"handler": "echo"})
-        client.post("/jobs/drain", json={})
-        client.post("/jobs/stop-worker", json={})
+        task_ids = [q.submit(p) for p in prompts]
+        q.start_worker(echo_handler)
+        q.drain()
+        q.stop_worker()
         for i, task_id in enumerate(task_ids):
-            r = client.get(f"/jobs/result/{task_id}").json()
-            assert r["status"] == "done"
-            assert r["result"] == f"result:prompt-{i}"
+            task = q.get_result(task_id)
+            assert task is not None
+            assert task.status == "done"
+            assert task.result == f"result:prompt-{i}"
 
     def test_slow_tasks_all_complete_after_drain(self):
-        client = build_app()
-        client.post("/jobs/reset", json={})
-        ids = [
-            client.post("/jobs/submit", json={"prompt": f"slow-{i}"}).json()["task_id"]
-            for i in range(3)
-        ]
-        client.post("/jobs/start-worker", json={"handler": "slow"})
-        client.post("/jobs/drain", json={})
-        client.post("/jobs/stop-worker", json={})
+        q = AgentTaskQueue()
+        ids = [q.submit(f"slow-{i}") for i in range(3)]
+        q.start_worker(slow_handler)
+        q.drain()
+        q.stop_worker()
         for task_id in ids:
-            r = client.get(f"/jobs/result/{task_id}").json()
-            assert r["status"] == "done"
+            task = q.get_result(task_id)
+            assert task is not None
+            assert task.status == "done"

@@ -1,16 +1,11 @@
 """Integration tests for the token-usage-budget skill (Skill 29).
 
 Verifies CostTracker accumulates usage, reports correctly, and that
-SignalBus integration works, via HTTP through a Lauren TestClient.
+SignalBus integration works via TestClient with signals.
 """
 
 import pytest
 
-from lauren import LaurenFactory, controller, get, post, module, Json, use_value, injectable, Scope
-from lauren.testing import TestClient
-from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
-from lauren_ai._transport._mock import MockTransport
-from lauren_ai._config import LLMConfig
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._agents import agent
 from lauren_ai import (
@@ -21,7 +16,7 @@ from lauren_ai import (
     TokenBudget,
     BudgetExceededError,
 )
-from pydantic import BaseModel
+from lauren_ai.testing import TestClient
 
 
 # ---------------------------------------------------------------------------
@@ -29,121 +24,20 @@ from pydantic import BaseModel
 # ---------------------------------------------------------------------------
 
 
-def _completion(content="OK", *, n=1, stop_reason="end_turn", model="claude-sonnet-4-6",
-                input_tokens=100, output_tokens=50):
+def _c(text, *, n=1, stop="end_turn", model="claude-sonnet-4-6",
+        input_tokens=100, output_tokens=50):
     return Completion(
         id=f"c{n}",
         model=model,
-        content=content,
+        content=text,
         tool_calls=[],
-        stop_reason=stop_reason,
+        stop_reason=stop,
         usage=TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens),
     )
 
 
 # ---------------------------------------------------------------------------
-# CostTrackerService — injectable singleton that wires tracker + signal bus
-# ---------------------------------------------------------------------------
-
-
-@injectable(scope=Scope.SINGLETON)
-class CostTrackerService:
-    def __init__(self) -> None:
-        self._tracker = CostTracker(pricing=default_pricing_table())
-        self._bus = SignalBus()
-        self._bus.on(ModelCallComplete)(self._tracker._on_model_call_complete)
-
-    @property
-    def bus(self) -> SignalBus:
-        return self._bus
-
-    @property
-    def tracker(self) -> CostTracker:
-        return self._tracker
-
-
-# ---------------------------------------------------------------------------
-# Module-level mock
-# ---------------------------------------------------------------------------
-
-_MOCK = MockTransport()
-
-
-# ---------------------------------------------------------------------------
-# Request models
-# ---------------------------------------------------------------------------
-
-
-class RunRequest(BaseModel):
-    prompt: str
-    conversation_id: str = "default"
-
-
-# ---------------------------------------------------------------------------
-# Controllers / Module / build_app
-# ---------------------------------------------------------------------------
-
-
-@controller("/agent")
-class TokenAgentController:
-    def __init__(self, svc: CostTrackerService, mock: MockTransport) -> None:
-        self._svc = svc
-        cfg = LLMConfig(provider="anthropic", model="claude-sonnet-4-6", api_key="mock")
-        self._runner = AgentRunner(transport=mock, tools={}, config=cfg, signals=svc.bus)
-
-    @post("/run")
-    async def run(self, body: Json[RunRequest]) -> dict:
-        @agent(model="claude-sonnet-4-6", system="You are helpful.")
-        class TrackedAgent: ...
-
-        resp = await self._runner.run(TrackedAgent(), body.prompt, conversation_id=body.conversation_id)
-        return {"content": resp.content, "turns": resp.turns}
-
-
-@controller("/cost")
-class CostController:
-    def __init__(self, svc: CostTrackerService) -> None:
-        self._svc = svc
-
-    @get("/summary")
-    async def summary(self) -> dict:
-        report = await self._svc.tracker.report()
-        return {
-            "total_cost_usd": report.total_estimate.total_usd,
-            "call_count": sum(
-                len(v) for v in self._svc.tracker._conv_usage.values()
-            ),
-        }
-
-    @get("/report/{conv_id}")
-    async def report_by_conv(self, conv_id: str) -> dict:
-        from lauren import Path
-        report = await self._svc.tracker.report(conversation_id=conv_id)
-        return {
-            "total_cost_usd": report.total_estimate.total_usd,
-            "models": list(report.by_model.keys()),
-        }
-
-
-@module(
-    controllers=[TokenAgentController, CostController],
-    providers=[
-        CostTrackerService,
-        use_value(provide=MockTransport, value=_MOCK),
-    ],
-)
-class TokenBudgetModule: ...
-
-
-def build_app(*responses):
-    _MOCK.reset()
-    for c in responses:
-        _MOCK.queue_response(c)
-    return TestClient(LaurenFactory.create(TokenBudgetModule))
-
-
-# ---------------------------------------------------------------------------
-# Tests: CostTracker manual (pure unit — no HTTP needed)
+# Tests: CostTracker manual (pure unit — direct calls)
 # ---------------------------------------------------------------------------
 
 
@@ -184,33 +78,52 @@ class TestCostTrackerManual:
 
 
 # ---------------------------------------------------------------------------
-# Tests: SignalBus integration via HTTP
+# Tests: SignalBus integration via TestClient
 # ---------------------------------------------------------------------------
 
 
 class TestCostTrackerWithSignalBus:
-    def test_run_agent_cost_is_positive(self):
-        client = build_app(_completion("Hello", model="claude-sonnet-4-6"))
-        resp = client.post("/agent/run", json={"prompt": "Hello", "conversation_id": "sig-1"})
-        assert resp.status_code == 200
+    @pytest.mark.asyncio
+    async def test_run_agent_cost_is_positive(self):
+        @agent(model="claude-sonnet-4-6", system="You are helpful.")
+        class TrackedAgent:
+            pass
 
-        cost_resp = client.get("/cost/summary")
-        assert cost_resp.status_code == 200
-        data = cost_resp.json()
-        assert data["total_cost_usd"] >= 0  # may be 0 if mock model not in pricing
-        assert data["call_count"] >= 1
+        bus = SignalBus()
+        tracker = CostTracker(pricing=default_pricing_table())
+        bus.on(ModelCallComplete)(tracker._on_model_call_complete)
 
-    def test_multiple_runs_accumulate_calls(self):
-        client = build_app(
-            _completion("First", model="claude-sonnet-4-6"),
-            _completion("Second", model="claude-sonnet-4-6"),
-        )
-        client.post("/agent/run", json={"prompt": "First", "conversation_id": "acc-1"})
-        client.post("/agent/run", json={"prompt": "Second", "conversation_id": "acc-2"})
+        client = TestClient(TrackedAgent(), signals=bus)
+        client.mock.queue_response(_c("Hello", model="claude-sonnet-4-6"))
+        result = await client.run_async("Hello", conversation_id="sig-1")
 
-        cost_resp = client.get("/cost/summary")
-        assert cost_resp.status_code == 200
-        assert cost_resp.json()["call_count"] >= 2
+        assert result.content == "Hello"
+        report = await tracker.report()
+        # May be 0 if mock model price not in table, but call count > 0
+        assert report.total_estimate.total_usd >= 0
+        total_calls = sum(len(v) for v in tracker._conv_usage.values())
+        assert total_calls >= 1
+
+    @pytest.mark.asyncio
+    async def test_multiple_runs_accumulate_calls(self):
+        @agent(model="claude-sonnet-4-6", system="You are helpful.")
+        class TrackedAgent2:
+            pass
+
+        bus = SignalBus()
+        tracker = CostTracker(pricing=default_pricing_table())
+        bus.on(ModelCallComplete)(tracker._on_model_call_complete)
+
+        client = TestClient(TrackedAgent2(), signals=bus)
+        client.mock.queue_response(_c("First", model="claude-sonnet-4-6"))
+        client.mock.queue_response(_c("Second", model="claude-sonnet-4-6"))
+
+        await client.run_async("First", conversation_id="acc-1")
+        await client.run_async("Second", conversation_id="acc-2")
+
+        report = await tracker.report()
+        total_calls = sum(len(v) for v in tracker._conv_usage.values())
+        assert total_calls >= 2
 
 
 # ---------------------------------------------------------------------------

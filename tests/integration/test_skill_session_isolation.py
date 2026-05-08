@@ -12,18 +12,15 @@ NOTE: from __future__ import annotations is safe here.
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+import asyncio
 
-import pytest
-
-from lauren import LaurenFactory, controller, get, post, module, injectable, Scope, use_value, Json, Path
-from lauren.testing import TestClient
+from lauren_ai._agents import agent
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
 from lauren_ai._config import LLMConfig
+from lauren_ai._memory._stores import InMemoryConversationStore
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
-from lauren_ai._memory._stores import InMemoryConversationStore
-from lauren_ai._agents import agent
+from lauren_ai.testing import TestClient
 
 
 # ---------------------------------------------------------------------------
@@ -74,11 +71,8 @@ class TenantIsolatedAgentRunner:
 
 
 # ---------------------------------------------------------------------------
-# Module-level mock and runner state
+# Helpers
 # ---------------------------------------------------------------------------
-
-_MOCK = MockTransport()
-_runner_state: dict = {}
 
 
 def _completion(content="OK", *, n=1, stop_reason="end_turn"):
@@ -94,125 +88,101 @@ def _make_runner(mock: MockTransport) -> AgentRunner:
 
 
 # ---------------------------------------------------------------------------
-# Controllers
-# ---------------------------------------------------------------------------
-
-
-class _TenantRunRequest(BaseModel):
-    tenant_id: str
-    user_id: str
-    prompt: str
-
-
-@controller("/tenant")
-class TenantController:
-    def __init__(self, mock: MockTransport) -> None:
-        self._mock = mock
-
-    @post("/run")
-    async def run(self, body: Json[_TenantRunRequest]) -> dict:
-        isolated = _runner_state["isolated"]
-        resp = await isolated.run(body.tenant_id, body.user_id, body.prompt)
-        return {"content": resp.content}
-
-    @get("/conversations/{tenant_id}")
-    async def conversations(self, tenant_id: str) -> dict:
-        isolated = _runner_state["isolated"]
-        return {"count": isolated.get_conversation_count(tenant_id)}
-
-    @get("/has-tenant/{tenant_id}")
-    async def has_tenant(self, tenant_id: str) -> dict:
-        isolated = _runner_state["isolated"]
-        return {"has_tenant": isolated.has_tenant(tenant_id)}
-
-
-@module(
-    controllers=[TenantController],
-    providers=[use_value(provide=MockTransport, value=_MOCK)],
-)
-class TenantModule: ...
-
-
-# ---------------------------------------------------------------------------
-# Build app helper
-# ---------------------------------------------------------------------------
-
-
-def build_app(*responses: str) -> TestClient:
-    _MOCK.reset()
-    for c in responses:
-        _MOCK.queue_response(_completion(c))
-    runner = _make_runner(_MOCK)
-    _runner_state["isolated"] = TenantIsolatedAgentRunner(runner, IsolatedAgent())
-    return TestClient(LaurenFactory.create(TenantModule))
-
-
-# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
 
 class TestTenantIsolation:
     def test_two_tenants_get_separate_stores(self):
-        client = build_app("Hello tenant A", "Hello tenant B")
-        client.post("/tenant/run", json={"tenant_id": "tenant_a", "user_id": "user1", "prompt": "Hello"})
-        client.post("/tenant/run", json={"tenant_id": "tenant_b", "user_id": "user1", "prompt": "Hello"})
-        r_a = client.get("/tenant/has-tenant/tenant_a")
-        r_b = client.get("/tenant/has-tenant/tenant_b")
-        assert r_a.json()["has_tenant"] is True
-        assert r_b.json()["has_tenant"] is True
+        mock = MockTransport()
+        mock.queue_response(_completion("Hello tenant A"))
+        mock.queue_response(_completion("Hello tenant B"))
+        runner = _make_runner(mock)
+        isolated = TenantIsolatedAgentRunner(runner, IsolatedAgent())
+
+        asyncio.run(isolated.run("tenant_a", "user1", "Hello"))
+        asyncio.run(isolated.run("tenant_b", "user1", "Hello"))
+
+        assert isolated.has_tenant("tenant_a") is True
+        assert isolated.has_tenant("tenant_b") is True
 
     def test_same_user_different_tenants_have_separate_histories(self):
-        client = build_app("Response for tenant A user1", "Response for tenant B user1")
-        client.post("/tenant/run", json={"tenant_id": "tenant_a", "user_id": "user1", "prompt": "My message"})
-        client.post("/tenant/run", json={"tenant_id": "tenant_b", "user_id": "user1", "prompt": "My message"})
-        r_a = client.get("/tenant/conversations/tenant_a")
-        r_b = client.get("/tenant/conversations/tenant_b")
-        assert r_a.json()["count"] == 1
-        assert r_b.json()["count"] == 1
+        mock = MockTransport()
+        mock.queue_response(_completion("Response for tenant A user1"))
+        mock.queue_response(_completion("Response for tenant B user1"))
+        runner = _make_runner(mock)
+        isolated = TenantIsolatedAgentRunner(runner, IsolatedAgent())
+
+        asyncio.run(isolated.run("tenant_a", "user1", "My message"))
+        asyncio.run(isolated.run("tenant_b", "user1", "My message"))
+
+        assert isolated.get_conversation_count("tenant_a") == 1
+        assert isolated.get_conversation_count("tenant_b") == 1
 
     def test_responses_are_independent(self):
-        client = build_app("Tenant A gets this", "Tenant B gets that")
-        r_a = client.post("/tenant/run", json={"tenant_id": "tenant_a", "user_id": "u1", "prompt": "Hi"})
-        r_b = client.post("/tenant/run", json={"tenant_id": "tenant_b", "user_id": "u1", "prompt": "Hi"})
-        assert r_a.json()["content"] == "Tenant A gets this"
-        assert r_b.json()["content"] == "Tenant B gets that"
+        mock = MockTransport()
+        mock.queue_response(_completion("Tenant A gets this"))
+        mock.queue_response(_completion("Tenant B gets that"))
+        runner = _make_runner(mock)
+        isolated = TenantIsolatedAgentRunner(runner, IsolatedAgent())
+
+        r_a = asyncio.run(isolated.run("tenant_a", "u1", "Hi"))
+        r_b = asyncio.run(isolated.run("tenant_b", "u1", "Hi"))
+
+        assert r_a.content == "Tenant A gets this"
+        assert r_b.content == "Tenant B gets that"
 
     async def test_conversation_id_is_namespaced(self):
         """Verify conversation IDs are prefixed with tenant_id."""
-        client = build_app("OK")
-        client.post("/tenant/run", json={"tenant_id": "mycompany", "user_id": "alice", "prompt": "Hello"})
-        isolated = _runner_state["isolated"]
+        mock = MockTransport()
+        mock.queue_response(_completion("OK"))
+        runner = _make_runner(mock)
+        isolated = TenantIsolatedAgentRunner(runner, IsolatedAgent())
+
+        await isolated.run("mycompany", "alice", "Hello")
         store = isolated._stores["mycompany"]
         conversations = await store.list_conversations()
         assert "mycompany:alice" in conversations
 
     def test_same_tenant_different_users_isolated(self):
-        client = build_app("Reply for alice", "Reply for bob")
-        client.post("/tenant/run", json={"tenant_id": "company", "user_id": "alice", "prompt": "Alice's question"})
-        client.post("/tenant/run", json={"tenant_id": "company", "user_id": "bob", "prompt": "Bob's question"})
-        r = client.get("/tenant/conversations/company")
-        assert r.json()["count"] == 2
+        mock = MockTransport()
+        mock.queue_response(_completion("Reply for alice"))
+        mock.queue_response(_completion("Reply for bob"))
+        runner = _make_runner(mock)
+        isolated = TenantIsolatedAgentRunner(runner, IsolatedAgent())
+
+        asyncio.run(isolated.run("company", "alice", "Alice's question"))
+        asyncio.run(isolated.run("company", "bob", "Bob's question"))
+
+        assert isolated.get_conversation_count("company") == 2
 
 
 class TestConversationCount:
     def test_zero_conversations_for_new_tenant(self):
-        client = build_app()
-        r = client.get("/tenant/conversations/nonexistent")
-        assert r.json()["count"] == 0
+        mock = MockTransport()
+        runner = _make_runner(mock)
+        isolated = TenantIsolatedAgentRunner(runner, IsolatedAgent())
+        assert isolated.get_conversation_count("nonexistent") == 0
 
     def test_one_conversation_after_single_run(self):
-        client = build_app("Hi")
-        client.post("/tenant/run", json={"tenant_id": "acme", "user_id": "user1", "prompt": "Hello"})
-        r = client.get("/tenant/conversations/acme")
-        assert r.json()["count"] == 1
+        mock = MockTransport()
+        mock.queue_response(_completion("Hi"))
+        runner = _make_runner(mock)
+        isolated = TenantIsolatedAgentRunner(runner, IsolatedAgent())
+
+        asyncio.run(isolated.run("acme", "user1", "Hello"))
+        assert isolated.get_conversation_count("acme") == 1
 
     def test_two_conversations_for_two_users(self):
-        client = build_app("R1", "R2")
-        client.post("/tenant/run", json={"tenant_id": "acme", "user_id": "user1", "prompt": "Q1"})
-        client.post("/tenant/run", json={"tenant_id": "acme", "user_id": "user2", "prompt": "Q2"})
-        r = client.get("/tenant/conversations/acme")
-        assert r.json()["count"] == 2
+        mock = MockTransport()
+        mock.queue_response(_completion("R1"))
+        mock.queue_response(_completion("R2"))
+        runner = _make_runner(mock)
+        isolated = TenantIsolatedAgentRunner(runner, IsolatedAgent())
+
+        asyncio.run(isolated.run("acme", "user1", "Q1"))
+        asyncio.run(isolated.run("acme", "user2", "Q2"))
+        assert isolated.get_conversation_count("acme") == 2
 
 
 class TestInMemoryConversationStore:
@@ -231,3 +201,17 @@ class TestInMemoryConversationStore:
         loaded2 = await store.load("conv2")
         assert loaded1[0]["content"] == "Msg1"
         assert loaded2[0]["content"] == "Msg2"
+
+
+class TestTenantIsolatedRunnerDirect:
+    def test_get_conversation_count_zero_without_run(self):
+        mock = MockTransport()
+        runner = _make_runner(mock)
+        isolated = TenantIsolatedAgentRunner(runner, IsolatedAgent())
+        assert isolated.get_conversation_count("any_tenant") == 0
+
+    def test_has_tenant_false_without_run(self):
+        mock = MockTransport()
+        runner = _make_runner(mock)
+        isolated = TenantIsolatedAgentRunner(runner, IsolatedAgent())
+        assert isolated.has_tenant("any_tenant") is False

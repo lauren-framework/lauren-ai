@@ -6,18 +6,17 @@ Tests cover:
 - Empty/blank 'to' field → error returned
 - Backend receives correct EmailPayload fields
 - Custom backend injection
-- Tool via agent runner with MockTransport
+- Failing backend reflected in result
 
 NOTE: No `from __future__ import annotations` — @tool() needs live annotations.
 """
 
+import asyncio
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from unittest.mock import MagicMock
 
-from pydantic import BaseModel
-
-from lauren import LaurenFactory, controller, delete, get, post, module, injectable, Scope, use_value, Json
-from lauren.testing import TestClient
 from lauren_ai._tools import tool, ToolContext
 
 
@@ -78,66 +77,20 @@ class EmailDispatchTool:
 
 
 # ---------------------------------------------------------------------------
-# Module-level shared backend and controller state
-# ---------------------------------------------------------------------------
-
-_test_backend = InMemoryEmailBackend()
-
-
-class _SendRequest(BaseModel):
-    to: str
-    subject: str
-    body: str
-
-
-@controller("/email")
-class EmailController:
-    def __init__(self) -> None:
-        self._tool = EmailDispatchTool(backend=_test_backend)
-
-    @post("/send")
-    async def send(self, body: Json[_SendRequest]) -> dict:
-        ctx = _MockCtx()
-        return await self._tool.run(ctx, body.to, body.subject, body.body)
-
-    @get("/inbox/{address}")
-    async def inbox(self, address: str) -> dict:
-        msgs = [e for e in _test_backend.sent if address in e.to]
-        return {"count": len(msgs), "messages": [
-            {"to": e.to, "subject": e.subject, "body": e.body} for e in msgs
-        ]}
-
-    @delete("/clear")
-    async def clear(self) -> dict:
-        _test_backend.sent.clear()
-        return {"cleared": True}
-
-
-@module(controllers=[EmailController])
-class EmailModule: ...
-
-
-# ---------------------------------------------------------------------------
-# Helpers
+# MockToolContext helper
 # ---------------------------------------------------------------------------
 
 
-class _MockCtx:
-    def __init__(self) -> None:
-        self.state: dict = {}
-        self.execution_context = None
-        self.agent_context = None
-        self.tool_use_id = "t1"
-        self.turn = 0
-        self.request = None
-
-    def get_metadata(self, key, default=None):
-        return default
-
-
-def build_app() -> TestClient:
-    _test_backend.sent.clear()
-    return TestClient(LaurenFactory.create(EmailModule))
+def _tool_ctx(state=None):
+    ctx = MagicMock()
+    ctx.execution_context = None
+    ctx.agent_context = MagicMock()
+    ctx.agent_context.metadata = {}
+    ctx.get_metadata = lambda k, d=None: ctx.agent_context.metadata.get(k, d)
+    ctx.state = state if state is not None else {}
+    ctx.tool_use_id = "t1"
+    ctx.turn = 0
+    return ctx
 
 
 # ---------------------------------------------------------------------------
@@ -147,102 +100,99 @@ def build_app() -> TestClient:
 
 class TestEmailDispatchSend:
     def test_send_single_recipient(self):
-        client = build_app()
-        r = client.post("/email/send", json={"to": "alice@example.com", "subject": "Hello", "body": "Body text"})
-        assert r.status_code == 200
-        data = r.json()
-        assert data["sent"] is True
-        assert data["recipients"] == ["alice@example.com"]
+        backend = InMemoryEmailBackend()
+        tool = EmailDispatchTool(backend=backend)
+        ctx = _tool_ctx()
+        result = asyncio.run(tool.run(ctx, "alice@example.com", "Hello", "Body text"))
+        assert result["sent"] is True
+        assert result["recipients"] == ["alice@example.com"]
 
     def test_send_records_in_backend(self):
-        client = build_app()
-        client.post("/email/send", json={"to": "bob@example.com", "subject": "Subj", "body": "Content"})
-        r = client.get("/email/inbox/bob@example.com")
-        assert r.status_code == 200
-        data = r.json()
-        assert data["count"] == 1
-        assert "bob@example.com" in data["messages"][0]["to"]
+        backend = InMemoryEmailBackend()
+        tool = EmailDispatchTool(backend=backend)
+        ctx = _tool_ctx()
+        asyncio.run(tool.run(ctx, "bob@example.com", "Subj", "Content"))
+        assert len(backend.sent) == 1
+        assert "bob@example.com" in backend.sent[0].to
 
     def test_send_correct_subject(self):
-        client = build_app()
-        client.post("/email/send", json={"to": "a@b.com", "subject": "My Subject", "body": "body"})
-        r = client.get("/email/inbox/a@b.com")
-        assert r.json()["messages"][0]["subject"] == "My Subject"
+        backend = InMemoryEmailBackend()
+        tool = EmailDispatchTool(backend=backend)
+        ctx = _tool_ctx()
+        asyncio.run(tool.run(ctx, "a@b.com", "My Subject", "body"))
+        assert backend.sent[0].subject == "My Subject"
 
     def test_send_correct_body(self):
-        client = build_app()
-        client.post("/email/send", json={"to": "a@b.com", "subject": "Subj", "body": "My body text"})
-        r = client.get("/email/inbox/a@b.com")
-        assert r.json()["messages"][0]["body"] == "My body text"
+        backend = InMemoryEmailBackend()
+        tool = EmailDispatchTool(backend=backend)
+        ctx = _tool_ctx()
+        asyncio.run(tool.run(ctx, "a@b.com", "Subj", "My body text"))
+        assert backend.sent[0].body == "My body text"
 
 
 class TestEmailDispatchMultipleRecipients:
     def test_comma_separated_recipients(self):
-        client = build_app()
-        r = client.post("/email/send", json={
-            "to": "alice@example.com, bob@example.com",
-            "subject": "Hi all",
-            "body": "Group message",
-        })
-        assert r.status_code == 200
-        data = r.json()
-        assert len(data["recipients"]) == 2
-        assert "alice@example.com" in data["recipients"]
-        assert "bob@example.com" in data["recipients"]
+        backend = InMemoryEmailBackend()
+        tool = EmailDispatchTool(backend=backend)
+        ctx = _tool_ctx()
+        result = asyncio.run(
+            tool.run(ctx, "alice@example.com, bob@example.com", "Hi all", "Group message")
+        )
+        assert len(result["recipients"]) == 2
+        assert "alice@example.com" in result["recipients"]
+        assert "bob@example.com" in result["recipients"]
 
     def test_whitespace_trimmed_from_recipients(self):
-        client = build_app()
-        r = client.post("/email/send", json={
-            "to": "  alice@example.com , bob@example.com  ",
-            "subject": "Hi",
-            "body": "body",
-        })
-        assert r.status_code == 200
-        data = r.json()
-        assert "alice@example.com" in data["recipients"]
-        assert "bob@example.com" in data["recipients"]
+        backend = InMemoryEmailBackend()
+        tool = EmailDispatchTool(backend=backend)
+        ctx = _tool_ctx()
+        result = asyncio.run(
+            tool.run(ctx, "  alice@example.com , bob@example.com  ", "Hi", "body")
+        )
+        assert "alice@example.com" in result["recipients"]
+        assert "bob@example.com" in result["recipients"]
 
 
 class TestEmailDispatchErrors:
     def test_empty_to_returns_error(self):
-        client = build_app()
-        r = client.post("/email/send", json={"to": "", "subject": "Subject", "body": "Body"})
-        assert r.status_code == 200
-        data = r.json()
-        assert "error" in data
-        assert "recipient" in data["error"].lower()
+        tool = EmailDispatchTool(backend=InMemoryEmailBackend())
+        ctx = _tool_ctx()
+        result = asyncio.run(tool.run(ctx, "", "Subject", "Body"))
+        assert "error" in result
+        assert "recipient" in result["error"].lower()
 
     def test_only_spaces_in_to_returns_error(self):
-        client = build_app()
-        r = client.post("/email/send", json={"to": "   ,  ", "subject": "Subject", "body": "Body"})
-        assert r.status_code == 200
-        assert "error" in r.json()
+        tool = EmailDispatchTool(backend=InMemoryEmailBackend())
+        ctx = _tool_ctx()
+        result = asyncio.run(tool.run(ctx, "   ,  ", "Subject", "Body"))
+        assert "error" in result
 
     def test_backend_failure_reflected_in_result(self):
-        # Test with a fresh tool using the failing backend directly
-        import asyncio
-        failing_tool = EmailDispatchTool(backend=FailingEmailBackend())
-        ctx = _MockCtx()
-
-        async def _run():
-            return await failing_tool.run(ctx, "test@example.com", "Subj", "body")
-
-        result = asyncio.new_event_loop().run_until_complete(_run())
+        tool = EmailDispatchTool(backend=FailingEmailBackend())
+        ctx = _tool_ctx()
+        result = asyncio.run(tool.run(ctx, "test@example.com", "Subj", "body"))
         assert result["sent"] is False
 
 
 class TestEmailDispatchDefaultBackend:
     def test_default_backend_is_in_memory(self):
-        client = build_app()
-        r = client.post("/email/send", json={"to": "x@y.com", "subject": "Test", "body": "hello"})
-        assert r.status_code == 200
-        assert r.json()["sent"] is True
+        tool = EmailDispatchTool()
+        ctx = _tool_ctx()
+        result = asyncio.run(tool.run(ctx, "x@y.com", "Test", "hello"))
+        assert result["sent"] is True
 
-    def test_clear_resets_inbox(self):
-        client = build_app()
-        client.post("/email/send", json={"to": "x@y.com", "subject": "Test", "body": "hello"})
-        r = client.delete("/email/clear")
-        assert r.status_code == 200
-        assert r.json()["cleared"] is True
-        r2 = client.get("/email/inbox/x@y.com")
-        assert r2.json()["count"] == 0
+    def test_multiple_sends_accumulate_in_backend(self):
+        backend = InMemoryEmailBackend()
+        tool = EmailDispatchTool(backend=backend)
+        ctx = _tool_ctx()
+        asyncio.run(tool.run(ctx, "x@y.com", "Test1", "hello1"))
+        asyncio.run(tool.run(ctx, "x@y.com", "Test2", "hello2"))
+        assert len(backend.sent) == 2
+
+    def test_clear_backend_resets_inbox(self):
+        backend = InMemoryEmailBackend()
+        tool = EmailDispatchTool(backend=backend)
+        ctx = _tool_ctx()
+        asyncio.run(tool.run(ctx, "x@y.com", "Test", "hello"))
+        backend.sent.clear()
+        assert len(backend.sent) == 0

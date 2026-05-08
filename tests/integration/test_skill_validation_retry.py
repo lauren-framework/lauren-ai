@@ -1,22 +1,18 @@
 """Integration tests for the response-validation-retry skill (Skill 28).
 
 Verifies ResponseValidator rejects invalid first responses, retries, and
-accepts the second valid response; also tests validator factory functions,
-via HTTP through a Lauren TestClient.
+accepts the second valid response; also tests validator factory functions.
 """
 
 import asyncio
 import json
+from typing import Any, Callable
 
-from lauren import LaurenFactory, controller, post, module, Json, use_value
-from lauren.testing import TestClient
-from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
-from lauren_ai._transport._mock import MockTransport
-from lauren_ai._config import LLMConfig
+import pytest
+
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._agents import agent
-from pydantic import BaseModel
-from typing import Any, Callable
+from lauren_ai.testing import TestClient
 
 
 # ---------------------------------------------------------------------------
@@ -78,242 +74,139 @@ def contains_required_keys(*keys: str) -> Callable[[str], bool]:
 # ---------------------------------------------------------------------------
 
 
-def _completion(content="OK", *, n=1, stop_reason="end_turn"):
+def _c(text, *, n=1, stop="end_turn"):
     return Completion(
         id=f"c{n}",
         model="mock-model",
-        content=content,
+        content=text,
         tool_calls=[],
-        stop_reason=stop_reason,
+        stop_reason=stop,
         usage=TokenUsage(input_tokens=10, output_tokens=5),
     )
 
 
 # ---------------------------------------------------------------------------
-# Module-level mock
-# ---------------------------------------------------------------------------
-
-_MOCK = MockTransport()
-
-
-# ---------------------------------------------------------------------------
-# Request models
-# ---------------------------------------------------------------------------
-
-
-class ValidateRequest(BaseModel):
-    response: str
-    rules: list[str]  # e.g. ["non_empty", "valid_json", "max_length:100"]
-
-
-class RunValidatedRequest(BaseModel):
-    prompt: str
-    rules: list[str]
-    max_retries: int = 3
-
-
-# ---------------------------------------------------------------------------
-# Helper: parse rule strings into validator functions
-# ---------------------------------------------------------------------------
-
-
-def _parse_rules(rules: list[str]) -> list[Callable[[str], bool]]:
-    validators: list[Callable[[str], bool]] = []
-    for rule in rules:
-        if rule == "non_empty":
-            validators.append(is_non_empty)
-        elif rule == "valid_json":
-            validators.append(is_valid_json)
-        elif rule.startswith("max_length:"):
-            n = int(rule.split(":")[1])
-            validators.append(max_length(n))
-        elif rule.startswith("contains_keys:"):
-            keys = rule.split(":")[1].split(",")
-            validators.append(contains_required_keys(*keys))
-    return validators
-
-
-# ---------------------------------------------------------------------------
-# Controller / Module / build_app
-# ---------------------------------------------------------------------------
-
-
-@controller("/validate")
-class ValidateController:
-    @post("/check")
-    async def check(self, body: Json[ValidateRequest]) -> dict:
-        validators = _parse_rules(body.rules)
-        valid = all(v(body.response) for v in validators)
-        return {"valid": valid}
-
-
-@controller("/agent")
-class ValidatedAgentController:
-    def __init__(self, mock: MockTransport) -> None:
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        self._runner = AgentRunner(transport=mock, tools={}, config=cfg)
-        self._mock = mock
-
-    @post("/run-validated")
-    async def run_validated(self, body: Json[RunValidatedRequest]) -> dict:
-        @agent(model="mock-model", system="Return JSON only.")
-        class ValidatedAgent: ...
-
-        validators = _parse_rules(body.rules)
-        validator = ResponseValidator(validators=validators, max_retries=body.max_retries)
-
-        response = await validator.validate_and_retry(
-            lambda prompt: self._runner.run(ValidatedAgent(), prompt),
-            body.prompt,
-        )
-        return {
-            "content": response.content,
-            "calls": len(self._mock.calls),
-        }
-
-
-@module(
-    controllers=[ValidateController, ValidatedAgentController],
-    providers=[use_value(provide=MockTransport, value=_MOCK)],
-)
-class ValidationModule: ...
-
-
-def build_app(*responses: str):
-    _MOCK.reset()
-    for c in responses:
-        _MOCK.queue_response(_completion(c))
-    return TestClient(LaurenFactory.create(ValidationModule))
-
-
-# ---------------------------------------------------------------------------
-# Tests: Validator functions (via /validate/check)
+# Tests: Validator functions (direct calls)
 # ---------------------------------------------------------------------------
 
 
 class TestValidatorFunctions:
     def test_non_empty_with_content(self):
-        client = build_app()
-        resp = client.post("/validate/check", json={"response": "hello", "rules": ["non_empty"]})
-        assert resp.status_code == 200
-        assert resp.json()["valid"] is True
+        assert is_non_empty("hello") is True
 
     def test_non_empty_with_empty_string(self):
-        client = build_app()
-        resp = client.post("/validate/check", json={"response": "", "rules": ["non_empty"]})
-        assert resp.status_code == 200
-        assert resp.json()["valid"] is False
+        assert is_non_empty("") is False
 
     def test_non_empty_with_whitespace(self):
-        client = build_app()
-        resp = client.post("/validate/check", json={"response": "   ", "rules": ["non_empty"]})
-        assert resp.status_code == 200
-        assert resp.json()["valid"] is False
+        assert is_non_empty("   ") is False
 
     def test_valid_json_with_valid_json(self):
-        client = build_app()
-        resp = client.post("/validate/check", json={
-            "response": '{"key": "value"}', "rules": ["valid_json"],
-        })
-        assert resp.status_code == 200
-        assert resp.json()["valid"] is True
+        assert is_valid_json('{"key": "value"}') is True
 
     def test_valid_json_with_invalid_json(self):
-        client = build_app()
-        resp = client.post("/validate/check", json={"response": "not json", "rules": ["valid_json"]})
-        assert resp.status_code == 200
-        assert resp.json()["valid"] is False
+        assert is_valid_json("not json") is False
 
     def test_max_length_within_limit(self):
-        client = build_app()
-        resp = client.post("/validate/check", json={"response": "short", "rules": ["max_length:100"]})
-        assert resp.status_code == 200
-        assert resp.json()["valid"] is True
+        assert max_length(100)("short") is True
 
     def test_max_length_exceeds_limit(self):
-        client = build_app()
-        resp = client.post("/validate/check", json={
-            "response": "too long string here", "rules": ["max_length:5"],
-        })
-        assert resp.status_code == 200
-        assert resp.json()["valid"] is False
+        assert max_length(5)("too long string here") is False
 
     def test_contains_keys_all_present(self):
-        client = build_app()
-        resp = client.post("/validate/check", json={
-            "response": '{"result": "yes", "confidence": 0.9}',
-            "rules": ["contains_keys:result,confidence"],
-        })
-        assert resp.status_code == 200
-        assert resp.json()["valid"] is True
+        assert contains_required_keys("result", "confidence")('{"result": "yes", "confidence": 0.9}') is True
 
     def test_contains_keys_missing_key(self):
-        client = build_app()
-        resp = client.post("/validate/check", json={
-            "response": '{"result": "yes"}',
-            "rules": ["contains_keys:result,confidence"],
-        })
-        assert resp.status_code == 200
-        assert resp.json()["valid"] is False
+        assert contains_required_keys("result", "confidence")('{"result": "yes"}') is False
 
 
 # ---------------------------------------------------------------------------
-# Tests: ResponseValidator via /agent/run-validated
+# Tests: ResponseValidator via TestClient
 # ---------------------------------------------------------------------------
 
 
 class TestResponseValidator:
     def test_accepts_first_valid_response(self):
+        @agent(model="mock-model", system="Return JSON only.")
+        class ValidatedAgent:
+            pass
+
         valid_json = '{"result": "ok", "confidence": 0.95}'
-        client = build_app(valid_json)
-        resp = client.post("/agent/run-validated", json={
-            "prompt": "Give me JSON",
-            "rules": ["non_empty", "valid_json", "contains_keys:result,confidence"],
-        })
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["content"] == valid_json
-        assert data["calls"] == 1
+        client = TestClient(ValidatedAgent())
+        client.mock.queue_response(_c(valid_json))
+
+        validator = ResponseValidator(
+            validators=[is_non_empty, is_valid_json, contains_required_keys("result", "confidence")],
+            max_retries=3,
+        )
+        response = asyncio.run(
+            validator.validate_and_retry(
+                lambda prompt: client.run_async(prompt),
+                "Give me JSON",
+            )
+        )
+        assert response.content == valid_json
+        assert len(client.calls) == 1
 
     def test_retries_on_invalid_first_response(self):
+        @agent(model="mock-model", system="Return JSON only.")
+        class ValidatedAgent2:
+            pass
+
         valid_json = '{"result": "ok", "confidence": 0.9}'
-        client = build_app("Sorry, I cannot help.", valid_json)
-        resp = client.post("/agent/run-validated", json={
-            "prompt": "Give me JSON",
-            "rules": ["valid_json"],
-            "max_retries": 3,
-        })
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["calls"] == 2
-        assert data["content"] == valid_json
+        client = TestClient(ValidatedAgent2())
+        client.mock.queue_response(_c("Sorry, I cannot help."))
+        client.mock.queue_response(_c(valid_json))
+
+        validator = ResponseValidator(validators=[is_valid_json], max_retries=3)
+        response = asyncio.run(
+            validator.validate_and_retry(
+                lambda prompt: client.run_async(prompt),
+                "Give me JSON",
+            )
+        )
+        assert len(client.calls) == 2
+        assert response.content == valid_json
 
     def test_returns_last_response_after_exhausting_retries(self):
-        client = build_app("invalid 0", "invalid 1", "invalid 2")
-        resp = client.post("/agent/run-validated", json={
-            "prompt": "Give me JSON",
-            "rules": ["valid_json"],
-            "max_retries": 3,
-        })
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["calls"] == 3
-        assert "invalid" in data["content"]
+        @agent(model="mock-model", system="Return JSON only.")
+        class ValidatedAgent3:
+            pass
+
+        client = TestClient(ValidatedAgent3())
+        for i in range(3):
+            client.mock.queue_response(_c(f"invalid {i}"))
+
+        validator = ResponseValidator(validators=[is_valid_json], max_retries=3)
+        response = asyncio.run(
+            validator.validate_and_retry(
+                lambda prompt: client.run_async(prompt),
+                "Give me JSON",
+            )
+        )
+        assert len(client.calls) == 3
+        assert "invalid" in response.content
 
     def test_multiple_validators_all_must_pass(self):
-        client = build_app(
-            "not json",
-            '{"other": "value"}',
-            '{"result": "yes", "confidence": 0.8}',
+        @agent(model="mock-model", system="Return JSON only.")
+        class ValidatedAgent4:
+            pass
+
+        client = TestClient(ValidatedAgent4())
+        client.mock.queue_response(_c("not json"))
+        client.mock.queue_response(_c('{"other": "value"}'))
+        client.mock.queue_response(_c('{"result": "yes", "confidence": 0.8}'))
+
+        validator = ResponseValidator(
+            validators=[is_valid_json, contains_required_keys("result", "confidence")],
+            max_retries=3,
         )
-        resp = client.post("/agent/run-validated", json={
-            "prompt": "Give me structured JSON",
-            "rules": ["valid_json", "contains_keys:result,confidence"],
-            "max_retries": 3,
-        })
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["calls"] == 3
-        parsed = json.loads(data["content"])
+        response = asyncio.run(
+            validator.validate_and_retry(
+                lambda prompt: client.run_async(prompt),
+                "Give me structured JSON",
+            )
+        )
+        assert len(client.calls) == 3
+        parsed = json.loads(response.content)
         assert "result" in parsed
         assert "confidence" in parsed

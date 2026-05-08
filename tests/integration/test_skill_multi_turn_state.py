@@ -12,17 +12,17 @@ Tests cover:
 NOTE: No `from __future__ import annotations` — @tool() needs live annotations.
 """
 
-from pydantic import BaseModel
+import asyncio
 
-from lauren import LaurenFactory, controller, delete, get, post, module, injectable, Scope, use_value, Json
-from lauren.testing import TestClient
-from lauren_ai._tools import tool, ToolContext
+from unittest.mock import MagicMock
+
+from lauren_ai._agents import agent, use_tools
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
 from lauren_ai._config import LLMConfig
+from lauren_ai._tools import tool, ToolContext, _add_to_tool_map
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
-from lauren_ai._agents import agent, use_tools
-from lauren_ai._tools import _add_to_tool_map
+from lauren_ai.testing import TestClient
 
 
 # ---------------------------------------------------------------------------
@@ -67,74 +67,20 @@ class ShoppingCartTool:
 
 
 # ---------------------------------------------------------------------------
-# Controller — holds shared state across requests (singleton scope)
+# MockToolContext helper
 # ---------------------------------------------------------------------------
 
 
-class _ActionRequest(BaseModel):
-    action: str
-    item: str = ""
-    quantity: int = 1
-
-
-@injectable(scope=Scope.SINGLETON)
-class CartController:
-    def __init__(self) -> None:
-        self._tool = ShoppingCartTool()
-        self._state: dict = {}  # simulates ToolContext.state carried across calls
-
-    @property
-    def _ctx(self) -> "_MockCtx":
-        # Return a shared context that reuses the same state dict
-        ctx = _MockCtx(state=self._state)
-        return ctx
-
-    async def action(self, req: _ActionRequest) -> dict:
-        return await self._tool.run(self._ctx, req.action, req.item, req.quantity)
-
-    async def clear(self) -> dict:
-        result = await self._tool.run(self._ctx, "clear")
-        return result
-
-    def reset(self) -> None:
-        self._state.clear()
-
-
-@controller("/cart")
-@injectable(scope=Scope.SINGLETON)
-class CartHttpController:
-    def __init__(self, cart: CartController) -> None:
-        self._cart = cart
-
-    @post("/action")
-    async def action(self, body: Json[_ActionRequest]) -> dict:
-        return await self._cart.action(body)
-
-    @delete("/clear")
-    async def clear(self) -> dict:
-        return await self._cart.clear()
-
-
-@module(controllers=[CartHttpController], providers=[CartController])
-class CartModule: ...
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-class _MockCtx:
-    def __init__(self, state: "dict | None" = None) -> None:
-        self.state: dict = state if state is not None else {}
-        self.execution_context = None
-        self.agent_context = None
-        self.tool_use_id = "t1"
-        self.turn = 0
-        self.request = None
-
-    def get_metadata(self, key, default=None):
-        return default
+def _tool_ctx(state=None):
+    ctx = MagicMock()
+    ctx.execution_context = None
+    ctx.agent_context = MagicMock()
+    ctx.agent_context.metadata = {}
+    ctx.get_metadata = lambda k, d=None: ctx.agent_context.metadata.get(k, d)
+    ctx.state = state if state is not None else {}
+    ctx.tool_use_id = "t1"
+    ctx.turn = 0
+    return ctx
 
 
 def _completion(content="OK", *, n=1, stop_reason="end_turn"):
@@ -144,10 +90,6 @@ def _completion(content="OK", *, n=1, stop_reason="end_turn"):
     )
 
 
-def build_app() -> TestClient:
-    return TestClient(LaurenFactory.create(CartModule))
-
-
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -155,102 +97,99 @@ def build_app() -> TestClient:
 
 class TestShoppingCartAdd:
     def test_add_single_item(self):
-        client = build_app()
-        r = client.post("/cart/action", json={"action": "add", "item": "apple"})
-        assert r.status_code == 200
-        data = r.json()
-        assert data["added"] == "apple"
-        assert data["quantity"] == 1
+        state = {}
+        tool = ShoppingCartTool()
+        ctx = _tool_ctx(state=state)
+        result = asyncio.run(tool.run(ctx, "add", item="apple"))
+        assert result["added"] == "apple"
+        assert result["quantity"] == 1
 
     def test_add_accumulates_quantity(self):
-        client = build_app()
-        client.post("/cart/action", json={"action": "add", "item": "apple"})
-        r = client.post("/cart/action", json={"action": "add", "item": "apple"})
-        assert r.status_code == 200
-        assert r.json()["quantity"] == 2
+        state = {}
+        tool = ShoppingCartTool()
+        asyncio.run(tool.run(_tool_ctx(state=state), "add", item="apple"))
+        result = asyncio.run(tool.run(_tool_ctx(state=state), "add", item="apple"))
+        assert result["quantity"] == 2
 
     def test_add_multiple_items_accumulate(self):
-        client = build_app()
-        client.post("/cart/action", json={"action": "add", "item": "apple"})
-        client.post("/cart/action", json={"action": "add", "item": "banana"})
-        r = client.post("/cart/action", json={"action": "view"})
-        assert r.status_code == 200
-        cart = r.json()["cart"]
-        assert "apple" in cart
-        assert "banana" in cart
+        state = {}
+        tool = ShoppingCartTool()
+        asyncio.run(tool.run(_tool_ctx(state=state), "add", item="apple"))
+        asyncio.run(tool.run(_tool_ctx(state=state), "add", item="banana"))
+        result = asyncio.run(tool.run(_tool_ctx(state=state), "view"))
+        assert "apple" in result["cart"]
+        assert "banana" in result["cart"]
 
     def test_add_with_explicit_quantity(self):
-        client = build_app()
-        r = client.post("/cart/action", json={"action": "add", "item": "milk", "quantity": 3})
-        assert r.status_code == 200
-        assert r.json()["quantity"] == 3
+        state = {}
+        tool = ShoppingCartTool()
+        result = asyncio.run(tool.run(_tool_ctx(state=state), "add", item="milk", quantity=3))
+        assert result["quantity"] == 3
 
     def test_add_missing_item_returns_error(self):
-        client = build_app()
-        r = client.post("/cart/action", json={"action": "add", "item": ""})
-        assert r.status_code == 200
-        assert "error" in r.json()
+        state = {}
+        tool = ShoppingCartTool()
+        result = asyncio.run(tool.run(_tool_ctx(state=state), "add", item=""))
+        assert "error" in result
 
 
 class TestShoppingCartView:
     def test_view_empty_cart(self):
-        client = build_app()
-        r = client.post("/cart/action", json={"action": "view"})
-        assert r.status_code == 200
-        data = r.json()
-        assert data["cart"] == {}
-        assert data["total_items"] == 0
+        state = {}
+        tool = ShoppingCartTool()
+        result = asyncio.run(tool.run(_tool_ctx(state=state), "view"))
+        assert result["cart"] == {}
+        assert result["total_items"] == 0
 
     def test_view_after_adds(self):
-        client = build_app()
-        client.post("/cart/action", json={"action": "add", "item": "apple", "quantity": 2})
-        client.post("/cart/action", json={"action": "add", "item": "bread", "quantity": 1})
-        r = client.post("/cart/action", json={"action": "view"})
-        assert r.status_code == 200
-        assert r.json()["total_items"] == 3
+        state = {}
+        tool = ShoppingCartTool()
+        asyncio.run(tool.run(_tool_ctx(state=state), "add", item="apple", quantity=2))
+        asyncio.run(tool.run(_tool_ctx(state=state), "add", item="bread", quantity=1))
+        result = asyncio.run(tool.run(_tool_ctx(state=state), "view"))
+        assert result["total_items"] == 3
 
     def test_state_persists_across_invocations(self):
-        client = build_app()
-        client.post("/cart/action", json={"action": "add", "item": "item1"})
-        client.post("/cart/action", json={"action": "add", "item": "item2"})
-        client.post("/cart/action", json={"action": "add", "item": "item3"})
-        r = client.post("/cart/action", json={"action": "view"})
-        assert r.status_code == 200
-        assert len(r.json()["cart"]) == 3
+        state = {}
+        tool = ShoppingCartTool()
+        asyncio.run(tool.run(_tool_ctx(state=state), "add", item="item1"))
+        asyncio.run(tool.run(_tool_ctx(state=state), "add", item="item2"))
+        asyncio.run(tool.run(_tool_ctx(state=state), "add", item="item3"))
+        result = asyncio.run(tool.run(_tool_ctx(state=state), "view"))
+        assert len(result["cart"]) == 3
 
 
 class TestShoppingCartRemove:
     def test_remove_existing_item(self):
-        client = build_app()
-        client.post("/cart/action", json={"action": "add", "item": "apple"})
-        r = client.post("/cart/action", json={"action": "remove", "item": "apple"})
-        assert r.status_code == 200
-        assert "apple" not in r.json()["cart"]
+        state = {}
+        tool = ShoppingCartTool()
+        asyncio.run(tool.run(_tool_ctx(state=state), "add", item="apple"))
+        result = asyncio.run(tool.run(_tool_ctx(state=state), "remove", item="apple"))
+        assert "apple" not in result["cart"]
 
     def test_remove_nonexistent_item_no_error(self):
-        client = build_app()
-        r = client.post("/cart/action", json={"action": "remove", "item": "nonexistent"})
-        assert r.status_code == 200
-        assert "error" not in r.json()
+        state = {}
+        tool = ShoppingCartTool()
+        result = asyncio.run(tool.run(_tool_ctx(state=state), "remove", item="nonexistent"))
+        assert "error" not in result
 
 
 class TestShoppingCartClear:
     def test_clear_resets_state(self):
-        client = build_app()
-        client.post("/cart/action", json={"action": "add", "item": "apple"})
-        client.post("/cart/action", json={"action": "add", "item": "banana"})
-        client.delete("/cart/clear")
-        r = client.post("/cart/action", json={"action": "view"})
-        assert r.status_code == 200
-        data = r.json()
-        assert data["cart"] == {}
-        assert data["total_items"] == 0
+        state = {}
+        tool = ShoppingCartTool()
+        asyncio.run(tool.run(_tool_ctx(state=state), "add", item="apple"))
+        asyncio.run(tool.run(_tool_ctx(state=state), "add", item="banana"))
+        asyncio.run(tool.run(_tool_ctx(state=state), "clear"))
+        result = asyncio.run(tool.run(_tool_ctx(state=state), "view"))
+        assert result["cart"] == {}
+        assert result["total_items"] == 0
 
     def test_clear_returns_cleared_true(self):
-        client = build_app()
-        r = client.delete("/cart/clear")
-        assert r.status_code == 200
-        assert r.json()["cleared"] is True
+        state = {}
+        tool = ShoppingCartTool()
+        result = asyncio.run(tool.run(_tool_ctx(state=state), "clear"))
+        assert result["cleared"] is True
 
 
 class TestShoppingCartAgentRunner:

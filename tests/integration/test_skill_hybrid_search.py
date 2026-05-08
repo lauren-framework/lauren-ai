@@ -20,11 +20,6 @@ NOTE: No from __future__ import annotations.
 import math
 from collections import Counter
 
-from pydantic import BaseModel
-
-from lauren import Json, LaurenFactory, controller, module, post
-from lauren.testing import TestClient
-
 
 # ---------------------------------------------------------------------------
 # HybridSearch implementation under test
@@ -98,359 +93,139 @@ def _embed(text: str) -> list[float]:
     return _make_embedding(words, VOCAB)
 
 
-# ---------------------------------------------------------------------------
-# Request models
-# ---------------------------------------------------------------------------
-
-
-class _IndexRequest(BaseModel):
-    doc_id: str
-    text: str
-    embedding: list[float]
-
-
-class _SearchRequest(BaseModel):
-    docs: list[dict]  # list of {doc_id, text, embedding}
-    query: str
-    query_embedding: list[float]
-    top_k: int = 3
-    alpha: float = 0.5
-
-
-class _CosineRequest(BaseModel):
-    a: list[float]
-    b: list[float]
-
-
-class _BM25Request(BaseModel):
-    docs: list[dict]  # list of {doc_id, text, embedding}
-    query: str
-    doc_text: str
-
-
-# ---------------------------------------------------------------------------
-# Controllers
-# ---------------------------------------------------------------------------
-
-
-@controller("/hybrid")
-class HybridSearchController:
-    @post("/index-check")
-    async def index_check(self, body: Json[_IndexRequest]) -> dict:
-        hs = HybridSearch()
-        hs.index(body.doc_id, body.text, body.embedding)
-        return {"indexed": body.doc_id in hs._docs}
-
-    @post("/index-multiple")
-    async def index_multiple(self, body: Json[dict]) -> dict:
-        hs = HybridSearch()
-        for doc in body.get("docs", []):
-            hs.index(doc["doc_id"], doc["text"], doc["embedding"])
-        return {"count": len(hs._docs)}
-
-    @post("/search-empty")
-    async def search_empty(self, body: Json[dict]) -> dict:
-        hs = HybridSearch()
-        results = hs.search("anything", body.get("query_embedding", [0.0] * len(VOCAB)))
-        return {"results": results}
-
-    @post("/search")
-    async def search(self, body: Json[_SearchRequest]) -> dict:
-        hs = HybridSearch()
-        for doc in body.docs:
-            hs.index(doc["doc_id"], doc["text"], doc["embedding"])
-        results = hs.search(body.query, body.query_embedding, top_k=body.top_k, alpha=body.alpha)
-        return {
-            "results": results,
-            "count": len(results),
-            "first_id": results[0]["id"] if results else None,
-        }
-
-    @post("/cosine")
-    async def cosine(self, body: Json[_CosineRequest]) -> dict:
-        hs = HybridSearch()
-        score = hs._cosine_similarity(body.a, body.b)
-        return {"score": score}
-
-    @post("/bm25")
-    async def bm25(self, body: Json[_BM25Request]) -> dict:
-        hs = HybridSearch()
-        for doc in body.docs:
-            hs.index(doc["doc_id"], doc["text"], doc["embedding"])
-        score = hs._bm25_score(body.query, body.doc_text)
-        return {"score": score}
-
-    @post("/bm25-compare")
-    async def bm25_compare(self, body: Json[dict]) -> dict:
-        docs = body.get("docs", [])
-        query = body.get("query", "")
-        match_text = body.get("match_text", "")
-        nomatch_text = body.get("nomatch_text", "")
-        hs = HybridSearch()
-        for doc in docs:
-            hs.index(doc["doc_id"], doc["text"], doc["embedding"])
-        match_score = hs._bm25_score(query, match_text)
-        nomatch_score = hs._bm25_score(query, nomatch_text)
-        return {"match_score": match_score, "nomatch_score": nomatch_score, "match_gt": match_score > nomatch_score}
-
-    @post("/search-nonnegative")
-    async def search_nonnegative(self, body: Json[dict]) -> dict:
-        hs = HybridSearch()
-        hs.index("d1", "test document", _embed("test document"))
-        results = hs.search("test", _embed("test"), alpha=0.5)
-        return {"all_nonneg": all(r["score"] >= 0.0 for r in results)}
-
-
-@module(controllers=[HybridSearchController])
-class HybridSearchModule: ...
-
-
-def build_app() -> TestClient:
-    return TestClient(LaurenFactory.create(HybridSearchModule))
-
-
-# Helper to build doc dicts
 def _doc(doc_id: str, text: str) -> dict:
     return {"doc_id": doc_id, "text": text, "embedding": _embed(text)}
 
 
 # ---------------------------------------------------------------------------
-# Tests: HybridSearch indexing
+# Tests: HybridSearch indexing (direct Python)
 # ---------------------------------------------------------------------------
 
 
 class TestHybridSearchIndex:
     def test_index_adds_document(self):
-        client = build_app()
-        r = client.post(
-            "/hybrid/index-check",
-            json={"doc_id": "d1", "text": "Python is a language", "embedding": _embed("Python is a language")},
-        )
-        assert r.status_code == 200
-        assert r.json()["indexed"] is True
+        hs = HybridSearch()
+        hs.index("d1", "Python is a language", _embed("Python is a language"))
+        assert "d1" in hs._docs
 
     def test_index_multiple_documents(self):
-        client = build_app()
-        r = client.post(
-            "/hybrid/index-multiple",
-            json={
-                "docs": [
-                    _doc("d1", "Python programming"),
-                    _doc("d2", "JavaScript web"),
-                ]
-            },
-        )
-        assert r.status_code == 200
-        assert r.json()["count"] == 2
+        hs = HybridSearch()
+        hs.index("d1", "Python programming", _embed("Python programming"))
+        hs.index("d2", "JavaScript web", _embed("JavaScript web"))
+        assert len(hs._docs) == 2
 
     def test_empty_corpus_search_returns_empty(self):
-        client = build_app()
-        r = client.post(
-            "/hybrid/search-empty",
-            json={"query_embedding": _embed("anything")},
-        )
-        assert r.status_code == 200
-        assert r.json()["results"] == []
+        hs = HybridSearch()
+        results = hs.search("anything", _embed("anything"))
+        assert results == []
 
 
 # ---------------------------------------------------------------------------
-# Tests: cosine similarity
+# Tests: cosine similarity (direct Python)
 # ---------------------------------------------------------------------------
 
 
 class TestCosineSimilarity:
     def test_identical_vectors_return_one(self):
-        client = build_app()
+        hs = HybridSearch()
         vec = [1.0, 0.0, 0.0]
-        r = client.post("/hybrid/cosine", json={"a": vec, "b": vec})
-        assert r.status_code == 200
-        assert abs(r.json()["score"] - 1.0) < 1e-6
+        score = hs._cosine_similarity(vec, vec)
+        assert abs(score - 1.0) < 1e-6
 
     def test_orthogonal_vectors_return_zero(self):
-        client = build_app()
-        r = client.post("/hybrid/cosine", json={"a": [1.0, 0.0, 0.0], "b": [0.0, 1.0, 0.0]})
-        assert r.status_code == 200
-        assert abs(r.json()["score"]) < 1e-6
+        hs = HybridSearch()
+        score = hs._cosine_similarity([1.0, 0.0, 0.0], [0.0, 1.0, 0.0])
+        assert abs(score) < 1e-6
 
     def test_zero_vector_returns_zero(self):
-        client = build_app()
-        r = client.post("/hybrid/cosine", json={"a": [1.0, 0.0, 0.0], "b": [0.0, 0.0, 0.0]})
-        assert r.status_code == 200
-        assert r.json()["score"] == 0.0
+        hs = HybridSearch()
+        score = hs._cosine_similarity([1.0, 0.0, 0.0], [0.0, 0.0, 0.0])
+        assert score == 0.0
 
 
 # ---------------------------------------------------------------------------
-# Tests: BM25 scoring
+# Tests: BM25 scoring (direct Python)
 # ---------------------------------------------------------------------------
 
 
 class TestBM25Scoring:
     def test_exact_keyword_match_has_positive_score(self):
-        client = build_app()
-        r = client.post(
-            "/hybrid/bm25-compare",
-            json={
-                "docs": [
-                    _doc("d1", "Python is a programming language"),
-                    _doc("d2", "cats are fluffy animals"),
-                ],
-                "query": "python",
-                "match_text": "Python is a programming language",
-                "nomatch_text": "cats are fluffy animals",
-            },
-        )
-        assert r.status_code == 200
-        assert r.json()["match_gt"] is True
+        hs = HybridSearch()
+        hs.index("d1", "Python is a programming language", _embed("Python is a programming language"))
+        hs.index("d2", "cats are fluffy animals", _embed("cats are fluffy animals"))
+        match_score = hs._bm25_score("python", "Python is a programming language")
+        nomatch_score = hs._bm25_score("python", "cats are fluffy animals")
+        assert match_score > nomatch_score
 
     def test_no_keyword_overlap_returns_zero_or_near(self):
-        client = build_app()
-        r = client.post(
-            "/hybrid/bm25",
-            json={
-                "docs": [_doc("d1", "cats and dogs are pets")],
-                "query": "programming",
-                "doc_text": "cats and dogs are pets",
-            },
-        )
-        assert r.status_code == 200
-        assert r.json()["score"] == 0.0
+        hs = HybridSearch()
+        hs.index("d1", "cats and dogs are pets", _embed("cats and dogs are pets"))
+        score = hs._bm25_score("programming", "cats and dogs are pets")
+        assert score == 0.0
 
 
 # ---------------------------------------------------------------------------
-# Tests: hybrid search results
+# Tests: hybrid search results (direct Python)
 # ---------------------------------------------------------------------------
 
 
 class TestHybridSearchResults:
     def test_search_returns_list_of_dicts(self):
-        client = build_app()
-        r = client.post(
-            "/hybrid/search",
-            json={
-                "docs": [_doc("d1", "Python programming")],
-                "query": "python",
-                "query_embedding": _embed("python"),
-                "top_k": 3,
-                "alpha": 0.5,
-            },
-        )
-        assert r.status_code == 200
-        results = r.json()["results"]
+        hs = HybridSearch()
+        hs.index("d1", "Python programming", _embed("Python programming"))
+        results = hs.search("python", _embed("python"), top_k=3, alpha=0.5)
         assert isinstance(results, list)
         assert all(isinstance(item, dict) for item in results)
 
     def test_search_result_has_required_keys(self):
-        client = build_app()
-        r = client.post(
-            "/hybrid/search",
-            json={
-                "docs": [_doc("d1", "Python programming")],
-                "query": "python",
-                "query_embedding": _embed("python"),
-                "top_k": 3,
-                "alpha": 0.5,
-            },
-        )
-        assert r.status_code == 200
-        result = r.json()["results"][0]
+        hs = HybridSearch()
+        hs.index("d1", "Python programming", _embed("Python programming"))
+        results = hs.search("python", _embed("python"), top_k=3, alpha=0.5)
+        result = results[0]
         assert "id" in result
         assert "text" in result
         assert "score" in result
 
     def test_search_top_k_limits_results(self):
-        client = build_app()
-        docs = [_doc(f"d{i}", f"document {i} python programming") for i in range(5)]
-        r = client.post(
-            "/hybrid/search",
-            json={
-                "docs": docs,
-                "query": "python programming",
-                "query_embedding": _embed("python programming"),
-                "top_k": 2,
-                "alpha": 0.5,
-            },
-        )
-        assert r.status_code == 200
-        assert r.json()["count"] <= 2
+        hs = HybridSearch()
+        for i in range(5):
+            hs.index(f"d{i}", f"document {i} python programming", _embed(f"document {i} python programming"))
+        results = hs.search("python programming", _embed("python programming"), top_k=2, alpha=0.5)
+        assert len(results) <= 2
 
     def test_search_results_sorted_descending_by_score(self):
-        client = build_app()
-        r = client.post(
-            "/hybrid/search",
-            json={
-                "docs": [
-                    _doc("py", "Python programming language"),
-                    _doc("cat", "cats are fluffy animals that meow"),
-                ],
-                "query": "python programming",
-                "query_embedding": _embed("Python programming"),
-                "top_k": 2,
-                "alpha": 0.5,
-            },
-        )
-        assert r.status_code == 200
-        results = r.json()["results"]
+        hs = HybridSearch()
+        hs.index("py", "Python programming language", _embed("Python programming language"))
+        hs.index("cat", "cats are fluffy animals that meow", _embed("cats are fluffy animals that meow"))
+        results = hs.search("python programming", _embed("Python programming"), top_k=2, alpha=0.5)
         if len(results) >= 2:
             assert results[0]["score"] >= results[1]["score"]
 
     def test_alpha_one_uses_only_dense_score(self):
-        client = build_app()
-        r = client.post(
-            "/hybrid/search",
-            json={
-                "docs": [
-                    _doc("py", "Python programming language"),
-                    _doc("cat", "cats are fluffy animals"),
-                ],
-                "query": "python",
-                "query_embedding": _embed("Python programming"),
-                "top_k": 2,
-                "alpha": 1.0,
-            },
-        )
-        assert r.status_code == 200
-        assert r.json()["first_id"] == "py"
+        hs = HybridSearch()
+        hs.index("py", "Python programming language", _embed("Python programming language"))
+        hs.index("cat", "cats are fluffy animals", _embed("cats are fluffy animals"))
+        results = hs.search("python", _embed("Python programming"), top_k=2, alpha=1.0)
+        assert results[0]["id"] == "py"
 
     def test_alpha_zero_uses_only_sparse_score(self):
-        client = build_app()
+        hs = HybridSearch()
         zero_emb = [0.0] * len(VOCAB)
-        r = client.post(
-            "/hybrid/search",
-            json={
-                "docs": [
-                    {"doc_id": "py", "text": "Python is a programming language", "embedding": zero_emb},
-                    {"doc_id": "cat", "text": "cats are fluffy animals that meow", "embedding": zero_emb},
-                ],
-                "query": "python",
-                "query_embedding": zero_emb,
-                "top_k": 2,
-                "alpha": 0.0,
-            },
-        )
-        assert r.status_code == 200
-        assert r.json()["first_id"] == "py"
+        hs.index("py", "Python is a programming language", zero_emb)
+        hs.index("cat", "cats are fluffy animals that meow", zero_emb)
+        results = hs.search("python", zero_emb, top_k=2, alpha=0.0)
+        assert results[0]["id"] == "py"
 
     def test_hybrid_score_is_nonnegative(self):
-        client = build_app()
-        r = client.post("/hybrid/search-nonnegative", json={})
-        assert r.status_code == 200
-        assert r.json()["all_nonneg"] is True
+        hs = HybridSearch()
+        hs.index("d1", "test document", _embed("test document"))
+        results = hs.search("test", _embed("test"), alpha=0.5)
+        assert all(r["score"] >= 0.0 for r in results)
 
     def test_most_relevant_doc_ranked_first(self):
-        client = build_app()
-        r = client.post(
-            "/hybrid/search",
-            json={
-                "docs": [
-                    _doc("programming", "Python is a high-level programming language"),
-                    _doc("animals", "Cats are fluffy animals that meow"),
-                    _doc("web", "JavaScript is used for web development"),
-                ],
-                "query": "python programming language",
-                "query_embedding": _embed("Python programming"),
-                "top_k": 3,
-                "alpha": 0.5,
-            },
-        )
-        assert r.status_code == 200
-        assert r.json()["first_id"] == "programming"
+        hs = HybridSearch()
+        hs.index("programming", "Python is a high-level programming language", _embed("Python programming"))
+        hs.index("animals", "Cats are fluffy animals that meow", _embed("cats animals"))
+        hs.index("web", "JavaScript is used for web development", _embed("javascript web"))
+        results = hs.search("python programming language", _embed("Python programming"), top_k=3, alpha=0.5)
+        assert results[0]["id"] == "programming"

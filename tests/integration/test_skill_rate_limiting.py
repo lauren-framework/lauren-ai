@@ -2,17 +2,14 @@
 
 Verifies the custom LLMRateLimiter allows calls within limit, blocks when
 exceeded, records usage, and that the built-in RateLimiter has the expected
-interface — via HTTP through a Lauren TestClient.
+interface — via direct Python calls.
 """
 
 import time
 
 import pytest
 
-from lauren import LaurenFactory, controller, get, post, module, Json, use_value, injectable, Scope
-from lauren.testing import TestClient
 from lauren_ai import RateLimiter
-from pydantic import BaseModel
 
 
 # ---------------------------------------------------------------------------
@@ -57,149 +54,58 @@ class LLMRateLimiter:
         return sum(c for _, c in self._token_counts)
 
 
-@injectable(scope=Scope.SINGLETON)
-class LimiterService:
-    def __init__(self) -> None:
-        self._limiter = LLMRateLimiter(requests_per_minute=5, tokens_per_minute=1000)
-
-    @property
-    def limiter(self) -> LLMRateLimiter:
-        return self._limiter
-
-    def reset(self, rpm: int = 5, tpm: int = 1000) -> None:
-        self._limiter = LLMRateLimiter(requests_per_minute=rpm, tokens_per_minute=tpm)
-
-
 # ---------------------------------------------------------------------------
-# Request models
+# Tests: LLMRateLimiter
 # ---------------------------------------------------------------------------
 
 
-class ConsumeRequest(BaseModel):
-    estimated_tokens: int = 0
+class TestLLMRateLimiter:
+    def test_allows_within_limit(self):
+        limiter = LLMRateLimiter(requests_per_minute=10, tokens_per_minute=10_000)
+        assert limiter.can_proceed(100) is True
 
+    def test_consume_within_limit_records_call(self):
+        limiter = LLMRateLimiter(requests_per_minute=5, tokens_per_minute=10_000)
+        assert limiter.can_proceed(100) is True
+        limiter.record_call(100)
+        assert limiter.request_count == 1
+        assert limiter.token_count == 100
 
-class RecordRequest(BaseModel):
-    tokens: int
+    def test_blocks_when_rpm_exceeded(self):
+        limiter = LLMRateLimiter(requests_per_minute=3, tokens_per_minute=100_000)
+        limiter.record_call(0)
+        limiter.record_call(0)
+        limiter.record_call(0)
+        assert limiter.can_proceed(0) is False
 
-
-class ResetRequest(BaseModel):
-    rpm: int = 5
-    tpm: int = 1000
-
-
-# ---------------------------------------------------------------------------
-# Controller / Module / build_app
-# ---------------------------------------------------------------------------
-
-
-@controller("/limiter")
-class LimiterController:
-    def __init__(self, svc: LimiterService) -> None:
-        self._svc = svc
-
-    @post("/consume")
-    async def consume(self, body: Json[ConsumeRequest]) -> dict:
-        allowed = self._svc.limiter.can_proceed(body.estimated_tokens)
-        if allowed:
-            self._svc.limiter.record_call(body.estimated_tokens)
-        return {"allowed": allowed}
-
-    @post("/record")
-    async def record(self, body: Json[RecordRequest]) -> dict:
-        self._svc.limiter.record_call(body.tokens)
-        return {"recorded": True}
-
-    @get("/status")
-    async def status(self) -> dict:
-        return {
-            "request_count": self._svc.limiter.request_count,
-            "token_count": self._svc.limiter.token_count,
-        }
-
-    @post("/reset")
-    async def reset(self, body: Json[ResetRequest]) -> dict:
-        self._svc.reset(rpm=body.rpm, tpm=body.tpm)
-        return {"reset": True}
-
-
-@module(controllers=[LimiterController], providers=[LimiterService])
-class RateLimiterModule: ...
-
-
-def build_app():
-    return TestClient(LaurenFactory.create(RateLimiterModule))
-
-
-# ---------------------------------------------------------------------------
-# Tests: LLMRateLimiter via HTTP
-# ---------------------------------------------------------------------------
-
-
-class TestLLMRateLimiterHTTP:
-    def test_consume_within_limit_is_allowed(self):
-        client = build_app()
-        client.post("/limiter/reset", json={"rpm": 5, "tpm": 10000})
-        resp = client.post("/limiter/consume", json={"estimated_tokens": 100})
-        assert resp.status_code == 200
-        assert resp.json()["allowed"] is True
-
-    def test_consume_exceeded_rpm_is_blocked(self):
-        client = build_app()
-        client.post("/limiter/reset", json={"rpm": 3, "tpm": 100000})
-        for _ in range(3):
-            client.post("/limiter/consume", json={"estimated_tokens": 0})
-        resp = client.post("/limiter/consume", json={"estimated_tokens": 0})
-        assert resp.status_code == 200
-        assert resp.json()["allowed"] is False
-
-    def test_consume_exceeded_tpm_is_blocked(self):
-        client = build_app()
-        client.post("/limiter/reset", json={"rpm": 100, "tpm": 500})
-        client.post("/limiter/record", json={"tokens": 300})
-        client.post("/limiter/record", json={"tokens": 200})
-        # token budget now full; 1 more would exceed
-        resp = client.post("/limiter/consume", json={"estimated_tokens": 1})
-        assert resp.status_code == 200
-        assert resp.json()["allowed"] is False
+    def test_blocks_when_tpm_exceeded(self):
+        limiter = LLMRateLimiter(requests_per_minute=100, tokens_per_minute=500)
+        limiter.record_call(300)
+        limiter.record_call(200)
+        assert limiter.can_proceed(1) is False
 
     def test_status_reflects_recorded_calls(self):
-        client = build_app()
-        client.post("/limiter/reset", json={"rpm": 10, "tpm": 10000})
-        client.post("/limiter/record", json={"tokens": 100})
-        client.post("/limiter/record", json={"tokens": 200})
-        resp = client.get("/limiter/status")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["request_count"] == 2
-        assert data["token_count"] == 300
+        limiter = LLMRateLimiter(requests_per_minute=10, tokens_per_minute=10_000)
+        limiter.record_call(100)
+        limiter.record_call(200)
+        assert limiter.request_count == 2
+        assert limiter.token_count == 300
 
     def test_consume_records_tokens(self):
-        client = build_app()
-        client.post("/limiter/reset", json={"rpm": 10, "tpm": 10000})
-        client.post("/limiter/consume", json={"estimated_tokens": 250})
-        resp = client.get("/limiter/status")
-        assert resp.status_code == 200
-        assert resp.json()["token_count"] == 250
+        limiter = LLMRateLimiter(requests_per_minute=10, tokens_per_minute=10_000)
+        assert limiter.can_proceed(250) is True
+        limiter.record_call(250)
+        assert limiter.token_count == 250
 
     def test_reset_clears_counters(self):
-        client = build_app()
-        client.post("/limiter/record", json={"tokens": 100})
-        client.post("/limiter/record", json={"tokens": 200})
-        client.post("/limiter/reset", json={"rpm": 5, "tpm": 1000})
-        resp = client.get("/limiter/status")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["request_count"] == 0
-        assert data["token_count"] == 0
+        limiter = LLMRateLimiter(requests_per_minute=5, tokens_per_minute=1000)
+        limiter.record_call(100)
+        limiter.record_call(200)
+        # Simulate a reset by creating a new limiter
+        limiter2 = LLMRateLimiter(requests_per_minute=5, tokens_per_minute=1000)
+        assert limiter2.request_count == 0
+        assert limiter2.token_count == 0
 
-
-# ---------------------------------------------------------------------------
-# Tests: LLMRateLimiter pure unit (direct use, no HTTP)
-# ---------------------------------------------------------------------------
-
-
-class TestLLMRateLimiterUnit:
     def test_can_proceed_when_empty(self):
         limiter = LLMRateLimiter(requests_per_minute=10, tokens_per_minute=10_000)
         assert limiter.can_proceed(100) is True

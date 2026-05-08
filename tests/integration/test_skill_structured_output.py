@@ -13,15 +13,12 @@ import json
 import pytest
 from pydantic import BaseModel
 
-from lauren import LaurenFactory, controller, get, post, module, injectable, Scope, use_value, Json
-from lauren.testing import TestClient
 from lauren_ai import LLMConfig, PydanticOutputParser
 from lauren_ai._agents import agent
-from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
 from lauren_ai._module import LLMService
-from lauren_ai._transport import Completion, TokenUsage
+from lauren_ai._transport import Completion, Message, TokenUsage
 from lauren_ai._transport._mock import MockTransport
-from lauren_ai._transport._structured import StructuredLLM
+from lauren_ai.testing import TestClient
 
 
 # ---------------------------------------------------------------------------
@@ -56,13 +53,11 @@ class ProductInfo(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Module-level mock
+# Helpers
 # ---------------------------------------------------------------------------
 
-_MOCK = MockTransport()
 
-
-def _completion(content: str = "OK") -> Completion:
+def _c(content: str = "OK") -> Completion:
     return Completion(
         id="c1",
         model="mock-model",
@@ -74,51 +69,16 @@ def _completion(content: str = "OK") -> Completion:
 
 
 # ---------------------------------------------------------------------------
-# Controller / Module
+# Agent definitions
 # ---------------------------------------------------------------------------
 
 
-class _ParseRequest(BaseModel):
-    text: str
+@agent(model="mock-model", system="Return JSON only.")
+class JSONAgent: ...
 
 
-@controller("/parse")
-class ParseController:
-    def __init__(self, mock: MockTransport) -> None:
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        self._runner = AgentRunner(transport=mock, tools={}, config=cfg)
-
-    @post("/sentiment")
-    async def sentiment(self, body: Json[_ParseRequest]) -> dict:
-        @agent(model="mock-model", system="Return JSON only.")
-        class JSONAgent: ...
-
-        resp = await self._runner.run(JSONAgent(), body.text)
-        result = parse_structured_response(resp.content, SentimentResult)
-        return {"label": result.label, "score": result.score, "reasoning": result.reasoning}
-
-    @post("/product")
-    async def product(self, body: Json[_ParseRequest]) -> dict:
-        @agent(model="mock-model")
-        class ProductAgent: ...
-
-        resp = await self._runner.run(ProductAgent(), body.text)
-        result = parse_structured_response(resp.content, ProductInfo)
-        return {"name": result.name, "price": result.price, "in_stock": result.in_stock}
-
-
-@module(
-    controllers=[ParseController],
-    providers=[use_value(provide=MockTransport, value=_MOCK)],
-)
-class StructuredOutputModule: ...
-
-
-def build_app(*responses: str) -> TestClient:
-    _MOCK.reset()
-    for content in responses:
-        _MOCK.queue_response(_completion(content))
-    return TestClient(LaurenFactory.create(StructuredOutputModule))
+@agent(model="mock-model")
+class ProductAgent: ...
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +167,6 @@ class TestStructuredLLMWithMock:
         mock.queue_structured(SentimentResult(label="positive", score=0.9, reasoning="Great!"))
 
         structured = llm.with_structured_output(SentimentResult)
-        from lauren_ai._transport import Message
         result = await structured.complete([Message(role="user", content="Analyze")])  # type: ignore[arg-type]
         assert isinstance(result, SentimentResult)
 
@@ -216,7 +175,6 @@ class TestStructuredLLMWithMock:
         mock.queue_structured(SentimentResult(label="negative", score=0.1, reasoning="Bad"))
 
         structured = llm.with_structured_output(SentimentResult)
-        from lauren_ai._transport import Message
         result = await structured.complete([Message(role="user", content="Analyze")])  # type: ignore[arg-type]
         assert result.label == "negative"
 
@@ -225,28 +183,28 @@ class TestStructuredLLMWithMock:
         mock.queue_structured(SentimentResult(label="positive", score=0.95, reasoning="Excellent"))
 
         structured = llm.with_structured_output(SentimentResult)
-        from lauren_ai._transport import Message
         result = await structured.complete([Message(role="user", content="Analyze")])  # type: ignore[arg-type]
         assert result.score == pytest.approx(0.95)
 
 
 # ---------------------------------------------------------------------------
-# TestAgentJSONCompletion (via TestClient)
+# TestAgentJSONCompletion
 # ---------------------------------------------------------------------------
 
 
 class TestAgentJSONCompletion:
     def test_agent_json_content_can_be_parsed(self):
         json_content = '{"label": "positive", "score": 0.8, "reasoning": "Sounds happy"}'
-        client = build_app(json_content)
-        r = client.post("/parse/sentiment", json={"text": "Analyze: I love this!"})
-        assert r.status_code == 200
-        assert r.json()["label"] == "positive"
+        client = TestClient(JSONAgent())
+        client.mock.queue_response(_c(json_content))
+        result = client.run("Analyze: I love this!")
+        parsed = parse_structured_response(result.content, SentimentResult)
+        assert parsed.label == "positive"
 
     def test_agent_product_json_parses_correctly(self):
-        client = build_app('{"name": "Laptop", "price": 999.0, "in_stock": true}')
-        r = client.post("/parse/product", json={"text": "Describe product"})
-        assert r.status_code == 200
-        data = r.json()
-        assert data["name"] == "Laptop"
-        assert data["in_stock"] is True
+        client = TestClient(ProductAgent())
+        client.mock.queue_response(_c('{"name": "Laptop", "price": 999.0, "in_stock": true}'))
+        result = client.run("Describe product")
+        parsed = parse_structured_response(result.content, ProductInfo)
+        assert parsed.name == "Laptop"
+        assert parsed.in_stock is True

@@ -18,11 +18,6 @@ import math
 import hashlib
 from typing import Any
 
-from pydantic import BaseModel
-
-from lauren import LaurenFactory, controller, delete, post, module, Json
-from lauren.testing import TestClient
-
 
 # ---------------------------------------------------------------------------
 # SemanticCache implementation (inline for test file)
@@ -73,212 +68,135 @@ class SemanticCache:
 
 
 # ---------------------------------------------------------------------------
-# Module-level state
-# ---------------------------------------------------------------------------
-
-_cache_state: dict = {}
-
-
-# ---------------------------------------------------------------------------
-# Controllers
-# ---------------------------------------------------------------------------
-
-
-class _SetRequest(BaseModel):
-    query: str
-    response: str
-    similarity_threshold: float = 0.95
-    max_size: int = 1000
-
-
-class _GetRequest(BaseModel):
-    query: str
-
-
-@controller("/cache")
-class CacheController:
-    @post("/set")
-    async def set_entry(self, body: Json[_SetRequest]) -> dict:
-        cache = _cache_state["cache"]
-        cache.set(body.query, body.response)
-        return {"cached": True}
-
-    @post("/get")
-    async def get_entry(self, body: Json[_GetRequest]) -> dict:
-        cache = _cache_state["cache"]
-        result = cache.get(body.query)
-        if result is None:
-            return {"hit": False}
-        return {"hit": True, "response": result}
-
-    @delete("/clear")
-    async def clear_cache(self) -> dict:
-        cache = _cache_state["cache"]
-        cache.clear()
-        return {"cleared": True, "size": 0}
-
-    @post("/len")
-    async def get_len(self) -> dict:
-        return {"size": len(_cache_state["cache"])}
-
-
-@module(controllers=[CacheController])
-class CacheModule: ...
-
-
-# ---------------------------------------------------------------------------
-# Build app helper
-# ---------------------------------------------------------------------------
-
-
-def build_app(similarity_threshold: float = 0.95, max_size: int = 1000) -> TestClient:
-    _cache_state["cache"] = SemanticCache(similarity_threshold=similarity_threshold, max_size=max_size)
-    return TestClient(LaurenFactory.create(CacheModule))
-
-
-# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
 
 class TestSemanticCacheBasic:
     def test_identical_query_returns_cached_response(self):
-        client = build_app(similarity_threshold=0.99)
-        client.post("/cache/set", json={"query": "What is the capital of France?", "response": "Paris", "similarity_threshold": 0.99})
-        r = client.post("/cache/get", json={"query": "What is the capital of France?"})
-        assert r.status_code == 200
-        data = r.json()
-        assert data["hit"] is True
-        assert data["response"] == "Paris"
+        cache = SemanticCache(similarity_threshold=0.99)
+        cache.set("What is the capital of France?", "Paris")
+        result = cache.get("What is the capital of France?")
+        assert result == "Paris"
 
     def test_different_query_returns_none(self):
-        client = build_app(similarity_threshold=0.99)
-        client.post("/cache/set", json={"query": "What is the capital of France?", "response": "Paris"})
-        r = client.post("/cache/get", json={"query": "What is the weather today?"})
-        assert r.status_code == 200
-        assert r.json()["hit"] is False
+        cache = SemanticCache(similarity_threshold=0.99)
+        cache.set("What is the capital of France?", "Paris")
+        result = cache.get("What is the weather today?")
+        assert result is None
 
     def test_cache_miss_returns_none_on_empty(self):
-        client = build_app()
-        r = client.post("/cache/get", json={"query": "anything"})
-        assert r.status_code == 200
-        assert r.json()["hit"] is False
+        cache = SemanticCache()
+        result = cache.get("anything")
+        assert result is None
 
     def test_cache_stores_multiple_entries(self):
-        client = build_app(similarity_threshold=0.99)
-        client.post("/cache/set", json={"query": "query one", "response": "response one"})
-        client.post("/cache/set", json={"query": "query two", "response": "response two"})
-        r = client.post("/cache/len")
-        assert r.json()["size"] == 2
+        cache = SemanticCache(similarity_threshold=0.99)
+        cache.set("query one", "response one")
+        cache.set("query two", "response two")
+        assert len(cache) == 2
 
     def test_cache_retrieves_correct_value(self):
-        client = build_app(similarity_threshold=0.99)
-        client.post("/cache/set", json={"query": "apple banana cherry", "response": "fruit answer"})
-        client.post("/cache/set", json={"query": "hydrogen nitrogen oxygen", "response": "chemistry answer"})
-        r1 = client.post("/cache/get", json={"query": "apple banana cherry"})
-        r2 = client.post("/cache/get", json={"query": "hydrogen nitrogen oxygen"})
-        assert r1.json()["response"] == "fruit answer"
-        assert r2.json()["response"] == "chemistry answer"
+        cache = SemanticCache(similarity_threshold=0.99)
+        cache.set("apple banana cherry", "fruit answer")
+        cache.set("hydrogen nitrogen oxygen", "chemistry answer")
+        r1 = cache.get("apple banana cherry")
+        r2 = cache.get("hydrogen nitrogen oxygen")
+        assert r1 == "fruit answer"
+        assert r2 == "chemistry answer"
 
 
 class TestSemanticCacheSimilarity:
     def test_exact_match_hits_cache(self):
-        client = build_app(similarity_threshold=0.95)
-        client.post("/cache/set", json={"query": "the quick brown fox", "response": "fox response"})
-        r = client.post("/cache/get", json={"query": "the quick brown fox"})
-        assert r.json()["hit"] is True
-        assert r.json()["response"] == "fox response"
+        cache = SemanticCache(similarity_threshold=0.95)
+        cache.set("the quick brown fox", "fox response")
+        result = cache.get("the quick brown fox")
+        assert result == "fox response"
 
     def test_completely_different_query_misses(self):
-        client = build_app(similarity_threshold=0.95)
-        client.post("/cache/set", json={"query": "pizza recipe", "response": "add cheese"})
-        r = client.post("/cache/get", json={"query": "quantum mechanics theory"})
-        assert r.json()["hit"] is False
+        cache = SemanticCache(similarity_threshold=0.95)
+        cache.set("pizza recipe", "add cheese")
+        result = cache.get("quantum mechanics theory")
+        assert result is None
 
     def test_near_identical_query_hits_with_low_threshold(self):
-        client = build_app(similarity_threshold=0.3)
-        client.post("/cache/set", json={"query": "hello world test", "response": "cached response"})
-        r = client.post("/cache/get", json={"query": "hello world test"})
-        assert r.json()["hit"] is True
-        assert r.json()["response"] == "cached response"
+        cache = SemanticCache(similarity_threshold=0.3)
+        cache.set("hello world test", "cached response")
+        result = cache.get("hello world test")
+        assert result == "cached response"
 
     def test_threshold_one_requires_identical(self):
-        client = build_app(similarity_threshold=1.0)
-        client.post("/cache/set", json={"query": "exact phrase here", "response": "response"})
-        r1 = client.post("/cache/get", json={"query": "exact phrase here"})
-        assert r1.json()["hit"] is True
-        r2 = client.post("/cache/get", json={"query": "exact phrase there"})
-        assert r2.json()["hit"] is False
+        cache = SemanticCache(similarity_threshold=1.0)
+        cache.set("exact phrase here", "response")
+        r1 = cache.get("exact phrase here")
+        assert r1 == "response"
+        r2 = cache.get("exact phrase there")
+        assert r2 is None
 
 
 class TestSemanticCacheSizeLimit:
     def test_size_limit_evicts_oldest(self):
-        client = build_app(max_size=2)
-        client.post("/cache/set", json={"query": "first", "response": "r1"})
-        client.post("/cache/set", json={"query": "second", "response": "r2"})
-        client.post("/cache/set", json={"query": "third", "response": "r3"})  # should evict "first"
-        r = client.post("/cache/len")
-        assert r.json()["size"] == 2
+        cache = SemanticCache(max_size=2)
+        cache.set("first", "r1")
+        cache.set("second", "r2")
+        cache.set("third", "r3")  # should evict "first"
+        assert len(cache) == 2
 
     def test_oldest_entry_evicted(self):
-        client = build_app(similarity_threshold=0.99, max_size=2)
-        client.post("/cache/set", json={"query": "first entry", "response": "r1"})
-        client.post("/cache/set", json={"query": "second entry", "response": "r2"})
-        client.post("/cache/set", json={"query": "third entry", "response": "r3"})
-        r = client.post("/cache/get", json={"query": "first entry"})
-        assert r.json()["hit"] is False
+        cache = SemanticCache(similarity_threshold=0.99, max_size=2)
+        cache.set("first entry", "r1")
+        cache.set("second entry", "r2")
+        cache.set("third entry", "r3")
+        result = cache.get("first entry")
+        assert result is None
 
     def test_newest_entries_retained_after_eviction(self):
-        client = build_app(similarity_threshold=0.99, max_size=2)
-        client.post("/cache/set", json={"query": "keep me one", "response": "r1"})
-        client.post("/cache/set", json={"query": "keep me two", "response": "r2"})
-        client.post("/cache/set", json={"query": "keep me three", "response": "r3"})
-        r2 = client.post("/cache/get", json={"query": "keep me two"})
-        r3 = client.post("/cache/get", json={"query": "keep me three"})
-        assert r2.json()["response"] == "r2"
-        assert r3.json()["response"] == "r3"
+        cache = SemanticCache(similarity_threshold=0.99, max_size=2)
+        cache.set("keep me one", "r1")
+        cache.set("keep me two", "r2")
+        cache.set("keep me three", "r3")
+        r2 = cache.get("keep me two")
+        r3 = cache.get("keep me three")
+        assert r2 == "r2"
+        assert r3 == "r3"
 
 
 class TestSemanticCacheClear:
     def test_clear_empties_store(self):
-        client = build_app()
-        client.post("/cache/set", json={"query": "query", "response": "response"})
-        client.delete("/cache/clear")
-        r = client.post("/cache/len")
-        assert r.json()["size"] == 0
+        cache = SemanticCache()
+        cache.set("query", "response")
+        cache.clear()
+        assert len(cache) == 0
 
     def test_clear_causes_cache_miss(self):
-        client = build_app(similarity_threshold=0.99)
-        client.post("/cache/set", json={"query": "hello world", "response": "hi!"})
-        client.delete("/cache/clear")
-        r = client.post("/cache/get", json={"query": "hello world"})
-        assert r.json()["hit"] is False
+        cache = SemanticCache(similarity_threshold=0.99)
+        cache.set("hello world", "hi!")
+        cache.clear()
+        result = cache.get("hello world")
+        assert result is None
 
     def test_after_clear_can_add_new_entries(self):
-        client = build_app(similarity_threshold=0.99)
-        client.post("/cache/set", json={"query": "original", "response": "value"})
-        client.delete("/cache/clear")
-        client.post("/cache/set", json={"query": "new entry", "response": "new value"})
-        r = client.post("/cache/get", json={"query": "new entry"})
-        assert r.json()["response"] == "new value"
+        cache = SemanticCache(similarity_threshold=0.99)
+        cache.set("original", "value")
+        cache.clear()
+        cache.set("new entry", "new value")
+        result = cache.get("new entry")
+        assert result == "new value"
 
 
 class TestSemanticCacheLen:
     def test_len_empty(self):
-        client = build_app()
-        r = client.post("/cache/len")
-        assert r.json()["size"] == 0
+        cache = SemanticCache()
+        assert len(cache) == 0
 
     def test_len_after_set(self):
-        client = build_app()
-        client.post("/cache/set", json={"query": "a", "response": "r1"})
-        client.post("/cache/set", json={"query": "b", "response": "r2"})
-        r = client.post("/cache/len")
-        assert r.json()["size"] == 2
+        cache = SemanticCache()
+        cache.set("a", "r1")
+        cache.set("b", "r2")
+        assert len(cache) == 2
 
     def test_len_after_clear(self):
-        client = build_app()
-        client.post("/cache/set", json={"query": "a", "response": "r1"})
-        client.delete("/cache/clear")
-        r = client.post("/cache/len")
-        assert r.json()["size"] == 0
+        cache = SemanticCache()
+        cache.set("a", "r1")
+        cache.clear()
+        assert len(cache) == 0

@@ -14,16 +14,11 @@ for schema generation.
 """
 
 import pytest
-from pydantic import BaseModel
 
-from lauren import LaurenFactory, controller, get, post, module, injectable, Scope, use_value, Json
-from lauren.testing import TestClient
 from lauren_ai._agents import agent, use_tools
-from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
-from lauren_ai._config import LLMConfig
-from lauren_ai._tools import TOOL_META, _add_to_tool_map, tool
+from lauren_ai._tools import TOOL_META, tool
 from lauren_ai._transport import Completion, TokenUsage
-from lauren_ai._transport._mock import MockTransport
+from lauren_ai.testing import TestClient
 
 
 # ---------------------------------------------------------------------------
@@ -64,13 +59,36 @@ async def always_fails(msg: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Module-level mock
+# Agent definitions
 # ---------------------------------------------------------------------------
 
-_MOCK = MockTransport()
+
+@agent(model="mock-model")
+@use_tools(get_weather)
+class WeatherAgent: ...
 
 
-def _completion(content: str = "OK") -> Completion:
+@agent(model="mock-model")
+@use_tools(add_numbers)
+class MathAgent: ...
+
+
+@agent(model="mock-model", tool_error_policy="return_error")
+@use_tools(always_fails)
+class ErrorAgent: ...
+
+
+@agent(model="mock-model", tool_error_policy="raise")
+@use_tools(always_fails)
+class RaiseAgent: ...
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _c(content: str = "OK") -> Completion:
     return Completion(
         id="c1",
         model="mock-model",
@@ -79,88 +97,6 @@ def _completion(content: str = "OK") -> Completion:
         stop_reason="end_turn",
         usage=TokenUsage(input_tokens=10, output_tokens=5),
     )
-
-
-# ---------------------------------------------------------------------------
-# Controller / Module
-# ---------------------------------------------------------------------------
-
-
-class _RunRequest(BaseModel):
-    prompt: str = "hi"
-
-
-@controller("/agent")
-class ToolCallingController:
-    def __init__(self, mock: MockTransport) -> None:
-        tools = {}
-        _add_to_tool_map(tools, get_weather)
-        _add_to_tool_map(tools, add_numbers)
-        _add_to_tool_map(tools, always_fails)
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        self._runner = AgentRunner(transport=mock, tools=tools, config=cfg)
-        self._mock = mock
-
-    @post("/run-weather")
-    async def run_weather(self, body: Json[_RunRequest]) -> dict:
-        @use_tools(get_weather)
-        @agent(model="mock-model")
-        class WeatherAgent: ...
-
-        resp = await self._runner.run(WeatherAgent(), body.prompt)
-        return {
-            "content": resp.content,
-            "tool_calls_made": [t.name for t in resp.tool_calls_made],
-            "turns": resp.turns,
-            "calls": len(self._mock.calls),
-        }
-
-    @post("/run-add")
-    async def run_add(self, body: Json[_RunRequest]) -> dict:
-        @use_tools(add_numbers)
-        @agent(model="mock-model")
-        class MathAgent: ...
-
-        resp = await self._runner.run(MathAgent(), body.prompt)
-        return {
-            "content": resp.content,
-            "turns": resp.turns,
-        }
-
-    @post("/run-fail-return")
-    async def run_fail_return(self, body: Json[_RunRequest]) -> dict:
-        @use_tools(always_fails)
-        @agent(model="mock-model", tool_error_policy="return_error")
-        class ErrorAgent: ...
-
-        resp = await self._runner.run(ErrorAgent(), body.prompt)
-        return {"content": resp.content}
-
-    @post("/run-fail-raise")
-    async def run_fail_raise(self, body: Json[_RunRequest]) -> dict:
-        from lauren_ai._tools._executor import ToolExecutionError
-
-        @use_tools(always_fails)
-        @agent(model="mock-model", tool_error_policy="raise")
-        class RaiseAgent: ...
-
-        try:
-            await self._runner.run(RaiseAgent(), body.prompt)
-            return {"raised": False}
-        except ToolExecutionError:
-            return {"raised": True}
-
-
-@module(
-    controllers=[ToolCallingController],
-    providers=[use_value(provide=MockTransport, value=_MOCK)],
-)
-class ToolCallingModule: ...
-
-
-def build_app() -> TestClient:
-    _MOCK.reset()
-    return TestClient(LaurenFactory.create(ToolCallingModule))
 
 
 # ---------------------------------------------------------------------------
@@ -199,69 +135,64 @@ class TestToolDefinition:
 
 
 # ---------------------------------------------------------------------------
-# TestToolExecution (via TestClient)
+# TestToolExecution
 # ---------------------------------------------------------------------------
 
 
 class TestToolExecution:
     def test_tool_call_executes_function(self):
-        client = build_app()
-        _MOCK.queue_tool_use("get_weather", {"city": "London"})
-        _MOCK.queue_response(_completion("It is 18°C in London."))
-        r = client.post("/agent/run-weather", json={"prompt": "Weather in London?"})
-        assert r.status_code == 200
-        assert r.json()["content"] == "It is 18°C in London."
+        client = TestClient(WeatherAgent())
+        client.mock.queue_tool_use("get_weather", {"city": "London"})
+        client.mock.queue_response(_c("It is 18°C in London."))
+        result = client.run("Weather in London?")
+        assert result.content == "It is 18°C in London."
 
     def test_tool_call_records_in_response(self):
-        client = build_app()
-        _MOCK.queue_tool_use("get_weather", {"city": "Paris"})
-        _MOCK.queue_response(_completion("Rainy in Paris."))
-        r = client.post("/agent/run-weather", json={"prompt": "Weather in Paris?"})
-        assert r.status_code == 200
-        assert len(r.json()["tool_calls_made"]) == 1
+        client = TestClient(WeatherAgent())
+        client.mock.queue_tool_use("get_weather", {"city": "Paris"})
+        client.mock.queue_response(_c("Rainy in Paris."))
+        result = client.run("Weather in Paris?")
+        assert len(result.tool_calls_made) == 1
 
     def test_tool_call_name_recorded(self):
-        client = build_app()
-        _MOCK.queue_tool_use("get_weather", {"city": "Berlin"})
-        _MOCK.queue_response(_completion("Cloudy in Berlin."))
-        r = client.post("/agent/run-weather", json={"prompt": "Weather in Berlin?"})
-        assert r.status_code == 200
-        assert r.json()["tool_calls_made"][0] == "get_weather"
+        client = TestClient(WeatherAgent())
+        client.mock.queue_tool_use("get_weather", {"city": "Berlin"})
+        client.mock.queue_response(_c("Cloudy in Berlin."))
+        result = client.run("Weather in Berlin?")
+        assert result.tool_calls_made[0].name == "get_weather"
 
     def test_two_llm_calls_for_tool_turn(self):
-        client = build_app()
-        _MOCK.queue_tool_use("get_weather", {"city": "Tokyo"})
-        _MOCK.queue_response(_completion("Sunny in Tokyo."))
-        r = client.post("/agent/run-weather", json={"prompt": "Weather in Tokyo?"})
-        assert r.status_code == 200
-        assert r.json()["calls"] == 2
+        client = TestClient(WeatherAgent())
+        client.mock.queue_tool_use("get_weather", {"city": "Tokyo"})
+        client.mock.queue_response(_c("Sunny in Tokyo."))
+        client.run("Weather in Tokyo?")
+        assert len(client.calls) == 2
 
     def test_add_numbers_tool_executes(self):
-        client = build_app()
-        _MOCK.queue_tool_use("add_numbers", {"a": 3, "b": 7})
-        _MOCK.queue_response(_completion("3 + 7 = 10."))
-        r = client.post("/agent/run-add", json={"prompt": "Add 3 and 7"})
-        assert r.status_code == 200
-        assert r.json()["turns"] == 2
+        client = TestClient(MathAgent())
+        client.mock.queue_tool_use("add_numbers", {"a": 3, "b": 7})
+        client.mock.queue_response(_c("3 + 7 = 10."))
+        result = client.run("Add 3 and 7")
+        assert result.turns == 2
 
 
 # ---------------------------------------------------------------------------
-# TestToolErrorHandling (via TestClient)
+# TestToolErrorHandling
 # ---------------------------------------------------------------------------
 
 
 class TestToolErrorHandling:
     def test_tool_error_return_error_policy(self):
-        client = build_app()
-        _MOCK.queue_tool_use("always_fails", {"msg": "test"})
-        _MOCK.queue_response(_completion("Tool failed but I handled it."))
-        r = client.post("/agent/run-fail-return", json={"prompt": "do it"})
-        assert r.status_code == 200
-        assert r.json()["content"] == "Tool failed but I handled it."
+        client = TestClient(ErrorAgent())
+        client.mock.queue_tool_use("always_fails", {"msg": "test"})
+        client.mock.queue_response(_c("Tool failed but I handled it."))
+        result = client.run("do it")
+        assert result.content == "Tool failed but I handled it."
 
     def test_tool_error_raise_policy(self):
-        client = build_app()
-        _MOCK.queue_tool_use("always_fails", {"msg": "boom"})
-        r = client.post("/agent/run-fail-raise", json={"prompt": "do it"})
-        assert r.status_code == 200
-        assert r.json()["raised"] is True
+        from lauren_ai._tools._executor import ToolExecutionError
+
+        client = TestClient(RaiseAgent())
+        client.mock.queue_tool_use("always_fails", {"msg": "boom"})
+        with pytest.raises(ToolExecutionError):
+            client.run("do it")
