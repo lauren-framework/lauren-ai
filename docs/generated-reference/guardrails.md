@@ -8,16 +8,16 @@ Content safety filters for agent inputs and outputs.
 
 Mark a class as a DI-injectable guardrail and register it as a provider.
 
-Applying ``@guardrail()`` to a class does two things:
+Applying `@guardrail()` to a class does two things:
 
-1. Sets :data:`GUARDRAIL_CLASS_META` on the class (a :class:`GuardrailClassMeta`
+1. Sets `GUARDRAIL_CLASS_META` on the class (a `GuardrailClassMeta`
    instance) so the framework knows it is a guardrail implementation.
-2. Calls ``@injectable(scope=scope)`` from the Lauren framework, registering
+2. Calls `@injectable(scope=scope)` from the Lauren framework, registering
    the class as a DI singleton (or the requested scope) so it can be
    injected into other components via the DI container.
 
-Must be called **with parentheses**.  Bare ``@guardrail`` raises
-:class:`~lauren_ai._exceptions.DecoratorUsageError`.
+Must be called **with parentheses**.  Bare `@guardrail` raises
+`DecoratorUsageError`.
 
 Example — a custom DI-injectable input guardrail::
 
@@ -55,27 +55,34 @@ injected by type into other providers or wiring classes::
             if meta:
                 meta.input_guardrails.append(profanity_filter)
 
-:param kind: Hint for which position this guardrail is intended —
-    ``"input"`` (runs before the model call), ``"output"`` (runs after),
-    or ``"any"`` (either position).  Does not affect runtime behaviour;
-    used for documentation and static analysis only.
-:type kind: Literal["input", "output", "any"]
-:param scope: The DI scope to register the class under.  Defaults to
-    ``Scope.SINGLETON`` (the ``scope`` is resolved lazily from
-    ``lauren.Scope`` to avoid a hard import at module load time).
-:type scope: Any
-:raises DecoratorUsageError: When called without parentheses (bare
-    ``@guardrail``).
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `kind` | `Literal['input', 'output', 'any']` | Hint for which position this guardrail is intended —
+`"input"` (runs before the model call), `"output"` (runs after),
+or `"any"` (either position).  Does not affect runtime behaviour;
+used for documentation and static analysis only. |
+| `scope` | `Any` | The DI scope to register the class under.  Defaults to
+`Scope.SINGLETON` (the `scope` is resolved lazily from
+`lauren.Scope` to avoid a hard import at module load time). |
+
+**Raises:**
+
+| Exception | Description |
+|---|---|
+| `DecoratorUsageError` | When called without parentheses (bare
+`@guardrail`). |
 
 ### `use_guardrails`
 
-Attach input/output guardrail instances to an ``@agent()``-decorated class.
+Attach input/output guardrail instances to an `@agent()`-decorated class.
 
-Analogous to ``@use_guards()`` in the Lauren framework — attaches
+Analogous to `@use_guards()` in the Lauren framework — attaches
 pre-built guardrail objects to the agent so the runner can execute them
 before and after each LLM call.
 
-Must be applied **below** ``@agent()`` (closer to the class body)::
+Must be applied **below** `@agent()` (closer to the class body)::
 
     @agent(model="claude-haiku-4-5")
     @use_guardrails(
@@ -84,7 +91,7 @@ Must be applied **below** ``@agent()`` (closer to the class body)::
     )
     class CookingAssistant: ...
 
-``None`` entries are silently dropped, enabling conditional selection::
+`None` entries are silently dropped, enabling conditional selection::
 
     @agent(model="claude-opus-4-6")
     @use_guardrails(
@@ -96,28 +103,35 @@ Must be applied **below** ``@agent()`` (closer to the class body)::
     class DynamicAgent: ...
 
 Input guardrails run before each LLM call.  If any guardrail returns
-``action="block"`` the model is never called and the violation message is
-returned to the caller.  A ``"modify"`` decision replaces the user message
+`action="block"` the model is never called and the violation message is
+returned to the caller.  A `"modify"` decision replaces the user message
 before it is sent to the model.
 
-Output guardrails run after the LLM response.  A ``"block"`` decision
-raises :class:`~lauren_ai._guardrails._base.GuardrailViolated`.  A
-``"modify"`` decision replaces the response content before it reaches the
+Output guardrails run after the LLM response.  A `"block"` decision
+raises `GuardrailViolated`.  A
+`"modify"` decision replaces the response content before it reaches the
 caller.
 
-Must be called **with parentheses**.  Bare ``@use_guardrails`` raises
-:class:`~lauren_ai._exceptions.DecoratorUsageError`.
+Must be called **with parentheses**.  Bare `@use_guardrails` raises
+`DecoratorUsageError`.
 
-:param input: List of :class:`~lauren_ai._guardrails._base.InputGuardrail`
-    instances (or ``None`` entries which are silently dropped) to run
-    before each LLM call.
-:type input: list[Any] | None
-:param output: List of :class:`~lauren_ai._guardrails._base.OutputGuardrail`
-    instances (or ``None`` entries which are silently dropped) to run
-    after each LLM call.
-:type output: list[Any] | None
-:raises DecoratorUsageError: When called without parentheses (bare
-    ``@use_guardrails``).
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `input` | `list[Any] | None` | List of `InputGuardrail`
+instances (or `None` entries which are silently dropped) to run
+before each LLM call. |
+| `output` | `list[Any] | None` | List of `OutputGuardrail`
+instances (or `None` entries which are silently dropped) to run
+after each LLM call. |
+
+**Raises:**
+
+| Exception | Description |
+|---|---|
+| `DecoratorUsageError` | When called without parentheses (bare
+`@use_guardrails`). |
 
 ## Decision types
 
@@ -187,35 +201,39 @@ Usage::
 
 Use a secondary LLM call to judge whether content is safe.
 
-The prompt must contain ``{content}`` which will be replaced with the text
+The prompt must contain `{content}` which will be replaced with the text
 being evaluated.
 
-:param llm: An ``LLMService`` (or any object with a compatible ``.complete()``
-    method) used to run the judgment call.
-:param prompt: Judgment prompt; must contain the ``{content}`` placeholder.
-:param block_if: String that, when found in the LLM's response (case-insensitive),
-    triggers the guardrail action.
-:param violation_message: Text returned to the caller on a trigger.  When
-    ``action="modify"`` this becomes the replacement content.
-:param action: What to do when the guardrail triggers.
+**Parameters:**
 
-    ``"block"`` (default) — returns a ``GuardrailDecision(action="block", ...)``
-    which causes the runner to raise ``GuardrailViolated``.
+| Name | Type | Description |
+|---|---|---|
+| `llm` | `Any` | An `LLMService` (or any object with a compatible `.complete()`
+method) used to run the judgment call. |
+| `prompt` | `str` | Judgment prompt; must contain the `{content}` placeholder. |
+| `block_if` | `str` | String that, when found in the LLM's response (case-insensitive),
+triggers the guardrail action. |
+| `violation_message` | `str` | Text returned to the caller on a trigger.  When
+`action="modify"` this becomes the replacement content. |
+| `action` | `Literal['block', 'modify']` | What to do when the guardrail triggers.
 
-    ``"modify"`` — returns a ``GuardrailDecision(action="modify",
-    modified_content=violation_message, ...)`` which replaces the agent's
-    response without raising; useful for graceful redirects.
-:param system: Optional system prompt passed to the judgment call.  Use this to
-    set concise instructions such as ``"Answer YES or NO only."`` without
-    baking them into the main prompt template.
-:param max_tokens: Maximum tokens for the judgment response.  Set to a small
-    value (e.g. ``5``) when you only need a YES/NO answer — significantly
-    reduces cost and latency.
-:param temperature: Sampling temperature for the judgment call.  ``0.0``
-    produces deterministic YES/NO answers.
-:param guardrail_name: Label attached to every ``GuardrailDecision`` emitted by
-    this instance.  Defaults to ``"LLMGuardrail"`` (previously was
-    ``type(self).__name__``).
+`"block"` (default) — returns a `GuardrailDecision(action="block", ...)`
+which causes the runner to raise `GuardrailViolated`.
+
+`"modify"` — returns a `GuardrailDecision(action="modify",
+modified_content=violation_message, ...)` which replaces the agent's
+response without raising; useful for graceful redirects. |
+| `system` | `str | None` | Optional system prompt passed to the judgment call.  Use this to
+set concise instructions such as `"Answer YES or NO only."` without
+baking them into the main prompt template. |
+| `max_tokens` | `int | None` | Maximum tokens for the judgment response.  Set to a small
+value (e.g. `5`) when you only need a YES/NO answer — significantly
+reduces cost and latency. |
+| `temperature` | `float | None` | Sampling temperature for the judgment call.  `0.0`
+produces deterministic YES/NO answers. |
+| `guardrail_name` | `str` | Label attached to every `GuardrailDecision` emitted by
+    this instance.  Defaults to `"LLMGuardrail"` (previously was
+    `type(self).__name__`).
 
 Example::
 
@@ -229,5 +247,5 @@ Example::
         max_tokens=5,
         temperature=0.0,
         guardrail_name="OffTopicGuard",
-    )
+    ) |
 

@@ -34,24 +34,26 @@ Usage::
         examples=["Will it rain?", "What is the temperature in Paris?"],
     )
 
-:param name: Unique route identifier.
-:type name: str
-:param description: Human-readable description of what this route handles.
-:type description: str
-:param examples: Optional list of example utterances used to compute the
-    route centroid embedding.
-:type examples: list[str]
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `name` | `str` | Unique route identifier. |
+| `description` | `str` | Human-readable description of what this route handles. |
+| `examples` | `list[str]` | Optional list of example utterances used to compute the
+route centroid embedding. |
 
 ### `RouteMatch`
 
-Result of a :meth:`SemanticRouter.route` call.
+Result of a `SemanticRouter.route()` call.
 
-:param route_name: Name of the matched route (also accessible as
-    :attr:`route` for API compatibility).
-:type route_name: str
-:param confidence: Cosine-similarity score of the best match.
-:type confidence: float
-:param method: How the match was determined: ``"embedding"``,
-    ``"llm_fallback"``, or ``"default"``.
-:type method: str
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `route_name` | `str` | Name of the matched route (also accessible as
+`route` for API compatibility). |
+| `confidence` | `float` | Cosine-similarity score of the best match. |
+| `method` | `Literal['embedding', 'llm_fallback', 'default']` | How the match was determined: `"embedding"`,
+`"llm_fallback"`, or `"default"`. |
 

@@ -21,12 +21,16 @@ Must be called with parentheses::
 The constructor declares worker agents as typed parameters; they are
 resolved from the DI container at startup.
 
-:param name: Human-readable team name (defaults to class name).
-:param mode: "coordinator" routes sub-tasks one at a time; "collaborate"
-             runs all workers sequentially and synthesises.
-:param model: Model for the coordinator LLM calls.
-:param max_rounds: Maximum coordinator-worker rounds before stopping.
-:param coordinator_prompt: Override the default routing prompt.
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `name` | `str` | Human-readable team name (defaults to class name). |
+| `mode` | `Literal['coordinator', 'collaborate']` | "coordinator" routes sub-tasks one at a time; "collaborate"
+runs all workers sequentially and synthesises. |
+| `model` | `str` | Model for the coordinator LLM calls. |
+| `max_rounds` | `int` | Maximum coordinator-worker rounds before stopping. |
+| `coordinator_prompt` | `str | None` | Override the default routing prompt. |
 
 ## Metadata
 

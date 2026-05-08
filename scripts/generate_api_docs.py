@@ -296,6 +296,8 @@ PAGES: dict[str, list[str | tuple[str, str]]] = {
 # Griffe loading
 # ---------------------------------------------------------------------------
 
+import re
+
 try:
     import griffe
 except ImportError:
@@ -306,7 +308,9 @@ except ImportError:
 
 
 def _load_package() -> griffe.Module:
-    loader = griffe.GriffeLoader(docstring_parser=griffe.Parser.google)
+    # Use sphinx parser so :param:/:type:/:returns: directives are parsed
+    # into structured sections rather than emitted as raw RST text.
+    loader = griffe.GriffeLoader(docstring_parser=griffe.Parser.sphinx)
     return loader.load(SRC)
 
 
@@ -397,11 +401,104 @@ def _render_signature(obj: griffe.Function | griffe.Class) -> str:
     return ""
 
 
+def _clean_rst_inline(text: str) -> str:
+    """Convert RST inline cross-references to plain Markdown backtick syntax."""
+    # :class:`~module.ClassName` → `ClassName`  (strip module prefix)
+    text = re.sub(r':class:`~[^`]*\.([^`]+)`', r'`\1`', text)
+    # :class:`ClassName` → `ClassName`
+    text = re.sub(r':class:`([^`]+)`', r'`\1`', text)
+    # :attr:`obj.attr` → `obj.attr`
+    text = re.sub(r':attr:`([^`]+)`', r'`\1`', text)
+    # :meth:`method` → `method()`
+    text = re.sub(r':meth:`([^`]+)`', r'`\1()`', text)
+    # :data:`CONST` → `CONST`
+    text = re.sub(r':data:`([^`]+)`', r'`\1`', text)
+    # :func:`fn` → `fn()`
+    text = re.sub(r':func:`([^`]+)`', r'`\1()`', text)
+    # :exc:`Error`
+    text = re.sub(r':exc:`([^`]+)`', r'`\1`', text)
+    # :mod:`module` → `module`
+    text = re.sub(r':mod:`([^`]+)`', r'`\1`', text)
+    # ``double_backtick`` → `single_backtick`
+    text = re.sub(r'``([^`]+)``', r'`\1`', text)
+    return text
+
+
 def _render_docstring(obj: griffe.Object) -> str:
+    """Render a docstring to clean Markdown using griffe's parsed sections."""
     if obj.docstring is None:
         return ""
-    text = obj.docstring.value.strip()
-    return (text + "\n\n") if text else ""
+
+    try:
+        sections = obj.docstring.parsed
+    except Exception:
+        sections = []
+
+    if not sections:
+        raw = obj.docstring.value.strip()
+        return (_clean_rst_inline(raw) + "\n\n") if raw else ""
+
+    parts: list[str] = []
+    for section in sections:
+        kind_name: str = getattr(section.kind, 'value', str(section.kind))
+        val = section.value
+
+        if kind_name == "text":
+            text = _clean_rst_inline(str(val).strip())
+            if text:
+                parts.append(text + "\n\n")
+
+        elif kind_name == "parameters":
+            rows = []
+            for param in (val or []):
+                name = f"`{param.name}`"
+                ann = str(param.annotation) if param.annotation else ""
+                type_cell = f"`{ann}`" if ann else ""
+                desc = _clean_rst_inline(param.description.strip()) if param.description else ""
+                rows.append(f"| {name} | {type_cell} | {desc} |")
+            if rows:
+                parts.append(
+                    "**Parameters:**\n\n"
+                    "| Name | Type | Description |\n|---|---|---|\n"
+                    + "\n".join(rows) + "\n\n"
+                )
+
+        elif kind_name == "returns":
+            for ret in (val or []):
+                ann = str(ret.annotation) if ret.annotation else ""
+                desc = _clean_rst_inline(ret.description.strip()) if ret.description else ""
+                type_prefix = f"`{ann}` — " if ann else ""
+                if desc or type_prefix:
+                    parts.append(f"**Returns:** {type_prefix}{desc}\n\n")
+
+        elif kind_name == "raises":
+            rows = []
+            for exc in (val or []):
+                exc_name = f"`{exc.annotation}`" if exc.annotation else ""
+                desc = _clean_rst_inline(exc.description.strip()) if exc.description else ""
+                rows.append(f"| {exc_name} | {desc} |")
+            if rows:
+                parts.append(
+                    "**Raises:**\n\n"
+                    "| Exception | Description |\n|---|---|\n"
+                    + "\n".join(rows) + "\n\n"
+                )
+
+        elif kind_name in ("examples", "example"):
+            example_text = str(val).strip() if val else ""
+            if example_text:
+                parts.append(f"**Example:**\n\n{example_text}\n\n")
+
+        # Other section kinds (notes, warnings, etc.) — render as plain text
+        else:
+            try:
+                raw = str(val).strip()
+                if raw:
+                    parts.append(_clean_rst_inline(raw) + "\n\n")
+            except Exception:
+                pass
+
+    return "".join(parts)
 
 
 def _render_object(pkg: griffe.Module, dotted: str, heading_level: int = 3) -> str:

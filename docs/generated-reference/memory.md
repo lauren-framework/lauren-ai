@@ -13,12 +13,8 @@ class ShortTermMemory(max_tokens: int = 40000)
 Sliding-window conversation buffer for a single agent run.
 
 Stores the ordered message history and automatically trims to fit within a
-token budget when requested.  Uses the heuristic ``chars / 4 ≈ tokens``
+token budget when requested.  Uses the heuristic `chars / 4 ≈ tokens`
 when no token-counting transport is available.
-
-:param max_tokens: Maximum number of tokens to retain in the window.
-    Defaults to 40 000.
-:type max_tokens: int
 
 :Example:
 
@@ -29,6 +25,13 @@ when no token-counting transport is available.
     memory.add_assistant(completion)
     msgs = memory.messages()  # trimmed to budget
 
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `max_tokens` | `int` | Maximum number of tokens to retain in the window.
+Defaults to 40 000. |
+
 #### `ShortTermMemory.add_user`
 
 ```python
@@ -37,8 +40,11 @@ def add_user(self, content: str | list[Any]) -> None
 
 Append a user message to the buffer.
 
-:param content: Plain text string or list of content blocks.
-:type content: str | list[Any]
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `content` | `str | list[Any]` | Plain text string or list of content blocks. |
 
 #### `ShortTermMemory.add_assistant`
 
@@ -48,12 +54,15 @@ def add_assistant(self, completion: Any) -> None
 
 Append an assistant completion to the buffer.
 
-Accepts a ``Completion`` dataclass (with ``.content`` and
-``.tool_calls`` attributes) or a plain dict.
+Accepts a `Completion` dataclass (with `.content` and
+`.tool_calls` attributes) or a plain dict.
 
-:param completion: A ``Completion`` object or ``{"role": "assistant",
-    "content": "..."}`` dict.
-:type completion: Any
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `completion` | `Any` | A `Completion` object or `{"role": "assistant",
+"content": "..."}` dict. |
 
 #### `ShortTermMemory.add_tool_result`
 
@@ -63,10 +72,13 @@ def add_tool_result(self, result: Any) -> None
 
 Append a tool result message to the buffer.
 
-Accepts a ``ToolResult`` dataclass or a plain dict.
+Accepts a `ToolResult` dataclass or a plain dict.
 
-:param result: A ``ToolResult`` object or dict.
-:type result: Any
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `result` | `Any` | A `ToolResult` object or dict. |
 
 #### `ShortTermMemory.messages`
 
@@ -77,10 +89,9 @@ def messages(self) -> list[Any]
 Return the current message list, trimmed to fit the token window.
 
 The trim is applied in-place on a copy; the internal buffer is NOT
-modified.  Call ``trim_to_fit()`` explicitly to mutate the buffer.
+modified.  Call `trim_to_fit()` explicitly to mutate the buffer.
 
-:return: Ordered list of messages within the token budget.
-:rtype: list[Message]
+**Returns:** `list[Message]` — Ordered list of messages within the token budget.
 
 #### `ShortTermMemory.trim_to_fit`
 
@@ -90,10 +101,13 @@ def trim_to_fit(self, max_tokens: int) -> None
 
 Drop oldest non-system messages until the token estimate fits.
 
-Unlike ``messages()`` this *mutates* the internal buffer.
+Unlike `messages()` this *mutates* the internal buffer.
 
-:param max_tokens: Target token budget.
-:type max_tokens: int
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `max_tokens` | `int` | Target token budget. |
 
 #### `ShortTermMemory.clear`
 
@@ -103,8 +117,7 @@ def clear(self) -> None
 
 Clear all messages from the buffer.
 
-:return: None
-:rtype: None
+**Returns:** `None` — None
 
 #### `ShortTermMemory.snapshot`
 
@@ -117,8 +130,7 @@ Return a deep copy of the current message list.
 The returned list is independent of the internal buffer; mutations to
 it do not affect the memory.
 
-:return: Immutable snapshot of the conversation history.
-:rtype: list[Message]
+**Returns:** `list[Message]` — Immutable snapshot of the conversation history.
 
 #### `ShortTermMemory.restore`
 
@@ -128,9 +140,12 @@ def restore(self, messages: list[Any]) -> None
 
 Restore the message buffer from a snapshot.
 
-:param messages: Ordered list of ``Message`` objects (typically
-    produced by ``snapshot()``).
-:type messages: list[Message]
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `messages` | `list[Any]` | Ordered list of `Message` objects (typically
+produced by `snapshot()`). |
 
 ## Conversation store
 
@@ -142,7 +157,7 @@ class ConversationStore
 
 Protocol for persisting and retrieving full conversation histories.
 
-Keyed by an arbitrary string ``conversation_id`` (typically a session or
+Keyed by an arbitrary string `conversation_id` (typically a session or
 user identifier).
 
 #### `ConversationStore.load`
@@ -153,11 +168,14 @@ def load(self, conversation_id: str) -> list[Any]
 
 Load the message history for *conversation_id*.
 
-:param conversation_id: Unique conversation / session identifier.
-:type conversation_id: str
-:return: Ordered list of ``Message`` objects (empty list when not
-    found).
-:rtype: list[Message]
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `conversation_id` | `str` | Unique conversation / session identifier. |
+
+**Returns:** `list[Message]` — Ordered list of `Message` objects (empty list when not
+found).
 
 #### `ConversationStore.save`
 
@@ -169,10 +187,12 @@ Persist the message history for *conversation_id*.
 
 Overwrites any existing history for that ID.
 
-:param conversation_id: Unique conversation / session identifier.
-:type conversation_id: str
-:param messages: Ordered list of ``Message`` objects to persist.
-:type messages: list[Message]
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `conversation_id` | `str` | Unique conversation / session identifier. |
+| `messages` | `list[Any]` | Ordered list of `Message` objects to persist. |
 
 #### `ConversationStore.delete`
 
@@ -182,8 +202,11 @@ def delete(self, conversation_id: str) -> None
 
 Delete the history for *conversation_id*.
 
-:param conversation_id: Unique conversation / session identifier.
-:type conversation_id: str
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `conversation_id` | `str` | Unique conversation / session identifier. |
 
 ### `InMemoryConversationStore`
 
@@ -193,9 +216,9 @@ class InMemoryConversationStore()
 
 In-memory store for full conversation histories.
 
-Implements the ``ConversationStore`` protocol.  Each conversation is keyed
+Implements the `ConversationStore` protocol.  Each conversation is keyed
 by an arbitrary string identifier (typically a user ID or session UUID).
-Deep copies are used on both ``load`` and ``save`` so that the caller
+Deep copies are used on both `load` and `save` so that the caller
 cannot inadvertently mutate stored data.
 
 :Example:
@@ -216,11 +239,14 @@ Load the message history for *conversation_id*.
 
 Returns an empty list when the conversation does not exist.
 
-:param conversation_id: Unique conversation identifier.
-:type conversation_id: str
-:return: A deep copy of the stored message list (empty list when not
-    found).
-:rtype: list[Message]
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `conversation_id` | `str` | Unique conversation identifier. |
+
+**Returns:** `list[Message]` — A deep copy of the stored message list (empty list when not
+found).
 
 #### `InMemoryConversationStore.save`
 
@@ -234,10 +260,12 @@ Overwrites any existing history for that identifier.  A deep copy of
 *messages* is stored to prevent the caller from mutating the stored
 data.
 
-:param conversation_id: Unique conversation identifier.
-:type conversation_id: str
-:param messages: Ordered list of ``Message`` objects to persist.
-:type messages: list[Message]
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `conversation_id` | `str` | Unique conversation identifier. |
+| `messages` | `list[Any]` | Ordered list of `Message` objects to persist. |
 
 #### `InMemoryConversationStore.delete`
 
@@ -249,8 +277,11 @@ Delete the history for *conversation_id*.
 
 Silently does nothing when the conversation does not exist.
 
-:param conversation_id: Unique conversation identifier.
-:type conversation_id: str
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `conversation_id` | `str` | Unique conversation identifier. |
 
 #### `InMemoryConversationStore.list_conversations`
 
@@ -260,8 +291,7 @@ def list_conversations(self) -> list[str]
 
 Return a sorted list of all stored conversation identifiers.
 
-:return: Sorted list of conversation IDs.
-:rtype: list[str]
+**Returns:** `list[str]` — Sorted list of conversation IDs.
 
 #### `InMemoryConversationStore.clear`
 
@@ -271,8 +301,7 @@ def clear(self) -> None
 
 Remove all stored conversation histories.
 
-:return: None
-:rtype: None
+**Returns:** `None` — None
 
 ## Vector store
 
@@ -284,7 +313,7 @@ class InMemoryVectorStore()
 
 In-memory vector store using TF-IDF cosine similarity.
 
-Implements the ``MemoryStore`` protocol.  Suitable for development and
+Implements the `MemoryStore` protocol.  Suitable for development and
 testing; no external dependencies required.
 
 :Example:
@@ -303,20 +332,20 @@ def upsert(self, content: str, id: str | None = None, metadata: dict[str, Any] |
 
 Insert or update a document.
 
-:param content: The text content to store.
-:type content: str
-:param id: Optional stable identifier.  A UUID4 is generated when
-    ``None``.
-:type id: str | None
-:param metadata: Optional key/value metadata dict.
-:type metadata: dict[str, Any] | None
-:param embedding: Pre-computed embedding vector as a list of floats.
-    When provided it is used directly (after L2-normalisation); the
-    TF-IDF computation is skipped.  Must be dense and compatible with
-    the cosine-similarity computation.
-:type embedding: list[float] | None
-:return: The document's identifier.
-:rtype: str
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `content` | `str` | The text content to store. |
+| `id` | `str | None` | Optional stable identifier.  A UUID4 is generated when
+`None`. |
+| `metadata` | `dict[str, Any] | None` | Optional key/value metadata dict. |
+| `embedding` | `list[float] | None` | Pre-computed embedding vector as a list of floats.
+When provided it is used directly (after L2-normalisation); the
+TF-IDF computation is skipped.  Must be dense and compatible with
+the cosine-similarity computation. |
+
+**Returns:** `str` — The document's identifier.
 
 #### `InMemoryVectorStore.search`
 
@@ -326,15 +355,16 @@ def search(self, query: str, k: int = 5, filter: dict[str, Any] | None = None) -
 
 Search for documents semantically similar to *query*.
 
-:param query: Natural-language query string.
-:type query: str
-:param k: Maximum number of results to return.
-:type k: int
-:param filter: Optional metadata filter.  Only documents whose
-    metadata contains **all** specified key/value pairs are returned.
-:type filter: dict[str, Any] | None
-:return: Up to *k* results ordered by descending cosine similarity.
-:rtype: list[MemoryResult]
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `query` | `str` | Natural-language query string. |
+| `k` | `int` | Maximum number of results to return. |
+| `filter` | `dict[str, Any] | None` | Optional metadata filter.  Only documents whose
+metadata contains **all** specified key/value pairs are returned. |
+
+**Returns:** `list[MemoryResult]` — Up to *k* results ordered by descending cosine similarity.
 
 #### `InMemoryVectorStore.get`
 
@@ -344,10 +374,13 @@ def get(self, id: str) -> MemoryResult | None
 
 Retrieve a document by its identifier.
 
-:param id: Document identifier.
-:type id: str
-:return: The ``MemoryResult``, or ``None`` when not found.
-:rtype: MemoryResult | None
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | `str` | Document identifier. |
+
+**Returns:** `MemoryResult | None` — The `MemoryResult`, or `None` when not found.
 
 #### `InMemoryVectorStore.delete`
 
@@ -357,8 +390,11 @@ def delete(self, ids: list[str]) -> None
 
 Delete documents by their identifiers.
 
-:param ids: List of document identifiers to remove.
-:type ids: list[str]
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `ids` | `list[str]` | List of document identifiers to remove. |
 
 #### `InMemoryVectorStore.clear`
 
@@ -368,8 +404,7 @@ def clear(self) -> None
 
 Remove all documents from the store.
 
-:return: None
-:rtype: None
+**Returns:** `None` — None
 
 ## User memory
 
@@ -408,9 +443,13 @@ before each LLM call.
 When extract=True, new facts are extracted from each conversation turn
 and stored in the UserMemoryStore.
 
-:param store: DI token name for UserMemoryStore (None = auto-inject).
-:param extract: Extract new facts after each turn.
-:param inject: Inject relevant memories before each turn.
-:param top_k: Number of memories to inject.
-:param extraction_model: Model for fact extraction (defaults to agent model).
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `store` | `str | None` | DI token name for UserMemoryStore (None = auto-inject). |
+| `extract` | `bool` | Extract new facts after each turn. |
+| `inject` | `bool` | Inject relevant memories before each turn. |
+| `top_k` | `int` | Number of memories to inject. |
+| `extraction_model` | `str | None` | Model for fact extraction (defaults to agent model). |
 
