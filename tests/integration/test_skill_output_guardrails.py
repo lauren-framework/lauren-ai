@@ -171,6 +171,8 @@ class TestGuardrailDecisionFields:
         assert d.violation == "Bad content"
 
     def test_modify_decision(self):
-        d = GuardrailDecision(action="modify", modified_content="Safe content", guardrail_name="Test")
+        d = GuardrailDecision(
+            action="modify", modified_content="Safe content", guardrail_name="Test"
+        )
         assert d.action == "modify"
         assert d.modified_content == "Safe content"

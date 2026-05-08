@@ -192,7 +192,7 @@ def _build_runner_for_agent(
 
     tools: dict = {}
     if meta is not None:
-        for tool_ref in (meta.tool_classes or []):
+        for tool_ref in meta.tool_classes or []:
             if tool_ref is None:
                 continue
             if getattr(tool_ref, TOOL_META, None) is not None:

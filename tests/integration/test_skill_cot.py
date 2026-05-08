@@ -26,8 +26,8 @@ def add_cot(prompt: str) -> str:
 
 def extract_cot_answer(response: str) -> tuple[str, str]:
     """Extract <reasoning> and <answer> blocks from a structured CoT response."""
-    reasoning_match = re.search(r'<reasoning>(.*?)</reasoning>', response, re.DOTALL)
-    answer_match = re.search(r'<answer>(.*?)</answer>', response, re.DOTALL)
+    reasoning_match = re.search(r"<reasoning>(.*?)</reasoning>", response, re.DOTALL)
+    answer_match = re.search(r"<answer>(.*?)</answer>", response, re.DOTALL)
     reasoning = reasoning_match.group(1).strip() if reasoning_match else ""
     answer = answer_match.group(1).strip() if answer_match else response.strip()
     return reasoning, answer

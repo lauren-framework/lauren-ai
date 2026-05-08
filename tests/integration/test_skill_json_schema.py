@@ -80,7 +80,9 @@ def _c(content: str, *, id: str = "c1") -> Completion:
 # ---------------------------------------------------------------------------
 
 
-@agent(model="mock-model", system='Always return JSON: {"name": str, "price": float, "in_stock": bool}')
+@agent(
+    model="mock-model", system='Always return JSON: {"name": str, "price": float, "in_stock": bool}'
+)
 class ProductAgent: ...
 
 

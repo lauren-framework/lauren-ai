@@ -24,8 +24,9 @@ from lauren_ai.testing import TestClient
 # ---------------------------------------------------------------------------
 
 
-def _c(text, *, n=1, stop="end_turn", model="claude-sonnet-4-6",
-        input_tokens=100, output_tokens=50):
+def _c(
+    text, *, n=1, stop="end_turn", model="claude-sonnet-4-6", input_tokens=100, output_tokens=50
+):
     return Completion(
         id=f"c{n}",
         model=model,
@@ -54,15 +55,27 @@ class TestCostTrackerManual:
     @pytest.mark.asyncio
     async def test_multiple_calls_accumulate(self):
         tracker = CostTracker(pricing=default_pricing_table())
-        tracker.record_usage("claude-sonnet-4-6", TokenUsage(input_tokens=500, output_tokens=200), conversation_id="conv-2")
-        tracker.record_usage("claude-sonnet-4-6", TokenUsage(input_tokens=300, output_tokens=100), conversation_id="conv-2")
+        tracker.record_usage(
+            "claude-sonnet-4-6",
+            TokenUsage(input_tokens=500, output_tokens=200),
+            conversation_id="conv-2",
+        )
+        tracker.record_usage(
+            "claude-sonnet-4-6",
+            TokenUsage(input_tokens=300, output_tokens=100),
+            conversation_id="conv-2",
+        )
         report = await tracker.report(conversation_id="conv-2")
         assert report.total_estimate.total_usd > 0
 
     @pytest.mark.asyncio
     async def test_unknown_model_returns_zero_cost(self):
         tracker = CostTracker(pricing=default_pricing_table())
-        tracker.record_usage("unknown-model-xyz", TokenUsage(input_tokens=1000, output_tokens=500), conversation_id="conv-3")
+        tracker.record_usage(
+            "unknown-model-xyz",
+            TokenUsage(input_tokens=1000, output_tokens=500),
+            conversation_id="conv-3",
+        )
         report = await tracker.report(conversation_id="conv-3")
         assert report.total_estimate.total_usd == 0.0
 

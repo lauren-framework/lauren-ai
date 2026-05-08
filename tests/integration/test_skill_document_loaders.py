@@ -75,9 +75,7 @@ class StringLoader(DocumentLoader):
 
 
 def _write_temp(content: str, suffix: str) -> str:
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=suffix, encoding="utf-8", delete=False
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=suffix, encoding="utf-8", delete=False) as f:
         f.write(content)
         return f.name
 

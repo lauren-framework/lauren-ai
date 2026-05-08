@@ -23,13 +23,20 @@ from __future__ import annotations
 
 __all__ = [
     "TOOL_META",
+    "TOOL_METADATA",
     "ToolContext",
     "ToolMeta",
     "ToolResult",
     "ToolSchema",
     "get_tool_context_from_func_args",
+    "set_metadata",
     "tool",
 ]
+
+# Sentinel attribute used by @set_metadata to attach static key-value pairs to
+# @tool()-decorated functions and classes — same pattern as lauren.set_metadata
+# on route handlers.
+TOOL_METADATA = "__lauren_ai_tool_metadata__"
 
 import inspect
 import json
@@ -69,8 +76,9 @@ class ToolSchema(TypedDict, total=False):
 class ToolContext:
     """Context injected into a tool function when a ``ctx: ToolContext`` param is declared.
 
-    Carries the owning agent context, the current turn number, and a mutable
-    state bag for per-call data.
+    Carries the owning agent context, the current turn number, a mutable
+    state bag for per-call data, and the tool's static metadata (populated
+    from ``@set_metadata`` decorators applied to the tool at definition time).
 
     :param agent_context: The ``AgentContext`` of the running agent (typed as
         ``Any`` to avoid a circular import; at runtime it is an ``AgentContext``
@@ -84,6 +92,10 @@ class ToolContext:
     :param request: The originating HTTP ``Request``, if the agent was invoked
         from a web handler.  ``None`` otherwise.
     :type request: Any | None
+    :param metadata: Static metadata attached to this tool via
+        ``@set_metadata(key, value)`` at decoration time.  Readable via
+        :meth:`get_metadata`.
+    :type metadata: dict[str, Any]
     :param state: Mutable per-call state bag for tool-local storage.
     :type state: dict[str, Any]
     """
@@ -93,21 +105,29 @@ class ToolContext:
     turn: int
     request: Any | None = None
     execution_context: Any | None = None  # lauren ExecutionContext, or None
+    metadata: dict[str, Any] = field(default_factory=dict)
     state: dict[str, Any] = field(default_factory=dict)
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
-        """Get metadata from the agent context.
+        """Return metadata by *key*, checking tool-level then agent-level.
 
-        Delegates to ``agent_context.get_metadata(key, default)`` when the
-        agent context supports that method, otherwise returns *default*.
+        Lookup order:
+        1. **Tool-level static metadata** — key-value pairs attached at
+           decoration time via ``@set_metadata(key, value)`` on the tool.
+        2. **Agent-level runtime metadata** — the ``metadata`` dict supplied
+           to :meth:`~lauren_ai.AgentRunnerBase.run` (e.g.
+           ``runner.run(agent, prompt, metadata={"scope": "admin"})``),
+           delegated through ``agent_context.get_metadata``.
 
         :param key: Metadata key to look up.
         :type key: str
-        :param default: Value to return when key is absent.
+        :param default: Value returned when the key is absent in both layers.
         :type default: Any
         :return: Metadata value or *default*.
         :rtype: Any
         """
+        if key in self.metadata:
+            return self.metadata[key]
         if self.agent_context is not None and hasattr(self.agent_context, "get_metadata"):
             return self.agent_context.get_metadata(key, default)
         return default
@@ -170,6 +190,52 @@ def get_tool_context_from_func_args(*args: Any, **kwargs: Any) -> "ToolContext |
         if isinstance(val, ToolContext):
             return val
     return None
+
+
+# ---------------------------------------------------------------------------
+# set_metadata — decorator mirroring lauren.set_metadata for route handlers
+# ---------------------------------------------------------------------------
+
+
+def set_metadata(key: str, value: Any) -> "Callable[[_T], _T]":
+    """Attach static metadata to a ``@tool()`` function or class.
+
+    Mirrors ``lauren.set_metadata`` for route handlers: the key-value pair is
+    stored at decoration time and is readable via
+    :meth:`ToolContext.get_metadata` inside the tool body.
+
+    Multiple ``@set_metadata`` decorators on the same tool stack cleanly — each
+    call merges into a single dict stored on the
+    ``__lauren_ai_tool_metadata__`` attribute.
+
+    Example::
+
+        @set_metadata("required_scope", "admin")
+        @tool()
+        async def delete_record(record_id: str, ctx: ToolContext | None = None) -> dict:
+            \"\"\"Delete a record. Args: record_id: Record ID.\"\"\"
+            # tool-level: which scope this tool requires
+            required = ctx.get_metadata("required_scope")   # → "admin"
+            # agent-level: what scope the caller has (from runner.run(metadata={…}))
+            granted  = ctx.get_metadata("caller_scope", "read")
+            if granted != required:
+                return {"error": f"scope_required:{required}"}
+            return {"deleted": record_id}
+
+    :param key: Metadata key.
+    :type key: str
+    :param value: Metadata value.
+    :type value: Any
+    :returns: A class/function decorator that attaches the key-value pair.
+    """
+
+    def decorator(target: "_T") -> "_T":
+        existing: dict[str, Any] = dict(getattr(target, TOOL_METADATA, {}))
+        existing[key] = value
+        setattr(target, TOOL_METADATA, existing)
+        return target  # type: ignore[return-value]
+
+    return decorator  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------

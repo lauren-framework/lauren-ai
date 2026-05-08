@@ -99,8 +99,12 @@ class TelemetryAgent: ...
 
 def _completion(content="OK", *, n=1, stop_reason="end_turn"):
     return Completion(
-        id=f"c{n}", model="mock-model", content=content, tool_calls=[],
-        stop_reason=stop_reason, usage=TokenUsage(input_tokens=10, output_tokens=5)
+        id=f"c{n}",
+        model="mock-model",
+        content=content,
+        tool_calls=[],
+        stop_reason=stop_reason,
+        usage=TokenUsage(input_tokens=10, output_tokens=5),
     )
 
 
@@ -142,10 +146,12 @@ class TestSignalBus:
         bus = SignalBus()
 
         @bus.on(ModelCallComplete)
-        async def h1(e: ModelCallComplete) -> None: pass
+        async def h1(e: ModelCallComplete) -> None:
+            pass
 
         @bus.on(ModelCallComplete)
-        async def h2(e: ModelCallComplete) -> None: pass
+        async def h2(e: ModelCallComplete) -> None:
+            pass
 
         assert bus.handler_count(ModelCallComplete) == 2
 
@@ -168,12 +174,14 @@ class TestAgentTelemetryEvents:
         bus = SignalBus()
         telemetry = AgentTelemetry(bus)
 
-        await bus.emit(ModelCallComplete(
-            model="mock-model",
-            usage=TokenUsage(input_tokens=10, output_tokens=5),
-            cost_usd=0.001,
-            duration_ms=100.0,
-        ))
+        await bus.emit(
+            ModelCallComplete(
+                model="mock-model",
+                usage=TokenUsage(input_tokens=10, output_tokens=5),
+                cost_usd=0.001,
+                duration_ms=100.0,
+            )
+        )
 
         summary = telemetry.get_summary()
         assert summary["total_llm_calls"] == 1
@@ -182,16 +190,20 @@ class TestAgentTelemetryEvents:
         bus = SignalBus()
         telemetry = AgentTelemetry(bus)
 
-        await bus.emit(ModelCallComplete(
-            model="mock-model",
-            usage=TokenUsage(input_tokens=100, output_tokens=50),
-            cost_usd=0.0,
-        ))
-        await bus.emit(ModelCallComplete(
-            model="mock-model",
-            usage=TokenUsage(input_tokens=200, output_tokens=100),
-            cost_usd=0.0,
-        ))
+        await bus.emit(
+            ModelCallComplete(
+                model="mock-model",
+                usage=TokenUsage(input_tokens=100, output_tokens=50),
+                cost_usd=0.0,
+            )
+        )
+        await bus.emit(
+            ModelCallComplete(
+                model="mock-model",
+                usage=TokenUsage(input_tokens=200, output_tokens=100),
+                cost_usd=0.0,
+            )
+        )
 
         summary = telemetry.get_summary()
         model_data = summary["per_model"]["mock-model"]
@@ -202,14 +214,16 @@ class TestAgentTelemetryEvents:
         bus = SignalBus()
         telemetry = AgentTelemetry(bus)
 
-        await bus.emit(AgentRunComplete(
-            agent_id="run1",
-            agent_name="TestAgent",
-            turns=1,
-            total_usage=TokenUsage(input_tokens=10, output_tokens=5),
-            total_cost_usd=0.001,
-            stop_reason="end_turn",
-        ))
+        await bus.emit(
+            AgentRunComplete(
+                agent_id="run1",
+                agent_name="TestAgent",
+                turns=1,
+                total_usage=TokenUsage(input_tokens=10, output_tokens=5),
+                total_cost_usd=0.001,
+                stop_reason="end_turn",
+            )
+        )
 
         summary = telemetry.get_summary()
         assert summary["total_agent_runs"] == 1
@@ -219,14 +233,16 @@ class TestAgentTelemetryEvents:
         telemetry = AgentTelemetry(bus)
 
         for i in range(3):
-            await bus.emit(AgentRunComplete(
-                agent_id=f"run{i}",
-                agent_name="TestAgent",
-                turns=1,
-                total_usage=TokenUsage(input_tokens=10, output_tokens=5),
-                total_cost_usd=0.001,
-                stop_reason="end_turn",
-            ))
+            await bus.emit(
+                AgentRunComplete(
+                    agent_id=f"run{i}",
+                    agent_name="TestAgent",
+                    turns=1,
+                    total_usage=TokenUsage(input_tokens=10, output_tokens=5),
+                    total_cost_usd=0.001,
+                    stop_reason="end_turn",
+                )
+            )
 
         summary = telemetry.get_summary()
         assert summary["total_agent_runs"] == 3
@@ -235,16 +251,20 @@ class TestAgentTelemetryEvents:
         bus = SignalBus()
         telemetry = AgentTelemetry(bus)
 
-        await bus.emit(ModelCallComplete(
-            model="mock-model",
-            usage=TokenUsage(input_tokens=10, output_tokens=5),
-            cost_usd=0.005,
-        ))
-        await bus.emit(ModelCallComplete(
-            model="mock-model",
-            usage=TokenUsage(input_tokens=10, output_tokens=5),
-            cost_usd=0.003,
-        ))
+        await bus.emit(
+            ModelCallComplete(
+                model="mock-model",
+                usage=TokenUsage(input_tokens=10, output_tokens=5),
+                cost_usd=0.005,
+            )
+        )
+        await bus.emit(
+            ModelCallComplete(
+                model="mock-model",
+                usage=TokenUsage(input_tokens=10, output_tokens=5),
+                cost_usd=0.003,
+            )
+        )
 
         summary = telemetry.get_summary()
         assert abs(summary["total_cost_usd"] - 0.008) < 1e-9
@@ -253,16 +273,20 @@ class TestAgentTelemetryEvents:
         bus = SignalBus()
         telemetry = AgentTelemetry(bus)
 
-        await bus.emit(ModelCallComplete(
-            model="model-a",
-            usage=TokenUsage(input_tokens=10, output_tokens=5),
-            cost_usd=0.001,
-        ))
-        await bus.emit(ModelCallComplete(
-            model="model-b",
-            usage=TokenUsage(input_tokens=20, output_tokens=10),
-            cost_usd=0.002,
-        ))
+        await bus.emit(
+            ModelCallComplete(
+                model="model-a",
+                usage=TokenUsage(input_tokens=10, output_tokens=5),
+                cost_usd=0.001,
+            )
+        )
+        await bus.emit(
+            ModelCallComplete(
+                model="model-b",
+                usage=TokenUsage(input_tokens=20, output_tokens=10),
+                cost_usd=0.002,
+            )
+        )
 
         summary = telemetry.get_summary()
         assert "model-a" in summary["per_model"]

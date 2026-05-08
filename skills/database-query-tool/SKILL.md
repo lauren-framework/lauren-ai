@@ -1,6 +1,6 @@
 ---
 name: database-query-tool
-description: SQL query tool with read/write guard using SQLite in-memory (or any sqlite3-compatible connection). Use when an agent needs to query or mutate a relational database, with configurable read-only mode to prevent accidental writes.
+description: SQL query tool with read/write guard using SQLite in-memory (or any sqlite3-compatible connection). Use when an agent needs to query or mutate a relational database, with configurable read-only mode to prevent accidental writes. Supports @set_metadata for mode annotation.
 ---
 
 > Use `codemap find "SQLQueryTool"` after adding the pattern to your project.
@@ -10,19 +10,33 @@ description: SQL query tool with read/write guard using SQLite in-memory (or any
 A `@tool()` class wrapping a `sqlite3` connection. Blocks `INSERT`, `UPDATE`,
 `DELETE`, and DDL statements when `read_only=True`.
 
+## Critical rule — name override for acronym classes
+
+The `@tool()` snake_case converter inserts `_` before every uppercase letter,
+so `SQLQueryTool` would become `s_q_l_query_tool`. Always override the name
+explicitly when the class name contains consecutive uppercase letters:
+
+```python
+@set_metadata("mode", "read")
+@tool(name="sql_query_tool")
+class SQLQueryTool:
+    ...
+```
+
 ## Pattern
 
 ```python
 import re
 import sqlite3
-from lauren_ai._tools import tool, ToolContext
+from lauren_ai._tools import tool, ToolContext, set_metadata
 
 WRITE_PATTERNS = re.compile(
     r'\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE)\b',
     re.IGNORECASE,
 )
 
-@tool()
+@set_metadata("mode", "read")
+@tool(name="sql_query_tool")
 class SQLQueryTool:
     """Execute a SQL query against the database.
 
@@ -61,6 +75,69 @@ class SQLQueryTool:
             return {"error": str(e)}
 ```
 
+## AgentRunner test pattern
+
+When passing a tool **instance** (pre-configured with connection/read_only),
+pass the instance to `@use_tools`. The runner stores and calls it correctly.
+
+```python
+import json
+from lauren_ai._agents import AgentContext, agent, use_tools
+from lauren_ai._tools import ToolResult
+from lauren_ai._transport import Completion, TokenUsage
+from lauren_ai.testing import TestClient
+
+
+class _Capture:
+    def __init__(self):
+        self.captured: list[ToolResult] = []
+
+    async def on_tool_result(self, result: ToolResult, ctx: AgentContext) -> ToolResult | None:
+        self.captured.append(result)
+        return None
+
+
+_ro_db = SQLQueryTool(read_only=True)   # shared read-only instance
+
+
+def _c(text):
+    return Completion(id="c1", model="mock", content=text, tool_calls=[],
+                      stop_reason="end_turn", usage=TokenUsage(10, 5))
+
+
+@agent(model=None, system="DB read agent")
+@use_tools(_ro_db)
+class DBReadAgent(_Capture):
+    def __init__(self):
+        _Capture.__init__(self)
+
+
+def test_select_all_returns_rows():
+    agent_inst = DBReadAgent()
+    client = TestClient(agent_inst)
+    client.mock.queue_tool_use(
+        "sql_query_tool",
+        {"query": "SELECT * FROM items ORDER BY id", "read_only": True},
+    )
+    client.mock.queue_response(_c("Rows retrieved."))
+    client.run("Select all items")
+    data = json.loads(agent_inst.captured[0].content)
+    assert data["count"] == 2
+
+
+def test_insert_blocked_in_read_only_mode():
+    agent_inst = DBReadAgent()
+    client = TestClient(agent_inst)
+    client.mock.queue_tool_use(
+        "sql_query_tool",
+        {"query": "INSERT INTO items VALUES (3, 'X', 1.0)", "read_only": True},
+    )
+    client.mock.queue_response(_c("Blocked."))
+    client.run("Insert item")
+    data = json.loads(agent_inst.captured[0].content)
+    assert "error" in data
+```
+
 ## Usage with an agent
 
 ```python
@@ -69,40 +146,18 @@ from lauren_ai import agent, use_tools
 db_tool = SQLQueryTool(read_only=True)  # instance pre-configured
 
 @agent(model="claude-sonnet-4-6", system="You query our product database.")
-@use_tools(SQLQueryTool)
+@use_tools(db_tool)
 class DBAgent: ...
 ```
 
-For a write-enabled tool, pass `read_only=False` and pass the pre-built
-instance to the tool map when constructing the runner, or let DI wire it.
-
-## Extending to other databases
-
-Replace `sqlite3` with any DBAPI-2 driver (psycopg2, asyncpg adapter, etc.):
-
-```python
-@tool()
-class AsyncSQLQueryTool:
-    """Execute a SQL query against a PostgreSQL database.
-
-    Args:
-        query: The SQL query to execute.
-    """
-
-    def __init__(self, pool):  # asyncpg pool injected via DI
-        self._pool = pool
-
-    async def run(self, ctx: ToolContext, query: str) -> dict:
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(query)
-            return {"rows": [dict(r) for r in rows], "count": len(rows)}
-```
+For a write-enabled tool, pass `read_only=False` to the constructor.
 
 ## Notes
 
-- Always validate and sanitise queries before passing them to the tool — LLM
-  output is untrusted.
+- Always use `@tool(name="sql_query_tool")` to override the auto-generated name
+  when the class has consecutive uppercase letters in its name.
+- `@set_metadata("mode", "read")` documents the tool's operation mode and is
+  readable via `ctx.get_metadata("mode")` inside the tool.
 - The `read_only` flag can be set at the instance level (permanent) or
-  per-call (temporary override). Both flags are OR-ed: either one being
-  `True` blocks writes.
+  per-call (temporary override). Both flags are OR-ed.
 - For production use, add parameterised queries to prevent SQL injection.

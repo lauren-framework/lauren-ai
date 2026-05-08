@@ -21,7 +21,7 @@ breaking schema generation.
 ## Overview
 
 The `FileSystemTool` is a class-form `@tool()` that reads, writes, and lists
-files within a configurable base directory.  It resolves all paths via
+files within a configurable base directory. It resolves all paths via
 `Path.resolve()` and rejects any path that resolves outside the base — blocking
 `../` traversal attacks.
 
@@ -77,17 +77,73 @@ class FileSystemTool:
 
 ---
 
-## Attaching to an agent
+## AgentRunner test pattern
+
+Use `tempfile.TemporaryDirectory` for isolated test directories. Create a fresh
+tool instance and agent factory per test to avoid shared state.
 
 ```python
-# agents.py — from __future__ import annotations is safe here
-from __future__ import annotations
-from lauren_ai import agent, use_tools
-from .tools.filesystem_tool import FileSystemTool
+import json
+import tempfile
+from lauren_ai._agents import AgentContext, agent, use_tools
+from lauren_ai._tools import ToolResult
+from lauren_ai._transport import Completion, TokenUsage
+from lauren_ai.testing import TestClient
 
-@agent(model="claude-opus-4-6", system="You are a file management assistant.")
-@use_tools(FileSystemTool)
-class FileAgent: ...
+
+class _Capture:
+    def __init__(self):
+        self.captured: list[ToolResult] = []
+
+    async def on_tool_result(self, result: ToolResult, ctx: AgentContext) -> ToolResult | None:
+        self.captured.append(result)
+        return None
+
+
+def _make_agent(base_path: str):
+    fs_tool = FileSystemTool(base_path=base_path)
+
+    @agent(model=None, system="Filesystem agent")
+    @use_tools(fs_tool)
+    class FsTestAgent(_Capture):
+        def __init__(self):
+            _Capture.__init__(self)
+
+    return FsTestAgent()
+
+
+def _c(text):
+    return Completion(id="c1", model="mock", content=text, tool_calls=[],
+                      stop_reason="end_turn", usage=TokenUsage(10, 5))
+
+
+def test_write_and_read():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent_inst = _make_agent(tmpdir)
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use(
+            "file_system_tool",
+            {"operation": "write", "path": "test.txt", "content": "hello"},
+        )
+        client.mock.queue_response(_c("Done."))
+        client.run("Write test.txt")
+        out = json.loads(agent_inst.captured[0].content)
+        assert out["written"] == "test.txt"
+
+
+def test_path_traversal_blocked():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent_inst = _make_agent(tmpdir)
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use(
+            "file_system_tool",
+            {"operation": "read", "path": "../../etc/passwd"},
+        )
+        client.mock.queue_response(_c("Access denied."))
+        client.run("Try to read /etc/passwd")
+        out = json.loads(agent_inst.captured[0].content)
+        assert "error" in out
+        assert "traversal" in out["error"].lower() or "denied" in out["error"].lower()
 ```
 
 ---
@@ -102,25 +158,8 @@ class FileAgent: ...
 | `"/etc/passwd"` | Blocked — absolute path outside base |
 
 The safety check uses `str(target).startswith(str(self._base))` after both
-paths are fully resolved.  This is robust against symlink tricks on most
+paths are fully resolved. This is robust against symlink tricks on most
 platforms.
-
----
-
-## Testing
-
-Use `tempfile.mkdtemp()` as the `base_path` so each test gets an isolated
-temporary directory that is cleaned up automatically.
-
-```python
-import tempfile, pytest
-from .tools.filesystem_tool import FileSystemTool
-from lauren_ai._tools import ToolContext
-
-@pytest.fixture
-def tool_instance(tmp_path):
-    return FileSystemTool(base_path=str(tmp_path))
-```
 
 ---
 

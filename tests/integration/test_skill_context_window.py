@@ -35,7 +35,7 @@ def trim_messages(messages: list[dict], max_turns: int = 10) -> list[dict]:
     system = [m for m in messages if m.get("role") == "system"]
     turns = [m for m in messages if m.get("role") != "system"]
     if len(turns) > max_turns * 2:
-        turns = turns[-(max_turns * 2):]
+        turns = turns[-(max_turns * 2) :]
     return system + turns
 
 
@@ -60,8 +60,12 @@ def _build_messages(n_turns: int) -> list[dict]:
 
 def _completion(content="OK", *, n=1, stop_reason="end_turn"):
     return Completion(
-        id=f"c{n}", model="mock-model", content=content, tool_calls=[],
-        stop_reason=stop_reason, usage=TokenUsage(input_tokens=10, output_tokens=5)
+        id=f"c{n}",
+        model="mock-model",
+        content=content,
+        tool_calls=[],
+        stop_reason=stop_reason,
+        usage=TokenUsage(input_tokens=10, output_tokens=5),
     )
 
 

@@ -84,12 +84,16 @@ class TestStreamBasic:
 
     async def test_stream_empty_delta_chunks_harmless(self):
         client = TestClient(StreamAgent())
-        client.mock.queue_stream([
-            CompletionChunk(delta=""),
-            CompletionChunk(delta="real"),
-            CompletionChunk(delta=""),
-            CompletionChunk(stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=1)),
-        ])
+        client.mock.queue_stream(
+            [
+                CompletionChunk(delta=""),
+                CompletionChunk(delta="real"),
+                CompletionChunk(delta=""),
+                CompletionChunk(
+                    stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=1)
+                ),
+            ]
+        )
         accumulated = ""
         async for chunk in await client.run_stream_async("hi"):
             if chunk.delta:
@@ -151,7 +155,9 @@ class TestStreamAccumulation:
         words = [f"word{i}" for i in range(20)]
         chunks_list = [CompletionChunk(delta=w + " ") for w in words]
         chunks_list.append(
-            CompletionChunk(stop_reason="end_turn", usage=TokenUsage(input_tokens=10, output_tokens=20))
+            CompletionChunk(
+                stop_reason="end_turn", usage=TokenUsage(input_tokens=10, output_tokens=20)
+            )
         )
         client = TestClient(StreamAgent())
         client.mock.queue_stream(chunks_list)
@@ -164,11 +170,15 @@ class TestStreamAccumulation:
 
     async def test_stream_thinking_delta_yielded(self):
         client = TestClient(StreamAgent())
-        client.mock.queue_stream([
-            CompletionChunk(thinking_delta="Let me think..."),
-            CompletionChunk(delta="Answer"),
-            CompletionChunk(stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=5)),
-        ])
+        client.mock.queue_stream(
+            [
+                CompletionChunk(thinking_delta="Let me think..."),
+                CompletionChunk(delta="Answer"),
+                CompletionChunk(
+                    stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=5)
+                ),
+            ]
+        )
         thinking_deltas = []
         async for chunk in await client.run_stream_async("hi"):
             if chunk.thinking_delta:

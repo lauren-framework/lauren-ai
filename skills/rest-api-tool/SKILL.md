@@ -10,6 +10,16 @@ description: Invoke external REST APIs from inside an agent using httpx.AsyncCli
 An `httpx`-based `@tool()` class that supports all common HTTP methods and
 propagates authorization headers from the calling request context.
 
+## Critical rule — name override for acronym classes
+
+`RestAPITool` would auto-generate `rest_a_p_i_tool`. Override explicitly:
+
+```python
+@tool(name="rest_api_tool")
+class RestAPITool:
+    ...
+```
+
 ## Pattern
 
 ```python
@@ -17,7 +27,7 @@ from lauren_ai._tools import tool, ToolContext
 import httpx
 import json
 
-@tool()
+@tool(name="rest_api_tool")
 class RestAPITool:
     """Invoke a REST API endpoint.
 
@@ -66,29 +76,65 @@ class RestAPITool:
                 return {"error": str(e)}
 ```
 
-## Testing with mocked httpx
+## AgentRunner test pattern
 
-Use `unittest.mock.AsyncMock` to avoid real network calls:
+Use `unittest.mock.patch` to intercept `httpx.AsyncClient` within the tool
+call's context. Pass the tool instance to `@use_tools` and use `_Capture` to
+inspect results.
 
 ```python
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
+from lauren_ai._agents import AgentContext, agent, use_tools
+from lauren_ai._tools import ToolResult
+from lauren_ai._transport import Completion, TokenUsage
+from lauren_ai.testing import TestClient
 
-async def test_rest_tool_get():
-    tool_instance = RestAPITool(base_url="https://api.example.com")
-    ctx = make_tool_context()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.text = '{"message": "ok"}'
+class _Capture:
+    def __init__(self):
+        self.captured: list[ToolResult] = []
 
-    mock_client = AsyncMock()
-    mock_client.__aenter__.return_value.get = AsyncMock(return_value=mock_response)
+    async def on_tool_result(self, result: ToolResult, ctx: AgentContext) -> ToolResult | None:
+        self.captured.append(result)
+        return None
+
+
+def _c(text):
+    return Completion(id="c1", model="mock", content=text, tool_calls=[],
+                      stop_reason="end_turn", usage=TokenUsage(10, 5))
+
+
+def _make_agent(tool_instance):
+    @agent(model=None, system="REST API test agent")
+    @use_tools(tool_instance)
+    class RestAPITestAgent(_Capture):
+        def __init__(self):
+            _Capture.__init__(self)
+    return RestAPITestAgent()
+
+
+def test_get_request_is_made():
+    tool_inst = RestAPITool()
+    agent_inst = _make_agent(tool_inst)
+    client = TestClient(agent_inst)
+
+    mock_resp = MagicMock(status_code=200, text='{"ok": true}')
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.get = AsyncMock(return_value=mock_resp)
 
     with patch("httpx.AsyncClient", return_value=mock_client):
-        result = await tool_instance.run(ctx, "/users", method="GET")
+        client.mock.queue_tool_use(
+            "rest_api_tool",
+            {"url": "https://api.example.com/data", "method": "GET"},
+        )
+        client.mock.queue_response(_c("Data retrieved."))
+        client.run("Fetch data")
 
-    assert result["status"] == 200
-    assert "ok" in result["body"]
+    data = json.loads(agent_inst.captured[0].content)
+    assert data["status"] == 200
 ```
 
 ## Auth propagation chain
@@ -110,7 +156,8 @@ HTTP request ─► Lauren controller
 
 - `httpx.AsyncClient` is created per-call. For high-throughput use,
   inject a shared client via the constructor (DI-friendly).
-- The `body` and `headers` parameters are JSON strings so they can be
-  safely passed through the LLM tool-call JSON encoding.
-- Cap `response.text[:2000]` to avoid flooding the model context with
-  large responses — adjust the limit or add a summarisation step.
+- `body` and `headers` are JSON strings so they can be passed through
+  the LLM tool-call JSON encoding.
+- Cap `response.text[:2000]` to avoid flooding the model context.
+- Always override the tool name with `@tool(name="rest_api_tool")` since
+  the auto-generated name for `RestAPITool` would be `rest_a_p_i_tool`.

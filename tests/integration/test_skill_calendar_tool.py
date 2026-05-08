@@ -13,17 +13,19 @@ Tests cover:
 NOTE: No `from __future__ import annotations` — @tool() needs live annotations.
 """
 
-import asyncio
+import json
 
 from dataclasses import dataclass, field
-from unittest.mock import MagicMock
 from uuid import uuid4
 
-from lauren_ai._tools import tool, ToolContext
+from lauren_ai._agents import AgentContext, agent, use_tools
+from lauren_ai._tools import ToolContext, ToolResult, set_metadata, tool
+from lauren_ai._transport import Completion, TokenUsage
+from lauren_ai.testing import TestClient
 
 
 # ---------------------------------------------------------------------------
-# Tool definition (module level — no future annotations)
+# Tool definition
 # ---------------------------------------------------------------------------
 
 
@@ -37,6 +39,7 @@ class CalendarEvent:
     description: str = ""
 
 
+@set_metadata("tool_type", "scheduling")
 @tool()
 class CalendarTool:
     """Manage calendar events.
@@ -94,153 +97,311 @@ class CalendarTool:
 
 
 # ---------------------------------------------------------------------------
-# MockToolContext helper
+# Helpers
 # ---------------------------------------------------------------------------
 
 
-def _tool_ctx(state=None):
-    ctx = MagicMock()
-    ctx.execution_context = None
-    ctx.agent_context = MagicMock()
-    ctx.agent_context.metadata = {}
-    ctx.get_metadata = lambda k, d=None: ctx.agent_context.metadata.get(k, d)
-    ctx.state = state if state is not None else {}
-    ctx.tool_use_id = "t1"
-    ctx.turn = 0
-    return ctx
+def _c(text, *, n=1, stop="end_turn"):
+    return Completion(
+        id=f"c{n}",
+        model="mock",
+        content=text,
+        tool_calls=[],
+        stop_reason=stop,
+        usage=TokenUsage(10, 5),
+    )
+
+
+class _Capture:
+    def __init__(self):
+        self.captured: list[ToolResult] = []
+
+    async def on_tool_result(self, result: ToolResult, ctx: AgentContext) -> ToolResult | None:
+        self.captured.append(result)
+        return None
+
+
+def _make_agent():
+    """Create a fresh CalendarTool instance and a fresh agent for isolation."""
+    cal_tool = CalendarTool()
+
+    @agent(model=None, system="Calendar agent")
+    @use_tools(cal_tool)
+    class CalendarTestAgent(_Capture):
+        def __init__(self):
+            _Capture.__init__(self)
+
+    return CalendarTestAgent()
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# Tests: create
 # ---------------------------------------------------------------------------
 
 
 class TestCalendarCreate:
     def test_create_returns_event_id(self):
-        tool = CalendarTool()
-        ctx = _tool_ctx()
-        result = asyncio.run(
-            tool.run(ctx, "create", title="Team Standup", start_time="2026-01-15T09:00:00")
+        """create returns an 8-char event_id."""
+        agent_inst = _make_agent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use(
+            "calendar_tool",
+            {"action": "create", "title": "Team Standup", "start_time": "2026-01-15T09:00:00"},
         )
+        client.mock.queue_response(_c("Event created."))
+        client.run("Create standup event")
+        result = json.loads(agent_inst.captured[0].content)
         assert "created" in result
         assert isinstance(result["created"], str)
         assert len(result["created"]) == 8
 
     def test_create_returns_title(self):
-        tool = CalendarTool()
-        ctx = _tool_ctx()
-        result = asyncio.run(
-            tool.run(ctx, "create", title="My Meeting", start_time="2026-01-15T10:00:00")
+        """create returns the event title."""
+        agent_inst = _make_agent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use(
+            "calendar_tool",
+            {"action": "create", "title": "My Meeting", "start_time": "2026-01-15T10:00:00"},
         )
+        client.mock.queue_response(_c("Meeting created."))
+        client.run("Create my meeting")
+        result = json.loads(agent_inst.captured[0].content)
         assert result["title"] == "My Meeting"
 
     def test_create_returns_start_time(self):
-        tool = CalendarTool()
-        ctx = _tool_ctx()
-        result = asyncio.run(
-            tool.run(ctx, "create", title="Event", start_time="2026-03-20T14:30:00")
+        """create returns the correct start time."""
+        agent_inst = _make_agent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use(
+            "calendar_tool",
+            {"action": "create", "title": "Event", "start_time": "2026-03-20T14:30:00"},
         )
+        client.mock.queue_response(_c("Event created."))
+        client.run("Create event")
+        result = json.loads(agent_inst.captured[0].content)
         assert result["start"] == "2026-03-20T14:30:00"
 
     def test_create_without_title_returns_error(self):
-        tool = CalendarTool()
-        ctx = _tool_ctx()
-        result = asyncio.run(
-            tool.run(ctx, "create", title="", start_time="2026-01-15T10:00:00")
+        """create without a title returns an error dict."""
+        agent_inst = _make_agent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use(
+            "calendar_tool",
+            {"action": "create", "title": "", "start_time": "2026-01-15T10:00:00"},
         )
+        client.mock.queue_response(_c("Error."))
+        client.run("Create event without title")
+        result = json.loads(agent_inst.captured[0].content)
         assert "error" in result
 
     def test_create_without_start_time_returns_error(self):
-        tool = CalendarTool()
-        ctx = _tool_ctx()
-        result = asyncio.run(tool.run(ctx, "create", title="No time", start_time=""))
+        """create without a start_time returns an error dict."""
+        agent_inst = _make_agent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use(
+            "calendar_tool",
+            {"action": "create", "title": "No time", "start_time": ""},
+        )
+        client.mock.queue_response(_c("Error."))
+        client.run("Create event without time")
+        result = json.loads(agent_inst.captured[0].content)
         assert "error" in result
 
     def test_create_with_attendees(self):
-        tool = CalendarTool()
-        ctx = _tool_ctx()
-        result = asyncio.run(
-            tool.run(
-                ctx,
-                "create",
-                title="Workshop",
-                start_time="2026-02-01T13:00:00",
-                attendees="alice@example.com,bob@example.com",
-            )
+        """create with attendees succeeds."""
+        agent_inst = _make_agent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use(
+            "calendar_tool",
+            {
+                "action": "create",
+                "title": "Workshop",
+                "start_time": "2026-02-01T13:00:00",
+                "attendees": "alice@example.com,bob@example.com",
+            },
         )
+        client.mock.queue_response(_c("Workshop created."))
+        client.run("Create workshop with attendees")
+        result = json.loads(agent_inst.captured[0].content)
         assert "created" in result
+
+
+# ---------------------------------------------------------------------------
+# Tests: query
+# ---------------------------------------------------------------------------
 
 
 class TestCalendarQuery:
     def test_query_all_events(self):
-        tool = CalendarTool()
-        ctx = _tool_ctx()
-        asyncio.run(tool.run(ctx, "create", title="A", start_time="2026-01-10T09:00:00"))
-        asyncio.run(tool.run(ctx, "create", title="B", start_time="2026-01-11T09:00:00"))
-        result = asyncio.run(tool.run(ctx, "query"))
-        assert len(result["events"]) == 2
+        """query without date returns all events."""
+        agent_inst = _make_agent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use(
+            "calendar_tool",
+            {"action": "create", "title": "A", "start_time": "2026-01-10T09:00:00"},
+        )
+        client.mock.queue_tool_use(
+            "calendar_tool",
+            {"action": "create", "title": "B", "start_time": "2026-01-11T09:00:00"},
+        )
+        client.mock.queue_tool_use("calendar_tool", {"action": "query"})
+        client.mock.queue_response(_c("Here are your events."))
+        client.run("Create two events then query")
+        query_result = json.loads(agent_inst.captured[2].content)
+        assert len(query_result["events"]) == 2
 
     def test_query_by_date_filters(self):
-        tool = CalendarTool()
-        ctx = _tool_ctx()
-        asyncio.run(tool.run(ctx, "create", title="Jan Event", start_time="2026-01-15T09:00:00"))
-        asyncio.run(tool.run(ctx, "create", title="Feb Event", start_time="2026-02-15T09:00:00"))
-        result = asyncio.run(tool.run(ctx, "query", date="2026-01"))
-        assert len(result["events"]) == 1
-        assert result["events"][0]["title"] == "Jan Event"
+        """query with date prefix returns only matching events."""
+        agent_inst = _make_agent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use(
+            "calendar_tool",
+            {"action": "create", "title": "Jan Event", "start_time": "2026-01-15T09:00:00"},
+        )
+        client.mock.queue_tool_use(
+            "calendar_tool",
+            {"action": "create", "title": "Feb Event", "start_time": "2026-02-15T09:00:00"},
+        )
+        client.mock.queue_tool_use("calendar_tool", {"action": "query", "date": "2026-01"})
+        client.mock.queue_response(_c("January events."))
+        client.run("Create Jan and Feb events, query January")
+        query_result = json.loads(agent_inst.captured[2].content)
+        assert len(query_result["events"]) == 1
+        assert query_result["events"][0]["title"] == "Jan Event"
 
     def test_query_empty_returns_empty_list(self):
-        tool = CalendarTool()
-        ctx = _tool_ctx()
-        result = asyncio.run(tool.run(ctx, "query"))
+        """query on an empty calendar returns empty events list."""
+        agent_inst = _make_agent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use("calendar_tool", {"action": "query"})
+        client.mock.queue_response(_c("No events."))
+        client.run("Query empty calendar")
+        result = json.loads(agent_inst.captured[0].content)
         assert result["events"] == []
 
     def test_query_no_match_date_returns_empty(self):
-        tool = CalendarTool()
-        ctx = _tool_ctx()
-        asyncio.run(tool.run(ctx, "create", title="Event", start_time="2026-01-15T09:00:00"))
-        result = asyncio.run(tool.run(ctx, "query", date="2027-06"))
-        assert result["events"] == []
+        """query with a date that has no events returns empty list."""
+        agent_inst = _make_agent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use(
+            "calendar_tool",
+            {"action": "create", "title": "Event", "start_time": "2026-01-15T09:00:00"},
+        )
+        client.mock.queue_tool_use("calendar_tool", {"action": "query", "date": "2027-06"})
+        client.mock.queue_response(_c("No matching events."))
+        client.run("Create Jan event, query June 2027")
+        query_result = json.loads(agent_inst.captured[1].content)
+        assert query_result["events"] == []
+
+
+# ---------------------------------------------------------------------------
+# Tests: cancel
+# ---------------------------------------------------------------------------
 
 
 class TestCalendarCancel:
     def test_cancel_existing_event(self):
-        tool = CalendarTool()
-        ctx = _tool_ctx()
-        create_result = asyncio.run(
-            tool.run(ctx, "create", title="To Cancel", start_time="2026-01-01T08:00:00")
+        """cancel returns the event_id that was cancelled."""
+        agent_inst = _make_agent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use(
+            "calendar_tool",
+            {"action": "create", "title": "To Cancel", "start_time": "2026-01-01T08:00:00"},
         )
-        eid = create_result["created"]
-        result = asyncio.run(tool.run(ctx, "cancel", event_id=eid))
-        assert result["cancelled"] == eid
+        client.mock.queue_response(_c("Processing."))
+        client.run("Create event to cancel")
+        eid = json.loads(agent_inst.captured[0].content)["created"]
+
+        # Second run: cancel the event
+        agent_inst2 = _make_agent()
+        # Copy the event into the new tool instance
+        cal_tool = (
+            agent_inst2.__class__.__lauren_ai_tools__[0]
+            if hasattr(agent_inst2.__class__, "__lauren_ai_tools__")
+            else None
+        )
+
+        # Use the same agent instance for cancel (same CalendarTool instance)
+        client2 = TestClient(agent_inst)
+        client2.mock.queue_tool_use("calendar_tool", {"action": "cancel", "event_id": eid})
+        client2.mock.queue_response(_c("Cancelled."))
+        client2.run("Cancel event")
+        cancel_result = json.loads(agent_inst.captured[1].content)
+        assert cancel_result["cancelled"] == eid
 
     def test_cancel_removes_from_storage(self):
-        tool = CalendarTool()
-        ctx = _tool_ctx()
-        create_result = asyncio.run(
-            tool.run(ctx, "create", title="Doomed", start_time="2026-01-01T08:00:00")
+        """After cancel, query no longer returns the event."""
+        agent_inst = _make_agent()
+        client = TestClient(agent_inst)
+        # Create, cancel, then query — all in one agent run sequence
+        client.mock.queue_tool_use(
+            "calendar_tool",
+            {"action": "create", "title": "Doomed", "start_time": "2026-01-01T08:00:00"},
         )
-        eid = create_result["created"]
-        asyncio.run(tool.run(ctx, "cancel", event_id=eid))
-        result = asyncio.run(tool.run(ctx, "query"))
-        event_ids = [e["id"] for e in result["events"]]
+        client.mock.queue_response(_c("Created."))
+        client.run("Create doomed event")
+        eid = json.loads(agent_inst.captured[0].content)["created"]
+
+        # Cancel it
+        client.mock.queue_tool_use("calendar_tool", {"action": "cancel", "event_id": eid})
+        client.mock.queue_response(_c("Cancelled."))
+        client.run("Cancel doomed event")
+
+        # Query — should be empty
+        client.mock.queue_tool_use("calendar_tool", {"action": "query"})
+        client.mock.queue_response(_c("No events."))
+        client.run("Query events")
+        query_result = json.loads(agent_inst.captured[2].content)
+        event_ids = [e["id"] for e in query_result["events"]]
         assert eid not in event_ids
 
     def test_cancel_nonexistent_returns_error(self):
-        tool = CalendarTool()
-        ctx = _tool_ctx()
-        result = asyncio.run(tool.run(ctx, "cancel", event_id="nonexistent"))
+        """Cancelling a non-existent event returns an error."""
+        agent_inst = _make_agent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use("calendar_tool", {"action": "cancel", "event_id": "nonexistent"})
+        client.mock.queue_response(_c("Not found."))
+        client.run("Cancel non-existent event")
+        result = json.loads(agent_inst.captured[0].content)
         assert "error" in result
 
     def test_cancel_leaves_other_events(self):
-        tool = CalendarTool()
-        ctx = _tool_ctx()
-        r1 = asyncio.run(tool.run(ctx, "create", title="Keep", start_time="2026-01-01T08:00:00"))
-        r2 = asyncio.run(tool.run(ctx, "create", title="Delete", start_time="2026-01-02T08:00:00"))
-        eid1 = r1["created"]
-        eid2 = r2["created"]
-        asyncio.run(tool.run(ctx, "cancel", event_id=eid2))
-        result = asyncio.run(tool.run(ctx, "query"))
-        event_ids = [e["id"] for e in result["events"]]
+        """Cancelling one event does not remove others."""
+        agent_inst = _make_agent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use(
+            "calendar_tool",
+            {"action": "create", "title": "Keep", "start_time": "2026-01-01T08:00:00"},
+        )
+        client.mock.queue_tool_use(
+            "calendar_tool",
+            {"action": "create", "title": "Delete", "start_time": "2026-01-02T08:00:00"},
+        )
+        client.mock.queue_response(_c("Two events created."))
+        client.run("Create two events")
+        eid1 = json.loads(agent_inst.captured[0].content)["created"]
+        eid2 = json.loads(agent_inst.captured[1].content)["created"]
+
+        # Cancel eid2, then query
+        client.mock.queue_tool_use("calendar_tool", {"action": "cancel", "event_id": eid2})
+        client.mock.queue_tool_use("calendar_tool", {"action": "query"})
+        client.mock.queue_response(_c("Done."))
+        client.run("Cancel second event and query")
+        query_result = json.loads(agent_inst.captured[3].content)
+        event_ids = [e["id"] for e in query_result["events"]]
         assert eid1 in event_ids
         assert eid2 not in event_ids
+
+
+# ---------------------------------------------------------------------------
+# Tests: @set_metadata
+# ---------------------------------------------------------------------------
+
+
+class TestCalendarToolMetadata:
+    def test_calendar_tool_type_metadata(self):
+        """@set_metadata('tool_type', 'scheduling') is stored on CalendarTool."""
+        from lauren_ai._tools import TOOL_METADATA
+
+        meta = getattr(CalendarTool, TOOL_METADATA, {})
+        assert meta.get("tool_type") == "scheduling"

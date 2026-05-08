@@ -35,8 +35,7 @@ class ResponseValidator:
             last_response = response
             if attempt < self._max_retries - 1:
                 correction = (
-                    f"\nPrevious response was invalid. Please try again.\n"
-                    f"Previous: {content}"
+                    f"\nPrevious response was invalid. Please try again.\nPrevious: {content}"
                 )
                 prompt = prompt + correction
                 await asyncio.sleep(0)
@@ -66,6 +65,7 @@ def contains_required_keys(*keys: str) -> Callable[[str], bool]:
             return all(k in data for k in keys)
         except Exception:
             return False
+
     return check
 
 
@@ -113,7 +113,10 @@ class TestValidatorFunctions:
         assert max_length(5)("too long string here") is False
 
     def test_contains_keys_all_present(self):
-        assert contains_required_keys("result", "confidence")('{"result": "yes", "confidence": 0.9}') is True
+        assert (
+            contains_required_keys("result", "confidence")('{"result": "yes", "confidence": 0.9}')
+            is True
+        )
 
     def test_contains_keys_missing_key(self):
         assert contains_required_keys("result", "confidence")('{"result": "yes"}') is False
@@ -135,7 +138,11 @@ class TestResponseValidator:
         client.mock.queue_response(_c(valid_json))
 
         validator = ResponseValidator(
-            validators=[is_non_empty, is_valid_json, contains_required_keys("result", "confidence")],
+            validators=[
+                is_non_empty,
+                is_valid_json,
+                contains_required_keys("result", "confidence"),
+            ],
             max_retries=3,
         )
         response = asyncio.run(

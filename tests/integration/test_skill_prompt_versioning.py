@@ -66,8 +66,12 @@ class PromptVersionRegistry:
 def _make_registry():
     """Create a fresh registry with v1, v2, v3 registered."""
     reg = PromptVersionRegistry()
-    reg.register(PromptVersion("v1", "You are a helpful assistant.", description="Baseline"), default=True)
-    reg.register(PromptVersion("v2", "You are a concise assistant. Use bullets.", description="Concise"))
+    reg.register(
+        PromptVersion("v1", "You are a helpful assistant.", description="Baseline"), default=True
+    )
+    reg.register(
+        PromptVersion("v2", "You are a concise assistant. Use bullets.", description="Concise")
+    )
     reg.register(PromptVersion("v3", "You are a detailed assistant.", description="Verbose"))
     return reg
 

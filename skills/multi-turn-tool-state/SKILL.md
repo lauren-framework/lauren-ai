@@ -1,6 +1,6 @@
 ---
 name: multi-turn-tool-state
-description: Shows how to accumulate state across multiple tool calls within a single agent run using ToolContext.state. Use when building stateful tools like shopping carts, accumulators, or multi-step workflows where intermediate state must persist between tool invocations.
+description: Shows how to accumulate state across multiple tool calls within a single agent run using AgentContext.metadata. Use when building stateful tools like shopping carts, accumulators, or multi-step workflows where intermediate state must persist between tool invocations within a run.
 ---
 
 > Use `codemap find "SymbolName"` to locate any symbol before reading — it gives
@@ -16,60 +16,68 @@ description: Shows how to accumulate state across multiple tool calls within a s
 
 ## Overview
 
-`ToolContext.state` is a mutable `dict[str, Any]` that the agent runner
-**shares across all tool calls within the same agent run**.  This allows
-class-form tools to accumulate state without instance-level mutation — the
-state lives in the context, not in the tool instance.
+Use `ctx.agent_context.metadata` to persist state across multiple tool calls
+within a single `runner.run()` call. Read via `ctx.get_metadata(key, default)`,
+write via `ctx.agent_context.metadata[key] = value`.
 
-> **Important:** `ctx.state` is per-run, not per-tool.  Multiple tools sharing
-> a run all see the same dict.  Use namespaced keys (e.g. `"shopping_cart"`)
-> to avoid collisions.
+> **Important:** `AgentContext.metadata` persists for the duration of one
+> `runner.run()` call (one user turn). It is NOT shared across separate
+> `runner.run()` calls. For cross-run persistence, use a conversation store or
+> external database.
+
+> **Do not use `ctx.state`** for cross-tool-call state — `ctx.state` is reset
+> per tool call, not per run.
 
 ---
 
-## Shopping cart example
+## Shopping cart example (function-form tool)
 
 ```python
 # tools/shopping_cart.py — NO from __future__ import annotations
 from lauren_ai import tool, ToolContext
 
+CART_KEY = "shopping_cart"
+
 @tool()
-class ShoppingCartTool:
+async def shopping_cart_tool(
+    action: str,
+    item: str = "",
+    quantity: int = 1,
+    ctx: ToolContext | None = None,
+) -> dict:
     """Manage a shopping cart with persistent state across tool calls.
 
     Args:
         action: 'add', 'remove', 'view', or 'clear'.
         item: Item name (for add/remove).
-        quantity: Quantity to add (default 1).
+        quantity: Quantity (for add, default 1).
     """
-    CART_KEY = "shopping_cart"
+    if ctx is None:
+        return {"error": "No context provided"}
 
-    async def run(
-        self, ctx: ToolContext, action: str, item: str = "", quantity: int = 1
-    ) -> dict:
-        cart: dict[str, int] = ctx.state.get(self.CART_KEY, {})
+    cart: dict = dict(ctx.get_metadata(CART_KEY, {}))
 
-        if action == "add":
-            if not item:
-                return {"error": "item is required for add"}
-            cart[item] = cart.get(item, 0) + quantity
-            ctx.state[self.CART_KEY] = cart
-            return {"added": item, "quantity": cart[item], "cart": cart}
+    if action == "add":
+        if not item:
+            return {"error": "item is required for add"}
+        cart[item] = cart.get(item, 0) + quantity
+        ctx.agent_context.metadata[CART_KEY] = cart
+        return {"added": item, "quantity": cart[item], "cart": dict(cart)}
 
-        elif action == "remove":
-            if item in cart:
-                del cart[item]
-                ctx.state[self.CART_KEY] = cart
-            return {"removed": item, "cart": cart}
+    elif action == "remove":
+        if item in cart:
+            del cart[item]
+            ctx.agent_context.metadata[CART_KEY] = cart
+        return {"removed": item, "cart": dict(cart)}
 
-        elif action == "view":
-            return {"cart": cart, "total_items": sum(cart.values())}
+    elif action == "view":
+        return {"cart": dict(cart), "total_items": sum(cart.values())}
 
-        elif action == "clear":
-            ctx.state[self.CART_KEY] = {}
-            return {"cleared": True}
+    elif action == "clear":
+        ctx.agent_context.metadata[CART_KEY] = {}
+        return {"cleared": True}
 
-        return {"error": f"Unknown action: {action}"}
+    return {"error": f"Unknown action: {action}"}
 ```
 
 ---
@@ -77,31 +85,67 @@ class ShoppingCartTool:
 ## How state flows
 
 ```
-Turn 1:  add "apple" → ctx.state["shopping_cart"] = {"apple": 1}
-Turn 2:  add "banana" → ctx.state["shopping_cart"] = {"apple": 1, "banana": 1}
+Turn 1:  add "apple" → ctx.agent_context.metadata["shopping_cart"] = {"apple": 1}
+Turn 2:  add "banana" → ctx.agent_context.metadata["shopping_cart"] = {"apple": 1, "banana": 1}
 Turn 3:  view → returns both items
 ```
 
-The runner creates `ToolContext(state={})` fresh per **run**, not per turn.
-All tool calls within the same run share that `state` dict.
+`ctx.get_metadata(CART_KEY, {})` reads from `AgentContext.metadata` (after
+checking tool-level static metadata via `@set_metadata` first).
 
 ---
 
-## Testing tool state directly (without full agent loop)
+## AgentRunner test pattern
 
-Create a mock context to unit-test tools without spinning up a runner:
+Queue multiple tool calls in one `client.run()` — the runner processes them in
+sequence within a single `AgentContext`, so `metadata` accumulates correctly.
 
 ```python
-class MockContext:
-    def __init__(self):
-        self.state = {}
-        self.execution_context = None
-        self.agent_context = None
-        self.tool_use_id = "t1"
-        self.turn = 0
+import json
+from lauren_ai._agents import AgentContext, agent, use_tools
+from lauren_ai._tools import ToolContext, ToolResult, tool
+from lauren_ai._transport import Completion, TokenUsage
+from lauren_ai.testing import TestClient
 
-    def get_metadata(self, key, default=None):
-        return default
+
+class _Capture:
+    def __init__(self):
+        self.captured: list[ToolResult] = []
+
+    async def on_tool_result(self, result: ToolResult, ctx: AgentContext) -> ToolResult | None:
+        self.captured.append(result)
+        return None
+
+
+@agent(model=None, system="Shopping cart agent")
+@use_tools(shopping_cart_tool)
+class CartAgent(_Capture):
+    def __init__(self):
+        _Capture.__init__(self)
+
+
+def _c(text):
+    return Completion(id="c1", model="mock", content=text, tool_calls=[],
+                      stop_reason="end_turn", usage=TokenUsage(10, 5))
+
+
+def test_cart_accumulates_across_calls():
+    agent_inst = CartAgent()
+    client = TestClient(agent_inst)
+    client.mock.queue_tool_use(
+        "shopping_cart_tool", {"action": "add", "item": "Widget", "quantity": 2}
+    )
+    client.mock.queue_tool_use(
+        "shopping_cart_tool", {"action": "add", "item": "Gadget", "quantity": 1}
+    )
+    client.mock.queue_response(_c("Cart updated."))
+    client.run("Add Widget x2 and Gadget x1")
+
+    add1 = json.loads(agent_inst.captured[0].content)
+    add2 = json.loads(agent_inst.captured[1].content)
+    assert add1["quantity"] == 2
+    assert add2["cart"].get("Widget") == 2
+    assert add2["cart"].get("Gadget") == 1
 ```
 
 ---
@@ -110,5 +154,6 @@ class MockContext:
 
 | File | Contents |
 |------|----------|
-| `src/lauren_ai/_tools/__init__.py` | `ToolContext.state` field definition |
+| `src/lauren_ai/_tools/__init__.py` | `ToolContext` — `get_metadata`, `agent_context` |
+| `src/lauren_ai/_agents/__init__.py` | `AgentContext.metadata` field |
 | `src/lauren_ai/_agents/_runner.py` | `_execute_single_tool` — context creation |

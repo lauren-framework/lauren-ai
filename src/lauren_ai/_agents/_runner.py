@@ -35,7 +35,7 @@ from lauren_ai._exceptions import (
     AgentConfigError,
 )
 from lauren_ai._memory import ShortTermMemory
-from lauren_ai._tools import TOOL_META, ToolContext, ToolMeta, ToolResult
+from lauren_ai._tools import TOOL_META, TOOL_METADATA, ToolContext, ToolMeta, ToolResult
 from lauren_ai._tools._executor import CacheBackend, ToolExecutor
 from lauren_ai._transport import Completion, CompletionChunk, TokenUsage, ToolCall
 
@@ -1211,12 +1211,22 @@ class AgentRunnerBase(AgentRunner):
         :return: The tool result.
         :rtype: ToolResult
         """
+        # Populate tool-level static metadata from @set_metadata decorators.
+        # self._tools maps name → (callable_or_instance, ToolMeta); the
+        # TOOL_METADATA sentinel lives on the original decorated entity.
+        _tool_entry = self._tools.get(tool_call.name)
+        _tool_static_meta: dict[str, Any] = {}
+        if _tool_entry is not None:
+            _callable, _ = _tool_entry
+            _tool_static_meta = dict(getattr(_callable, TOOL_METADATA, {}))
+
         tool_context = ToolContext(
             agent_context=ctx,
             tool_use_id=tool_call.tool_use_id,
             turn=ctx.turn,
             request=ctx.request,
             execution_context=ctx.execution_context,
+            metadata=_tool_static_meta,
             state={},
         )
 

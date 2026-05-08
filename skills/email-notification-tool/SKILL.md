@@ -17,7 +17,7 @@ description: Implements an agent tool for dispatching email notifications with a
 ## Overview
 
 `EmailDispatchTool` is a class-form `@tool()` that wraps an `EmailBackend`
-protocol.  `InMemoryEmailBackend` is used in tests; production code provides
+protocol. `InMemoryEmailBackend` is used in tests; production code provides
 an SMTP or transactional-email-API implementation.
 
 ---
@@ -27,7 +27,7 @@ an SMTP or transactional-email-API implementation.
 ```python
 # tools/email_tool.py — NO from __future__ import annotations
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from lauren_ai import tool, ToolContext
 
 @dataclass
@@ -88,6 +88,64 @@ class SMTPBackend(EmailBackend):
         return True
 
 tool_instance = EmailDispatchTool(backend=SMTPBackend(...))
+```
+
+---
+
+## AgentRunner test pattern
+
+Pass a pre-built `InMemoryEmailBackend` instance to `EmailDispatchTool` so
+tests can inspect the sent list after the run.
+
+```python
+import json
+from lauren_ai._agents import AgentContext, agent, use_tools
+from lauren_ai._tools import ToolResult
+from lauren_ai._transport import Completion, TokenUsage
+from lauren_ai.testing import TestClient
+
+
+class _Capture:
+    def __init__(self):
+        self.captured: list[ToolResult] = []
+
+    async def on_tool_result(self, result: ToolResult, ctx: AgentContext) -> ToolResult | None:
+        self.captured.append(result)
+        return None
+
+
+def _make_agent(backend=None):
+    email_tool = EmailDispatchTool(backend=backend)
+
+    @agent(model=None, system="Email assistant")
+    @use_tools(email_tool)
+    class EmailTestAgent(_Capture):
+        def __init__(self):
+            _Capture.__init__(self)
+
+    return EmailTestAgent()
+
+
+def _c(text):
+    return Completion(id="c1", model="mock", content=text, tool_calls=[],
+                      stop_reason="end_turn", usage=TokenUsage(10, 5))
+
+
+def test_send_email():
+    backend = InMemoryEmailBackend()
+    agent_inst = _make_agent(backend)
+    client = TestClient(agent_inst)
+    client.mock.queue_tool_use(
+        "email_dispatch_tool",
+        {"to": "alice@example.com", "subject": "Hi", "body": "Hello Alice"},
+    )
+    client.mock.queue_response(_c("Email sent."))
+    client.run("Send email to Alice")
+
+    out = json.loads(agent_inst.captured[0].content)
+    assert out["sent"] is True
+    assert len(backend.sent) == 1
+    assert backend.sent[0].subject == "Hi"
 ```
 
 ---

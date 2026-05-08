@@ -45,8 +45,12 @@ class SummarySubAgent: ...
 
 def _completion(content="OK", *, n=1, stop_reason="end_turn"):
     return Completion(
-        id=f"c{n}", model="mock-model", content=content, tool_calls=[],
-        stop_reason=stop_reason, usage=TokenUsage(input_tokens=10, output_tokens=5)
+        id=f"c{n}",
+        model="mock-model",
+        content=content,
+        tool_calls=[],
+        stop_reason=stop_reason,
+        usage=TokenUsage(input_tokens=10, output_tokens=5),
     )
 
 

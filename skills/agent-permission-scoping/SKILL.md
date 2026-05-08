@@ -1,14 +1,16 @@
 ---
 name: agent-permission-scoping
-description: Scope tool execution behind permission levels (read_only, mutate, admin). Use when different users or agent roles should have different tool access rights, injecting the permission level via ToolContext metadata.
+description: Scope tool execution behind permission levels (read_only, mutate, admin). Use when different users or agent roles should have different tool access rights, injecting the permission level via ToolContext metadata and declaring requirements via @set_metadata.
 ---
 
 > Use `codemap find "ToolContext"` to check the metadata injection API.
 
 # Agent Permission Scoping
 
-Define an ordered `Permission` enum and wrap tools with a `require_permission`
-guard. The granted permission is injected via `ToolContext.get_metadata`.
+Define an ordered `Permission` enum and check permissions inline in the tool's
+`run()` method. Declare the minimum permission level with `@set_metadata` for
+introspection and documentation. Inject the caller's permission via
+`runner.run(metadata={"caller_permission": ...})`.
 
 ## Permission model
 
@@ -25,34 +27,30 @@ PERMISSION_ORDER = {
     Permission.MUTATE:    1,
     Permission.ADMIN:     2,
 }
-```
 
-## Tool guard decorator
-
-```python
-from lauren_ai._tools import ToolContext
-
-def require_permission(required: Permission):
-    def decorator(cls):
-        original_run = cls.run
-        async def guarded_run(self, ctx: ToolContext, *args, **kwargs):
-            granted_str = ctx.get_metadata("permission") or Permission.READ_ONLY
-            granted = Permission(granted_str)
-            if PERMISSION_ORDER[granted] < PERMISSION_ORDER[required]:
-                return {"error": f"Permission denied: requires {required.value}, got {granted.value}"}
-            return await original_run(self, ctx, *args, **kwargs)
-        cls.run = guarded_run
-        return cls
-    return decorator
+def _check_permission(ctx: ToolContext, required: Permission) -> dict | None:
+    """Return error dict if caller lacks required permission, else None."""
+    granted_str = ctx.get_metadata("caller_permission") or Permission.READ_ONLY.value
+    try:
+        granted = Permission(granted_str)
+    except ValueError:
+        granted = Permission.READ_ONLY
+    if PERMISSION_ORDER[granted] < PERMISSION_ORDER[required]:
+        return {"error": f"Permission denied: requires {required.value}, got {granted.value}"}
+    return None
 ```
 
 ## Protected tool
 
-```python
-from lauren_ai._tools import tool
+Apply `@set_metadata` first (outermost), then `@tool()`. The `@set_metadata`
+decorator stores the declared minimum permission on the tool class for
+documentation and introspection. Permission enforcement happens in `run()`.
 
+```python
+from lauren_ai._tools import ToolContext, set_metadata, tool
+
+@set_metadata("min_permission", "mutate")
 @tool()
-@require_permission(Permission.MUTATE)
 class UpdateRecordTool:
     """Update a database record.
 
@@ -62,48 +60,102 @@ class UpdateRecordTool:
     """
 
     async def run(self, ctx: ToolContext, record_id: str, data: str) -> dict:
+        err = _check_permission(ctx, Permission.MUTATE)
+        if err:
+            return err
         return {"updated": record_id, "data": data}
 ```
 
 ## Injecting permission at call time
 
-Pass the permission level as metadata when invoking the runner:
+Pass the permission level as metadata when invoking the runner or TestClient:
 
 ```python
+# Production runner
 response = await runner.run(
     agent_instance,
     "Update record 42 with new data",
-    metadata={"permission": Permission.MUTATE.value},
+    metadata={"caller_permission": "mutate"},
 )
+
+# In tests via TestClient
+result = client.run("Update record 42", metadata={"caller_permission": "mutate"})
 ```
 
-`ToolContext.get_metadata("permission")` delegates to
-`AgentContext.get_metadata`, which reads from the `metadata` dict supplied
-to `runner.run`.
+`ToolContext.get_metadata("caller_permission")` checks tool-level static
+metadata first, then delegates to `AgentContext.get_metadata`, which reads from
+the `metadata` dict supplied to `runner.run`.
 
-## Checking permissions in a tool
+## AgentRunner test pattern
 
 ```python
-@tool()
-class AdminOnlyTool:
-    """Perform an admin action.
+import json
+from lauren_ai._agents import AgentContext, agent, use_tools
+from lauren_ai._tools import ToolContext, ToolResult, set_metadata, tool
+from lauren_ai._transport import Completion, TokenUsage
+from lauren_ai.testing import TestClient
 
-    Args:
-        action: The action to perform.
-    """
 
-    async def run(self, ctx: ToolContext, action: str) -> dict:
-        permission_str = ctx.get_metadata("permission") or "read_only"
-        if permission_str != Permission.ADMIN.value:
-            return {"error": "Admin permission required"}
-        return {"performed": action}
+class _Capture:
+    def __init__(self):
+        self.captured: list[ToolResult] = []
+
+    async def on_tool_result(self, result: ToolResult, ctx: AgentContext) -> ToolResult | None:
+        self.captured.append(result)
+        return None
+
+
+@agent(model=None, system="Permission test agent")
+@use_tools(UpdateRecordTool, DeleteRecordTool, ReadRecordTool)
+class PermissionTestAgent(_Capture):
+    def __init__(self):
+        _Capture.__init__(self)
+
+
+def _c(text):
+    return Completion(id="c1", model="mock", content=text, tool_calls=[],
+                      stop_reason="end_turn", usage=TokenUsage(10, 5))
+
+
+def test_mutate_permission_allows_update():
+    agent_inst = PermissionTestAgent()
+    client = TestClient(agent_inst)
+    client.mock.queue_tool_use("update_record_tool", {"record_id": "1", "data": "x"})
+    client.mock.queue_response(_c("Updated."))
+    client.run("Update record", metadata={"caller_permission": "mutate"})
+    out = json.loads(agent_inst.captured[0].content)
+    assert "error" not in out
+    assert out["updated"] == "1"
+
+
+def test_read_only_permission_blocks_update():
+    agent_inst = PermissionTestAgent()
+    client = TestClient(agent_inst)
+    client.mock.queue_tool_use("update_record_tool", {"record_id": "1", "data": "x"})
+    client.mock.queue_response(_c("Denied."))
+    client.run("Update record", metadata={"caller_permission": "read_only"})
+    out = json.loads(agent_inst.captured[0].content)
+    assert "error" in out
 ```
+
+## Reading declared minimum permission in the tool
+
+```python
+required = ctx.get_metadata("min_permission")   # → "mutate" (from @set_metadata)
+granted  = ctx.get_metadata("caller_permission") # → from runner.run(metadata=...)
+```
+
+`ctx.get_metadata` checks tool-level static metadata (`TOOL_METADATA` attribute)
+first, then agent-level runtime metadata (`AgentContext.metadata`).
 
 ## Notes
 
-- Permission strings are passed as plain values in `metadata` — they travel
-  through `AgentContext` and are available in every tool via `ctx.get_metadata`.
+- Permission strings are passed as plain values in `metadata`.
+- `@set_metadata` is read-only at call time — it's for declaration and
+  introspection, not enforcement. Always enforce in `run()`.
+- Decorator ordering matters: `@set_metadata` must be outermost (applied last),
+  `@tool()` must be innermost (applied first) so that `@tool()` inspects the
+  original `run()` signature with `ctx: ToolContext`.
 - For request-level permission injection in a Lauren web app, extract the
   permission from `request.state` in the controller and forward it as
-  `metadata={"permission": user.role}`.
-- Extend the pattern by loading permissions from a database inside the guard.
+  `metadata={"caller_permission": user.role}`.

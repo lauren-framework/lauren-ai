@@ -113,6 +113,7 @@ async def failing_handler(prompt: str) -> str:
 
 async def slow_handler(prompt: str) -> str:
     import asyncio
+
     await asyncio.sleep(0.01)
     return f"slow:{prompt}"
 

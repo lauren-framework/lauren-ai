@@ -85,6 +85,7 @@ __all__ = [
     "ToolContext",
     "ToolResult",
     "get_tool_context_from_func_args",
+    "set_metadata",
     # Memory
     "ShortTermMemory",
     "MemoryStore",
@@ -421,6 +422,7 @@ from lauren_ai._tools import (
     ToolContext,
     ToolResult,
     get_tool_context_from_func_args,
+    set_metadata,
     tool,
 )
 

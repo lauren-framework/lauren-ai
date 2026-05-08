@@ -143,6 +143,7 @@ class TestPydanticOutputParser:
 
     def test_parser_raises_on_invalid_json(self):
         from lauren_ai import OutputParserError
+
         parser = PydanticOutputParser(model=SentimentResult)
         with pytest.raises((OutputParserError, ValueError, Exception)):
             parser.parse("this is not json")

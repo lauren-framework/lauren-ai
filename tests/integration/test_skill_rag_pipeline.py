@@ -133,8 +133,7 @@ class TestKnowledgeBaseSearch:
         results = asyncio.run(kb.search("programming language", top_k=3))
         assert len(results) >= 1
         assert any(
-            word in results[0].content.lower()
-            for word in ["python", "javascript", "language"]
+            word in results[0].content.lower() for word in ["python", "javascript", "language"]
         )
 
     def test_search_returns_metadata(self):

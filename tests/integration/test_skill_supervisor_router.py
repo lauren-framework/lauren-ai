@@ -103,44 +103,52 @@ class TestClassifyIntentTool:
     def test_billing_keyword_invoice(self):
         result = pytest.mark.asyncio
         import asyncio
+
         data = asyncio.run(classify_intent("I need help with my invoice"))
         assert data["intent"] == "billing"
         assert data["confidence"] >= 0.8
 
     def test_billing_keyword_payment(self):
         import asyncio
+
         data = asyncio.run(classify_intent("my payment was declined"))
         assert data["intent"] == "billing"
 
     def test_billing_keyword_charge(self):
         import asyncio
+
         data = asyncio.run(classify_intent("there is an extra charge on my account"))
         assert data["intent"] == "billing"
 
     def test_technical_keyword_error(self):
         import asyncio
+
         data = asyncio.run(classify_intent("I keep getting an error"))
         assert data["intent"] == "technical"
         assert data["confidence"] >= 0.8
 
     def test_technical_keyword_crash(self):
         import asyncio
+
         data = asyncio.run(classify_intent("the app keeps crashing"))
         assert data["intent"] == "technical"
 
     def test_technical_keyword_slow(self):
         import asyncio
+
         data = asyncio.run(classify_intent("the site is really slow today"))
         assert data["intent"] == "technical"
 
     def test_general_intent_for_unrecognised(self):
         import asyncio
+
         data = asyncio.run(classify_intent("hello, how are you?"))
         assert data["intent"] == "general"
         assert data["confidence"] == 0.7
 
     def test_result_always_has_confidence(self):
         import asyncio
+
         for msg in ["invoice", "bug", "hello"]:
             data = asyncio.run(classify_intent(msg))
             assert "confidence" in data

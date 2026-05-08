@@ -7,11 +7,17 @@ Tests cover:
 - Tool with READ_ONLY denied when ADMIN is required
 - Tool with ADMIN succeeds when ADMIN is required
 - Permission metadata propagated via AgentContext
+
+NOTE: No `from __future__ import annotations` — @tool() needs live annotations.
 """
 
+import json
 from enum import Enum
 
-from lauren_ai._tools import tool, ToolContext
+from lauren_ai._agents import AgentContext, agent, use_tools
+from lauren_ai._tools import ToolContext, ToolResult, set_metadata, tool
+from lauren_ai._transport import Completion, TokenUsage
+from lauren_ai.testing import TestClient
 
 
 # ---------------------------------------------------------------------------
@@ -32,58 +38,25 @@ PERMISSION_ORDER = {
 }
 
 
-def require_permission(required: Permission):
-    """Class decorator that guards a tool's run() method with a permission check."""
-
-    def decorator(cls):
-        original_run = cls.run
-
-        async def guarded_run(self, ctx, *args, **kwargs):
-            granted_str = ctx.get_metadata("permission") or Permission.READ_ONLY.value
-            try:
-                granted = Permission(granted_str)
-            except ValueError:
-                granted = Permission.READ_ONLY
-            if PERMISSION_ORDER[granted] < PERMISSION_ORDER[required]:
-                return {
-                    "error": (
-                        f"Permission denied: requires {required.value}, got {granted.value}"
-                    )
-                }
-            return await original_run(self, ctx, *args, **kwargs)
-
-        cls.run = guarded_run
-        return cls
-
-    return decorator
+def _check_permission(ctx: ToolContext, required: Permission) -> dict | None:
+    """Return an error dict if the caller lacks the required permission, else None."""
+    granted_str = ctx.get_metadata("caller_permission") or Permission.READ_ONLY.value
+    try:
+        granted = Permission(granted_str)
+    except ValueError:
+        granted = Permission.READ_ONLY
+    if PERMISSION_ORDER[granted] < PERMISSION_ORDER[required]:
+        return {"error": f"Permission denied: requires {required.value}, got {granted.value}"}
+    return None
 
 
 # ---------------------------------------------------------------------------
-# Stub context helper
+# Tool definitions — permission check inline, @tool() sees original signatures
 # ---------------------------------------------------------------------------
 
 
-def _tool_ctx(permission: str | None = None):
-    """Return a minimal context stub with the given permission metadata."""
-
-    class _StubContext:
-        def get_metadata(self, key: str, default=None):
-            if key == "permission":
-                return permission
-            return default
-
-        execution_context = None
-
-    return _StubContext()
-
-
-# ---------------------------------------------------------------------------
-# Tool definitions
-# ---------------------------------------------------------------------------
-
-
+@set_metadata("min_permission", "mutate")
 @tool()
-@require_permission(Permission.MUTATE)
 class UpdateRecordTool:
     """Update a database record.
 
@@ -93,11 +66,14 @@ class UpdateRecordTool:
     """
 
     async def run(self, ctx: ToolContext, record_id: str, data: str) -> dict:
+        err = _check_permission(ctx, Permission.MUTATE)
+        if err:
+            return err
         return {"updated": record_id, "data": data}
 
 
+@set_metadata("min_permission", "admin")
 @tool()
-@require_permission(Permission.ADMIN)
 class DeleteRecordTool:
     """Delete a database record.
 
@@ -106,6 +82,9 @@ class DeleteRecordTool:
     """
 
     async def run(self, ctx: ToolContext, record_id: str) -> dict:
+        err = _check_permission(ctx, Permission.ADMIN)
+        if err:
+            return err
         return {"deleted": record_id}
 
 
@@ -122,42 +101,95 @@ class ReadRecordTool:
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _c(text, *, n=1, stop="end_turn"):
+    return Completion(
+        id=f"c{n}",
+        model="mock",
+        content=text,
+        tool_calls=[],
+        stop_reason=stop,
+        usage=TokenUsage(10, 5),
+    )
+
+
+class _Capture:
+    def __init__(self):
+        self.captured: list[ToolResult] = []
+
+    async def on_tool_result(self, result: ToolResult, ctx: AgentContext) -> ToolResult | None:
+        self.captured.append(result)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Agent definition
+# ---------------------------------------------------------------------------
+
+
+@agent(model=None, system="Permission test agent")
+@use_tools(UpdateRecordTool, DeleteRecordTool, ReadRecordTool)
+class PermissionTestAgent(_Capture):
+    def __init__(self):
+        _Capture.__init__(self)
+
+
+# ---------------------------------------------------------------------------
 # Tests: UpdateRecordTool (requires MUTATE)
 # ---------------------------------------------------------------------------
 
 
 class TestUpdateRecordToolPermissions:
-    async def test_read_only_denied(self):
+    def test_read_only_denied(self):
         """READ_ONLY permission is denied when MUTATE is required."""
-        data = await UpdateRecordTool().run(
-            _tool_ctx("read_only"), record_id="42", data="new data"
-        )
+        agent_inst = PermissionTestAgent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use("update_record_tool", {"record_id": "42", "data": "new data"})
+        client.mock.queue_response(_c("Cannot update."))
+        client.run("Update record 42", metadata={"caller_permission": "read_only"})
+        assert len(agent_inst.captured) == 1
+        data = json.loads(agent_inst.captured[0].content)
         assert "error" in data
         assert "Permission denied" in data["error"]
         assert "mutate" in data["error"]
 
-    async def test_mutate_succeeds(self):
+    def test_mutate_succeeds(self):
         """MUTATE permission succeeds when MUTATE is required."""
-        data = await UpdateRecordTool().run(
-            _tool_ctx("mutate"), record_id="42", data="new data"
-        )
+        agent_inst = PermissionTestAgent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use("update_record_tool", {"record_id": "42", "data": "new data"})
+        client.mock.queue_response(_c("Updated."))
+        client.run("Update record 42", metadata={"caller_permission": "mutate"})
+        assert len(agent_inst.captured) == 1
+        data = json.loads(agent_inst.captured[0].content)
         assert "error" not in data
         assert data["updated"] == "42"
         assert data["data"] == "new data"
 
-    async def test_admin_succeeds_for_mutate_tool(self):
+    def test_admin_succeeds_for_mutate_tool(self):
         """ADMIN permission (higher rank) succeeds when MUTATE is required."""
-        data = await UpdateRecordTool().run(
-            _tool_ctx("admin"), record_id="99", data="admin update"
+        agent_inst = PermissionTestAgent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use(
+            "update_record_tool", {"record_id": "99", "data": "admin update"}
         )
+        client.mock.queue_response(_c("Updated."))
+        client.run("Update record 99", metadata={"caller_permission": "admin"})
+        data = json.loads(agent_inst.captured[0].content)
         assert "error" not in data
         assert data["updated"] == "99"
 
-    async def test_no_permission_defaults_to_read_only_and_denied(self):
+    def test_no_permission_defaults_to_read_only_and_denied(self):
         """When no permission is set, defaults to READ_ONLY and is denied."""
-        data = await UpdateRecordTool().run(
-            _tool_ctx(None), record_id="1", data="x"
-        )
+        agent_inst = PermissionTestAgent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use("update_record_tool", {"record_id": "1", "data": "x"})
+        client.mock.queue_response(_c("Denied."))
+        client.run("Update record 1")
+        data = json.loads(agent_inst.captured[0].content)
         assert "error" in data
         assert "Permission denied" in data["error"]
 
@@ -168,20 +200,35 @@ class TestUpdateRecordToolPermissions:
 
 
 class TestDeleteRecordToolPermissions:
-    async def test_read_only_denied_for_admin_tool(self):
+    def test_read_only_denied_for_admin_tool(self):
         """READ_ONLY is denied when ADMIN is required."""
-        data = await DeleteRecordTool().run(_tool_ctx("read_only"), record_id="5")
+        agent_inst = PermissionTestAgent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use("delete_record_tool", {"record_id": "5"})
+        client.mock.queue_response(_c("Denied."))
+        client.run("Delete record 5", metadata={"caller_permission": "read_only"})
+        data = json.loads(agent_inst.captured[0].content)
         assert "error" in data
 
-    async def test_mutate_denied_for_admin_tool(self):
+    def test_mutate_denied_for_admin_tool(self):
         """MUTATE is denied when ADMIN is required."""
-        data = await DeleteRecordTool().run(_tool_ctx("mutate"), record_id="5")
+        agent_inst = PermissionTestAgent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use("delete_record_tool", {"record_id": "5"})
+        client.mock.queue_response(_c("Denied."))
+        client.run("Delete record 5", metadata={"caller_permission": "mutate"})
+        data = json.loads(agent_inst.captured[0].content)
         assert "error" in data
         assert "admin" in data["error"]
 
-    async def test_admin_succeeds_for_admin_tool(self):
+    def test_admin_succeeds_for_admin_tool(self):
         """ADMIN permission succeeds when ADMIN is required."""
-        data = await DeleteRecordTool().run(_tool_ctx("admin"), record_id="5")
+        agent_inst = PermissionTestAgent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use("delete_record_tool", {"record_id": "5"})
+        client.mock.queue_response(_c("Deleted."))
+        client.run("Delete record 5", metadata={"caller_permission": "admin"})
+        data = json.loads(agent_inst.captured[0].content)
         assert "error" not in data
         assert data["deleted"] == "5"
 
@@ -192,8 +239,34 @@ class TestDeleteRecordToolPermissions:
 
 
 class TestReadRecordToolNoGuard:
-    async def test_read_tool_accessible_without_permission(self):
+    def test_read_tool_accessible_without_permission(self):
         """An unguarded tool is accessible regardless of permission level."""
-        data = await ReadRecordTool().run(_tool_ctx(None), record_id="7")
+        agent_inst = PermissionTestAgent()
+        client = TestClient(agent_inst)
+        client.mock.queue_tool_use("read_record_tool", {"record_id": "7"})
+        client.mock.queue_response(_c("Here is the record."))
+        client.run("Read record 7")
+        data = json.loads(agent_inst.captured[0].content)
         assert data["id"] == "7"
         assert data["value"] == "data"
+
+
+# ---------------------------------------------------------------------------
+# Tests: set_metadata propagation
+# ---------------------------------------------------------------------------
+
+
+class TestToolMetadata:
+    def test_update_tool_min_permission_metadata(self):
+        """@set_metadata on UpdateRecordTool stores 'min_permission' in tool metadata."""
+        from lauren_ai._tools import TOOL_METADATA
+
+        meta = getattr(UpdateRecordTool, TOOL_METADATA, {})
+        assert meta.get("min_permission") == "mutate"
+
+    def test_delete_tool_min_permission_metadata(self):
+        """@set_metadata on DeleteRecordTool stores 'min_permission' in tool metadata."""
+        from lauren_ai._tools import TOOL_METADATA
+
+        meta = getattr(DeleteRecordTool, TOOL_METADATA, {})
+        assert meta.get("min_permission") == "admin"

@@ -50,6 +50,7 @@ class CodeExecutionTool:
         local_vars: dict = {}
 
         import time as _time
+
         safe_globals = {"__builtins__": SAFE_BUILTINS, "time": _time}
 
         def _exec_sync():
@@ -64,9 +65,7 @@ class CodeExecutionTool:
             )
             return {
                 "stdout": stdout_capture.getvalue(),
-                "locals": {
-                    k: repr(v) for k, v in local_vars.items() if not k.startswith("_")
-                },
+                "locals": {k: repr(v) for k, v in local_vars.items() if not k.startswith("_")},
                 "success": True,
             }
         except asyncio.TimeoutError:
