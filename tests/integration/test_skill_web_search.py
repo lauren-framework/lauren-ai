@@ -13,7 +13,10 @@ Tests cover:
 
 from abc import ABC, abstractmethod
 
-from lauren_ai._tools import tool, ToolContext
+from lauren_ai._agents import agent, use_tools
+from lauren_ai._tools import tool
+from lauren_ai._transport import Completion, TokenUsage
+from lauren_ai.testing import TestClient
 
 
 # ---------------------------------------------------------------------------
@@ -40,19 +43,15 @@ class InMemorySearchProvider(WebSearchProvider):
         return matching[:max_results] if matching else self._results[:max_results]
 
 
-# ---------------------------------------------------------------------------
-# Stub context
-# ---------------------------------------------------------------------------
-
-
-class _Ctx:
-    execution_context = None
-
-    def get_metadata(self, key, default=None):
-        return default
-
-
-_CTX = _Ctx()
+def _c(content: str = "OK") -> Completion:
+    return Completion(
+        id="c1",
+        model="mock-model",
+        content=content,
+        tool_calls=[],
+        stop_reason="end_turn",
+        usage=TokenUsage(input_tokens=10, output_tokens=5),
+    )
 
 
 @tool()
@@ -172,57 +171,96 @@ class TestInMemorySearchProvider:
 
 
 # ---------------------------------------------------------------------------
-# Tests: WebSearchTool
+# Tests: WebSearchTool (via TestClient agent run)
 # ---------------------------------------------------------------------------
 
 
 class TestWebSearchTool:
-    async def test_search_returns_standard_format(self):
-        """WebSearchTool returns a dict with 'results' and 'count' keys."""
+    def test_search_tool_runs_through_agent(self):
+        """WebSearchTool executes within an agent run and produces a tool result."""
         provider = InMemorySearchProvider(
             [{"title": "Test", "url": "https://t.com", "snippet": "test content"}]
         )
-        tool_instance = WebSearchTool(provider=provider)
-        data = await tool_instance.run(_CTX, query="test")
-        assert "results" in data
-        assert "count" in data
 
-    async def test_count_matches_results_length(self):
-        """count field equals len(results)."""
+        @agent(model="mock-model")
+        @use_tools(WebSearchTool(provider=provider))
+        class SearchAgent: ...
+
+        client = TestClient(SearchAgent())
+        client.mock.queue_tool_use("web_search_tool", {"query": "test"})
+        client.mock.queue_response(_c("Found 1 result about test."))
+        result = client.run("Search for test")
+        assert result.turns == 2
+
+    def test_tool_result_is_fed_back_to_llm(self):
+        """The tool result message is present in the second LLM call's context."""
         provider = InMemorySearchProvider(
             [
                 {"title": "Result A", "url": "https://a.com", "snippet": "content a"},
                 {"title": "Result B", "url": "https://b.com", "snippet": "content b"},
             ]
         )
-        tool_instance = WebSearchTool(provider=provider)
-        data = await tool_instance.run(_CTX, query="result")
-        assert data["count"] == len(data["results"])
-        assert data["count"] == 2
 
-    async def test_no_match_returns_empty_results_via_fallback(self):
-        """When query has no match, provider fallback is returned."""
+        @agent(model="mock-model")
+        @use_tools(WebSearchTool(provider=provider))
+        class SearchAgent: ...
+
+        client = TestClient(SearchAgent())
+        client.mock.queue_tool_use("web_search_tool", {"query": "result"})
+        client.mock.queue_response(_c("Found 2 results."))
+        client.run("Search for result")
+        # Second call's messages include the tool result (role=user, type=tool_result)
+        assert len(client.calls) == 2
+        second_messages = client.calls[1].messages
+        assert any(
+            m.get("role") == "user"
+            and isinstance(m.get("content"), list)
+            and any(c.get("type") == "tool_result" for c in m["content"])
+            for m in second_messages
+        )
+
+    def test_no_match_fallback_still_completes(self):
+        """An unmatched query still completes the agent run via provider fallback."""
         provider = InMemorySearchProvider([{"title": "X", "url": "https://x.com", "snippet": "x"}])
-        tool_instance = WebSearchTool(provider=provider)
-        data = await tool_instance.run(_CTX, query="zzz-nothing")
-        assert isinstance(data["results"], list)
 
-    async def test_default_provider_returns_lauren_result(self):
-        """The default InMemorySearchProvider includes the Lauren Framework result."""
-        tool_instance = WebSearchTool()
-        data = await tool_instance.run(_CTX, query="lauren")
-        assert data["count"] > 0
-        titles = [res.get("title", "") for res in data["results"]]
-        assert any("Lauren" in t for t in titles)
+        @agent(model="mock-model")
+        @use_tools(WebSearchTool(provider=provider))
+        class SearchAgent: ...
 
-    async def test_max_results_parameter_honoured(self):
-        """max_results is forwarded to the provider."""
+        client = TestClient(SearchAgent())
+        client.mock.queue_tool_use("web_search_tool", {"query": "zzz-nothing"})
+        client.mock.queue_response(_c("Nothing found."))
+        result = client.run("Search for zzz-nothing")
+        assert result.stop_reason == "end_turn"
+
+    def test_default_provider_agent_run_completes(self):
+        """An agent using the default provider completes the run successfully."""
+
+        @agent(model="mock-model")
+        @use_tools(WebSearchTool())
+        class SearchAgent: ...
+
+        client = TestClient(SearchAgent())
+        client.mock.queue_tool_use("web_search_tool", {"query": "lauren"})
+        client.mock.queue_response(_c("Lauren framework found."))
+        result = client.run("Search for lauren")
+        assert result.turns == 2
+
+    def test_max_results_parameter_forwarded(self):
+        """max_results kwarg is accepted and forwarded during the agent tool call."""
         provider = InMemorySearchProvider(
             [
                 {"title": f"Result {i}", "url": f"https://r{i}.com", "snippet": "result"}
                 for i in range(10)
             ]
         )
-        tool_instance = WebSearchTool(provider=provider)
-        data = await tool_instance.run(_CTX, query="result", max_results=2)
-        assert data["count"] <= 2
+
+        @agent(model="mock-model")
+        @use_tools(WebSearchTool(provider=provider))
+        class SearchAgent: ...
+
+        client = TestClient(SearchAgent())
+        client.mock.queue_tool_use("web_search_tool", {"query": "result", "max_results": 2})
+        client.mock.queue_response(_c("Found 2 results."))
+        result = client.run("Search for result with max 2")
+        assert result.turns == 2

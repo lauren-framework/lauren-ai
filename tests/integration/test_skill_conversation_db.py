@@ -32,12 +32,10 @@ except ImportError:
 
 pytestmark = pytest.mark.skipif(not HAS_AIOSQLITE, reason="aiosqlite not installed")
 
-from lauren_ai import LLMConfig
 from lauren_ai._agents import agent
-from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
 from lauren_ai._memory import ConversationStore
 from lauren_ai._transport import Completion, TokenUsage
-from lauren_ai._transport._mock import MockTransport
+from lauren_ai.testing import TestClient
 
 
 # ---------------------------------------------------------------------------
@@ -113,11 +111,6 @@ def _c(content="OK", *, n=1, stop_reason="end_turn"):
         stop_reason=stop_reason,
         usage=TokenUsage(input_tokens=10, output_tokens=5),
     )
-
-
-def _make_runner(mock: MockTransport) -> AgentRunner:
-    cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, tools={}, config=cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -202,21 +195,20 @@ class TestSQLiteConversationStore:
 
 
 # ---------------------------------------------------------------------------
-# Tests: Agent using SQLiteConversationStore (direct Python)
+# Tests: Agent using SQLiteConversationStore (via TestClient)
 # ---------------------------------------------------------------------------
 
 
 class TestAgentWithSQLiteStore:
     def test_agent_saves_history_to_sqlite_store(self):
         store = SQLiteConversationStore()
-        mock = MockTransport()
-        mock.queue_response(_c("saved to sqlite"))
 
         @agent(model="mock-model", conversation_store=store)
         class SQLiteAgent: ...
 
-        runner = _make_runner(mock)
-        asyncio.run(runner.run(SQLiteAgent(), "hello", conversation_id="db-sess-1"))
+        client = TestClient(SQLiteAgent())
+        client.mock.queue_response(_c("saved to sqlite"))
+        client.run("hello", conversation_id="db-sess-1")
         history = asyncio.run(store.load("db-sess-1"))
         assert len(history) == 2
         assert history[0]["role"] == "user"
@@ -224,17 +216,16 @@ class TestAgentWithSQLiteStore:
 
     def test_agent_loads_prior_history_from_sqlite(self):
         store = SQLiteConversationStore()
-        mock = MockTransport()
-        mock.queue_response(_c("I will remember"))
-        mock.queue_response(_c("Your name is Bob"))
 
         @agent(model="mock-model", conversation_store=store)
         class SQLiteAgent2: ...
 
-        runner = _make_runner(mock)
-        asyncio.run(runner.run(SQLiteAgent2(), "My name is Bob", conversation_id="db-s"))
-        asyncio.run(runner.run(SQLiteAgent2(), "What is my name?", conversation_id="db-s"))
+        client = TestClient(SQLiteAgent2())
+        client.mock.queue_response(_c("I will remember"))
+        client.run("My name is Bob", conversation_id="db-s")
+        client.mock.queue_response(_c("Your name is Bob"))
+        client.run("What is my name?", conversation_id="db-s")
 
-        second_call_messages = mock.calls[1].messages
+        second_call_messages = client.calls[1].messages
         contents = [m["content"] for m in second_call_messages if isinstance(m["content"], str)]
         assert "My name is Bob" in contents
