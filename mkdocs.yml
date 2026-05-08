@@ -31,6 +31,27 @@ theme:
 
 plugins:
   - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            heading_level: 2
+            members_order: source
+            separate_signature: true
+            merge_init_into_class: true
+            docstring_section_style: table
+            filters:
+              - "!^_"
+              - "!^__"
+
+watch:
+  - src/lauren_ai/
 
 markdown_extensions:
   - admonition

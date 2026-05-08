@@ -3,6 +3,10 @@ name: building-agents
 description: Builds AI agents with the lauren-ai framework using @agent, @use_tools, and AgentRunner. Use when defining an agent class, setting up lifecycle hooks, streaming responses, implementing agent delegation, or configuring the agentic loop with tools, guardrails, and memory.
 ---
 
+> Use `codemap find "SymbolName"` to locate any symbol before reading — it gives
+> exact file + line range and is faster than grep across the whole repo.
+
+
 # Building Agents with lauren-ai
 
 ## Quick start

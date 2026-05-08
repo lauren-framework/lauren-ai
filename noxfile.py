@@ -172,15 +172,37 @@ def eval_(session: nox.Session) -> None:
 
 @nox.session(name="docs", python=DEFAULT_PYTHON)
 def docs(session: nox.Session) -> None:
-    """Build the MkDocs documentation."""
-    session.install("mkdocs>=1.6", "mkdocs-material>=9.5", "pymdown-extensions>=10.7")
+    """Build the MkDocs documentation site into ./site (strict mode).
+
+    Also regenerates docs/generated-reference/ — plain-Markdown API reference
+    consumed by the lauren-ai-website (Next.js).  Generated files are committed
+    to the repo so the website's production build works without Python.
+    """
+    session.install(
+        "mkdocs>=1.6",
+        "mkdocs-material>=9.5",
+        "pymdown-extensions>=10.7",
+        "mkdocstrings[python]>=0.27",
+        "griffe>=1.0",
+    )
+    session.run("python", "scripts/generate_api_docs.py")
     session.run("mkdocs", "build", "--strict")
 
 
 @nox.session(name="docs_serve", python=DEFAULT_PYTHON)
 def docs_serve(session: nox.Session) -> None:
-    """Serve the MkDocs documentation locally."""
-    session.install("mkdocs>=1.6", "mkdocs-material>=9.5", "pymdown-extensions>=10.7")
+    """Serve the MkDocs documentation locally with live reload.
+
+    Also regenerates docs/generated-reference/ before starting the server.
+    """
+    session.install(
+        "mkdocs>=1.6",
+        "mkdocs-material>=9.5",
+        "pymdown-extensions>=10.7",
+        "mkdocstrings[python]>=0.27",
+        "griffe>=1.0",
+    )
+    session.run("python", "scripts/generate_api_docs.py")
     session.run("mkdocs", "serve")
 
 

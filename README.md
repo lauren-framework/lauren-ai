@@ -19,6 +19,16 @@ First-party AI/LLM companion to the [Lauren web framework](https://github.com/la
 - **Pre-built skills** — `WebSearchTool`, `CodeExecutionTool`, `HttpFetchTool`
 - **Testable** — zero API calls needed in unit tests via `MockTransport`
 
+## For AI Agents & Coding Assistants
+
+| Resource | What it contains |
+|---|---|
+| [`llms.txt`](llms.txt) | 2 KB overview — start here |
+| [`llms-full.txt`](llms-full.txt) | Complete reference — all decorators, memory, guardrails, teams, errors |
+| [`AGENTS.md`](AGENTS.md) | By-task lookup, common errors, skills index, definition of done |
+| [`CLAUDE.md`](CLAUDE.md) | Architecture invariants, pattern selection, codemap navigation |
+| [`skills/`](skills/) | 11 copy-paste skill guides for every common task |
+
 ## Installation
 
 ```bash

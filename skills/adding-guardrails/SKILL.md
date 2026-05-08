@@ -3,6 +3,10 @@ name: adding-guardrails
 description: Adds content safety filters to lauren-ai agents using @use_guardrails for input and output checks. Use when an agent needs prompt injection protection, PII redaction, topic filtering, length limiting, or LLM-powered content evaluation. Also covers creating custom guardrail classes injectable via @guardrail.
 ---
 
+> Use `codemap find "SymbolName"` to locate any symbol before reading — it gives
+> exact file + line range and is faster than grep across the whole repo.
+
+
 # Adding Guardrails to Agents
 
 ## Quick start

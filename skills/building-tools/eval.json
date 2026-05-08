@@ -1,0 +1,32 @@
+{
+  "skill": "building-tools",
+  "scenarios": [
+    {
+      "query": "Write a @tool function that takes a city name and returns weather data",
+      "expected_behavior": [
+        "Uses @tool() with parentheses",
+        "Function is async",
+        "File does NOT contain 'from __future__ import annotations'",
+        "Parameters have explicit type annotations",
+        "Docstring uses Google style with Args section for schema generation"
+      ]
+    },
+    {
+      "query": "Write a class-form tool that injects a database service via DI",
+      "expected_behavior": [
+        "Class decorated with both @tool() and @injectable(scope=Scope.SINGLETON)",
+        "Database injected via __init__ constructor parameter",
+        "Implements run() method (not __call__)",
+        "ToolContext is first parameter of run() after self"
+      ]
+    },
+    {
+      "query": "Read the authenticated user's ID inside a tool",
+      "expected_behavior": [
+        "Reads from ctx.execution_context.request.state.get('user_id')",
+        "Does NOT accept user_id as a regular tool parameter from the LLM",
+        "Handles None case (unauthenticated request)"
+      ]
+    }
+  ]
+}

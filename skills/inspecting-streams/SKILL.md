@@ -3,6 +3,10 @@ name: inspecting-streams
 description: Inspects the raw token stream a real LLM emits for a given system + user prompt, with chunk boundaries preserved. Use when debugging dense / unformatted model output (run-on text, missing newlines, glued-on emoji), validating that a system-prompt change produces the markdown structure you expected, or comparing two prompts / models side-by-side without spinning up the agentic loop or any tools.
 ---
 
+> Use `codemap find "SymbolName"` to locate any symbol before reading — it gives
+> exact file + line range and is faster than grep across the whole repo.
+
+
 # Inspecting LLM Streams
 
 ## When to use

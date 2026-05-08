@@ -3,6 +3,10 @@ name: building-teams
 description: Builds multi-agent teams in lauren-ai using @team and TeamRunner for coordinator and collaborate modes. Use when implementing a @team() class with multiple workers, running TeamRunner.run() or run_stream(), handling TeamWorkerStarted/Finished/TeamFinalAnswer events, or streaming team progress over SSE in a web controller.
 ---
 
+> Use `codemap find "SymbolName"` to locate any symbol before reading — it gives
+> exact file + line range and is faster than grep across the whole repo.
+
+
 # Building Multi-Agent Teams
 
 ## Quick start

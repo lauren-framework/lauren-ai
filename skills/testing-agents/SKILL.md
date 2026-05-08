@@ -3,6 +3,10 @@ name: testing-agents
 description: Tests lauren-ai agents with zero real network calls using MockTransport and AgentTestClient. Use when writing unit tests for agents, tools, or guardrails, simulating multi-turn tool-use flows, testing conversation memory, or verifying secure tool behaviour with mocked execution context.
 ---
 
+> Use `codemap find "SymbolName"` to locate any symbol before reading — it gives
+> exact file + line range and is faster than grep across the whole repo.
+
+
 # Testing Agents
 
 ## Quick start

@@ -161,6 +161,8 @@ class MyTeam:
 The `ToolContext` parameter is **never** included in the JSON schema — it is injected
 internally by `ToolExecutor` and never exposed to the LLM.
 
+→ *See `skills/building-tools/` for schema-gen pitfalls, class-form tools, and `ToolContext` DI patterns.*
+
 ---
 
 ## Agent DI — auto-injectable singletons
@@ -271,6 +273,8 @@ Tool-based delegation (as used in the chatbot example) calls
 `AgentRunner.run(specialist, task)` directly and returns the result as a plain
 dict tool result — no exception involved.
 
+→ *See `skills/building-agents/` for decorator stacking and lifecycle hook examples.*
+
 ---
 
 ## Teams — coordinator vs collaborate mode
@@ -285,6 +289,8 @@ dict tool result — no exception involved.
 - `TeamWorkerFinished(worker_name, result_content, round)`
 - `TeamCoordinatorDecision(decision, round)`
 - `TeamFinalAnswer(content, rounds)`
+
+→ *See `skills/building-teams/` for coordinator vs collaborate patterns and `TeamRunner` streaming.*
 
 ---
 
@@ -366,6 +372,8 @@ result = await client.run("What is 6 * 7?")
 assert result.content == "42"
 ```
 
+→ *See `skills/testing-agents/` for `MockTransport` fixtures, multi-turn test patterns, and memory assertions.*
+
 ---
 
 ## Adding a new built-in skill
@@ -376,6 +384,40 @@ assert result.content == "42"
 4. Document it in `skills/tools.md` and `AGENTS.md`.
 
 ---
+
+## Choosing the Right Approach
+
+**Single agent vs team:**
+- A single `@agent` with multiple `@tool`s handles most tasks. Add `@team` only when you need true parallelism, or when sub-agents require conflicting system prompts that would confuse a single agent.
+- Use `coordinator` mode when one orchestrating agent decides which sub-agents to invoke. Use `collaborate` mode when all team members work on the same problem concurrently and synthesise results.
+
+**Memory tier selection:**
+
+| Need | Solution |
+|---|---|
+| Conversation continuity within a session | `InMemoryConversationStore` on `@agent(conversation_store=...)` |
+| Conversation history across multiple requests | Persistent `ConversationStore` implementation |
+| Per-user facts that survive sessions | `@remember` field + `UserMemoryStore` |
+| Semantic search over a large corpus | `KnowledgeBase` + `VectorStore` via `@use_knowledge_sources` |
+
+**Streaming vs blocking:**
+- Prefer `runner.run_stream()` for user-facing endpoints — tokens arrive as they are generated.
+- Use `runner.run()` for tool-driven pipelines where the full result is required before proceeding.
+
+**Guardrails vs system-prompt instructions:**
+- System-prompt instructions are suggestions to the LLM and can be overridden by a sufficiently adversarial input.
+- `@use_guardrails(output=[...])` enforces constraints at the Python layer — use it when scope enforcement must be non-negotiable (e.g. preventing an agent from answering questions outside its domain).
+
+→ *See `skills/building-agents/` for decorator stacking patterns and `skills/building-teams/` for coordinator vs collaborate examples.*
+
+**Symbol lookup (fastest navigation):** Use `codemap` before grepping:
+
+```bash
+codemap find "AgentRunner"               # → src/lauren_ai/_agents/_runner.py:L-L
+codemap find "ToolContext"               # → src/lauren_ai/_tools/__init__.py:L-L
+codemap show src/lauren_ai/_module.py   # full symbol map with line ranges
+codemap find "on_finish" --type method
+```
 
 ## Production security invariants (from the banking chatbot)
 

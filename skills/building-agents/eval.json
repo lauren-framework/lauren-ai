@@ -1,0 +1,30 @@
+{
+  "skill": "building-agents",
+  "scenarios": [
+    {
+      "query": "Create an agent that uses a weather tool and streams the response",
+      "expected_behavior": [
+        "Uses @agent() decorator with parentheses",
+        "@agent is outermost, @use_tools innermost",
+        "Tool file does NOT have 'from __future__ import annotations'",
+        "Uses runner.run_stream() and yields chunk.delta for tokens"
+      ]
+    },
+    {
+      "query": "Add an on_finish lifecycle hook that logs the total cost",
+      "expected_behavior": [
+        "Defines on_finish(self, response: AgentResponse, ctx: AgentContext) method",
+        "Reads response.total_cost_usd or ctx.metadata",
+        "Does not override the return value (returns None)"
+      ]
+    },
+    {
+      "query": "Configure an agent with a 10-turn limit and isolated conversation history",
+      "expected_behavior": [
+        "Sets max_turns=10 on @agent()",
+        "Passes conversation_store=InMemoryConversationStore() on @agent()",
+        "Does not share the store instance between multiple agents"
+      ]
+    }
+  ]
+}

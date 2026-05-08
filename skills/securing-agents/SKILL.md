@@ -3,6 +3,10 @@ name: securing-agents
 description: Secures lauren-ai agents against prompt injection and identity spoofing using the ToolContext trust chain. Use when tools must verify the acting user's identity, when building financial or administrative operations, or when tools should never trust LLM-supplied user_id parameters.
 ---
 
+> Use `codemap find "SymbolName"` to locate any symbol before reading — it gives
+> exact file + line range and is faster than grep across the whole repo.
+
+
 # Securing Agents with lauren-ai
 
 ## The trust chain

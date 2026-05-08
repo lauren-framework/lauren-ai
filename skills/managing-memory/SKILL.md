@@ -3,6 +3,10 @@ name: managing-memory
 description: Manages memory tiers in lauren-ai agents — short-term rolling window, conversation history, user memory facts with @remember, and vector store for RAG. Use when adding persistent memory to an agent, implementing @remember() for long-term facts, using ConversationStore across sessions, or building RAG with InMemoryVectorStore.
 ---
 
+> Use `codemap find "SymbolName"` to locate any symbol before reading — it gives
+> exact file + line range and is faster than grep across the whole repo.
+
+
 # Managing Memory in Agents
 
 ## Memory tier overview

@@ -870,6 +870,73 @@ class DelegateToBankingTransfer:
 
 ---
 
+## By-Task Quick Lookup
+
+| I need to… | Read first | Copy-paste guide |
+|---|---|---|
+| Define a new agent | `src/lauren_ai/_agents/_agent.py` | `skills/building-agents/` |
+| Write a tool (function or class form) | `src/lauren_ai/_tools/__init__.py` | `skills/building-tools/` |
+| Build a multi-agent team | `src/lauren_ai/_teams/` | `skills/building-teams/` |
+| Add / query conversation or user memory | `src/lauren_ai/_memory/` | `skills/managing-memory/` |
+| Add input/output guardrails | `src/lauren_ai/_guardrails/` | `skills/adding-guardrails/` |
+| Secure agent identity from tools | `src/lauren_ai/_agents/_runner.py` | `skills/securing-agents/` |
+| Test an agent without live API calls | `tests/unit/` | `skills/testing-agents/` |
+| Wire agents into a Lauren web app | `src/lauren_ai/_module.py` | `skills/integrating-with-lauren/` |
+| Inspect raw LLM stream / debug chunks | `src/lauren_ai/_transport/` | `skills/inspecting-streams/` |
+| Debug a startup or schema error | `src/lauren_ai/_tools/__init__.py` | **Common Errors** section below |
+| Migrate from LangChain / OpenAI SDK | `llms-full.txt` | `skills/migrating-to-lauren-ai/` |
+| Copy a complete working agent | `tests/integration/` | `skills/common-agent-patterns/` |
+
+## Common Errors
+
+| Error / Symptom | Cause | Fix |
+|---|---|---|
+| Tool schema is `{}` or missing parameters | Tool file has `from __future__ import annotations` | Remove the import — PEP 563 lazy evaluation breaks `inspect.signature()` |
+| `AgentRunner[X]` resolves to wrong runner | Two `AgentModule.for_root()` calls register the same agent | Use `shared_tools=` to deduplicate, or merge into one module |
+| `ModuleExportViolation` on `AgentRunner[X]` | Runner injected across module boundary without export | Add the type to `exports=` in the owning `AgentModule` |
+| `ProtocolAmbiguityError` on `AgentRunner` | Bare `AgentRunner` annotation where two runners are visible | Use `AgentRunner[AgentX]` (parameterized form) — see CLAUDE.md §4 |
+| Guardrail fires but SSE content not replaced | `guardrail_override` chunk not yielded in the streaming controller | Yield `ServerSentEvent(event="guardrail_override", data=chunk.guardrail_override)` |
+| Memory not persisted across turns | Different `conversation_id` passed on each call | Pass the same `conversation_id` on every `runner.run()` / `runner.run_stream()` call |
+| Signal handler fires N times (duplicate events) | `EventForwarder` re-created on hot-reload without clearing old handlers | Call `signal_bus.clear(EventType)` before re-registering in `__init__` |
+| `@use_guardrails` has no effect | Decorator applied **below** `@agent()` instead of above | Apply `@use_guardrails` **above** `@agent()` — bottom-up decorator application |
+| `TypeError: on_start() missing positional arg` | Agent class (not instance) passed to `runner.run()` | Pass a DI-resolved **instance**: `runner.run(my_agent_instance, ...)` |
+| `DecoratorUsageError` on `@use_knowledge_sources` | Knowledge source not listed in `AgentModule.for_root(knowledge=[...])` | Add the source to the module's `knowledge=` argument |
+
+## Skills Quick Index
+
+| Task | Skill directory |
+|---|---|
+| Define agents, lifecycle hooks, streaming | `skills/building-agents/` |
+| Write `@tool` functions and classes, ToolContext DI | `skills/building-tools/` |
+| Coordinator and collaborate multi-agent teams | `skills/building-teams/` |
+| Conversation, user-fact, and vector-store memory | `skills/managing-memory/` |
+| Input/output guardrails, PII, scope enforcement | `skills/adding-guardrails/` |
+| Identity trust chain, ToolContext security | `skills/securing-agents/` |
+| MockTransport, AgentTestClient, multi-turn tests | `skills/testing-agents/` |
+| LLMModule, AgentModule, SSE, ExecutionContext | `skills/integrating-with-lauren/` |
+| Raw stream debug, chunk/event inspection | `skills/inspecting-streams/` |
+| LangChain / OpenAI SDK → lauren-ai equivalents | `skills/migrating-to-lauren-ai/` |
+| Copy-paste complete agents | `skills/common-agent-patterns/` |
+
+Full index: [`skills/README.md`](skills/README.md)
+
+## Docs Map
+
+| Concept | Guide |
+|---|---|
+| Agent definition and lifecycle hooks | `docs/guides/agents.md` |
+| Tool building (function, class, built-ins) | `docs/guides/tools.md` |
+| Multi-agent teams (coordinator, collaborate) | `docs/guides/agent-teams.md` |
+| Memory (conversation, user facts, vector store) | `docs/guides/memory.md` |
+| Guardrails (input/output, LLM-powered) | `docs/guides/guardrails.md` |
+| Knowledge base / RAG | `docs/guides/knowledge-base.md` |
+| Cost tracking and token budgets | `docs/guides/cost-tracking.md` |
+| SSE streaming with Lauren framework | `docs/guides/lauren-integration.md` |
+| Testing with MockTransport | `docs/guides/testing.md` |
+| Output parsers (JSON, Pydantic, Regex, …) | `docs/guides/output-parsers.md` |
+| Tracing / observability | `docs/guides/tracing.md` |
+| Evaluation framework (AccuracyEval, AgentJudge) | `docs/guides/evaluation.md` |
+
 ## Anti-patterns to avoid
 
 - **Do not** use `from __future__ import annotations` in **function-form** `@tool()` files — it breaks schema generation (see note in `@tool()` section; class-form tools may use it for DI cycle-breaking).

@@ -3,6 +3,10 @@ name: building-tools
 description: Creates tools for lauren-ai agents using @tool() on async functions or classes. Use when implementing a @tool() function or class, working with ToolContext for DI injection, adding caching, HITL approval, or using built-in skills like WebSearchTool, HttpFetchTool, or CodeExecutionTool.
 ---
 
+> Use `codemap find "SymbolName"` to locate any symbol before reading — it gives
+> exact file + line range and is faster than grep across the whole repo.
+
+
 # Building Tools with lauren-ai
 
 ## Critical rule — no PEP 563 in tool files

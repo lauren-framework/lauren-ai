@@ -1,5 +1,11 @@
 mkdocs>=1.6
 mkdocs-material>=9.5
 pymdown-extensions>=10.7
-mkdocstrings[python]>=0.25
+mkdocstrings[python]>=0.27
 mkdocs-autorefs>=1.0
+# griffe is pulled in by mkdocstrings[python] but listed explicitly so it
+# is visible in requirements and so scripts/generate_api_docs.py can be run
+# with just: pip install griffe
+griffe>=1.0
+# ruff provides better signature formatting in mkdocstrings output
+ruff>=0.4

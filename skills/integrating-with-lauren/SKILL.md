@@ -3,6 +3,10 @@ name: integrating-with-lauren
 description: Wires lauren-ai into a lauren web framework application. Use when setting up LLMModule/AgentModule, streaming agent responses as SSE, securing tools with ExecutionContext, routing SignalBus events to WebSocket clients, or injecting multiple runners via AgentRunner[X].
 ---
 
+> Use `codemap find "SymbolName"` to locate any symbol before reading — it gives
+> exact file + line range and is faster than grep across the whole repo.
+
+
 # Integrating lauren-ai with the lauren Framework
 
 ## Module wiring
