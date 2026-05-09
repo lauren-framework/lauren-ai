@@ -1,71 +1,89 @@
-"""Nox automation sessions for lauren-ai."""
+"""Nox automation for lauren-ai.
+
+This file is the canonical task runner — every check that runs in CI runs
+here.
+
+Discoverability
+---------------
+List every session::
+
+    nox -l
+
+Run the default session set (everything that gates a PR)::
+
+    nox
+
+Run one session::
+
+    nox -s tests
+    nox -s lint
+    nox -s docs
+
+Pass extra arguments to the session's tool (after ``--``)::
+
+    nox -s tests -- -k agent -v
+    nox -s docs -- --strict
+
+Design principles
+-----------------
+1. **Idempotent.** Every session is safe to re-run; isolated venvs prevent
+   bleed-through.
+2. **Reuse-friendly.** Sessions opt into ``reuse_venv=True`` whenever the
+   environment is expensive to create and stable across runs (linting,
+   docs, type-checking).
+3. **CI parity.** A green ``nox`` locally implies green CI; both call the
+   same code paths.
+4. **No hidden state.** Build / release sessions wipe ``dist/`` first.
+"""
 
 from __future__ import annotations
 
 import os
+import shutil
+from pathlib import Path
 
 import nox
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Project layout
 # ---------------------------------------------------------------------------
+ROOT = Path(__file__).parent
+SRC_DIR = ROOT / "src"
+TESTS_DIR = ROOT / "tests"
+DOCS_BUILD_DIR = ROOT / "site"
+DIST_DIR = ROOT / "dist"
+BUILD_DIR = ROOT / "build"
+DOCS_REQUIREMENTS = ROOT / "docs-requirements.txt"
 
-nox.options.sessions = ["lint", "tests"]
-nox.options.default_venv_backend = "uv"
+# ---------------------------------------------------------------------------
+# Nox global configuration
+# ---------------------------------------------------------------------------
+# We pin a single primary Python for most sessions; the ``tests`` session
+# parametrises across the supported matrix below.
+#
+# ``PRIMARY_PYTHON`` is the default interpreter for single-version sessions
+# (lint, typecheck, docs, build, …). Honour the ``LAUREN_AI_PRIMARY_PYTHON``
+# env var so contributors / CI can pin to whatever interpreter is installed
+# without editing this file.
+PRIMARY_PYTHON = os.environ.get("LAUREN_AI_PRIMARY_PYTHON", "3.12")
+SUPPORTED_PYTHONS = ["3.11", "3.12", "3.13", "3.14"]
+
+# Default sessions when running ``nox`` with no -s argument.
+nox.options.sessions = ["lint", "tests", "typecheck"]
 nox.options.reuse_existing_virtualenvs = True
-# Keep envs in a user-writable location so `nox` works regardless of which
-# user originally bootstrapped the project (root vs ai-slave, etc.).
-nox.options.envdir = os.path.join(os.path.expanduser("~"), ".cache", "nox", "lauren-ai")
-
-PYTHON_VERSIONS = ["3.11", "3.12", "3.13", "3.14"]
-DEFAULT_PYTHON = "3.12"
-
-SRC = "src"
-TESTS = "tests"
-
-
-LAUREN_FRAMEWORK_PATH = "../lauren-framework"
+# ``error_on_missing_interpreters = False`` lets contributors run only the
+# Python versions they have installed locally; CI explicitly installs all.
+nox.options.error_on_missing_interpreters = False
+nox.options.stop_on_first_error = False
 
 
 def _install_dev(session: nox.Session) -> None:
     """Install all dev dependencies from pyproject.toml via uv sync.
 
-    ``uv sync`` honours ``[tool.uv.sources]`` (local path overrides),
-    so the local ``lauren-framework`` editable install is resolved
-    automatically — no need to pass the path explicitly.
+    ``uv sync`` honours ``[tool.uv.sources]`` (local path overrides), so the
+    local ``lauren-framework`` editable install is resolved automatically.
     """
     session.run("uv", "sync", "--extra", "dev", "--active", external=True)
-
-
-# ---------------------------------------------------------------------------
-# Linting & formatting
-# ---------------------------------------------------------------------------
-
-
-@nox.session(name="lint", python=DEFAULT_PYTHON)
-def lint(session: nox.Session) -> None:
-    """Run ruff lint and format checks."""
-    session.install("ruff>=0.4")
-    session.run("ruff", "check", "--fix", SRC, TESTS, "noxfile.py")
-
-
-@nox.session(name="format", python=DEFAULT_PYTHON)
-def format_(session: nox.Session) -> None:
-    """Auto-fix lint issues and reformat code."""
-    session.install("ruff>=0.4")
-    session.run("ruff", "format", SRC, TESTS, "noxfile.py")
-
-
-# ---------------------------------------------------------------------------
-# Type checking
-# ---------------------------------------------------------------------------
-
-
-@nox.session(name="typecheck", python=DEFAULT_PYTHON)
-def typecheck(session: nox.Session) -> None:
-    """Run mypy strict type checking."""
-    _install_dev(session)
-    session.run("mypy", SRC)
 
 
 # ---------------------------------------------------------------------------
@@ -73,95 +91,110 @@ def typecheck(session: nox.Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-@nox.session(name="tests", python=PYTHON_VERSIONS)
+@nox.session(python=SUPPORTED_PYTHONS)
 def tests(session: nox.Session) -> None:
-    """Run all non-benchmark, non-eval tests with coverage."""
+    """Run the full test suite (unit + integration)."""
     _install_dev(session)
-    session.run(
-        "pytest",
-        TESTS,
-        "-q",
-        *session.posargs,
-    )
+    args = session.posargs or ["-q"]
+    session.run("pytest", str(TESTS_DIR), *args)
 
 
-@nox.session(name="coverage", python=DEFAULT_PYTHON)
+@nox.session(python=PRIMARY_PYTHON, name="tests_unit")
+def tests_unit(session: nox.Session) -> None:
+    """Run only unit tests under tests/unit/."""
+    _install_dev(session)
+    args = session.posargs or ["-q"]
+    session.run("pytest", str(TESTS_DIR / "unit"), *args)
+
+
+@nox.session(python=PRIMARY_PYTHON, name="tests_integration")
+def tests_integration(session: nox.Session) -> None:
+    """Run only integration tests under tests/integration/."""
+    _install_dev(session)
+    args = session.posargs or ["-q"]
+    session.run("pytest", str(TESTS_DIR / "integration"), *args)
+
+
+@nox.session(python=PRIMARY_PYTHON, name="tests_verbose")
+def tests_verbose(session: nox.Session) -> None:
+    """Run the full test suite with verbose output."""
+    _install_dev(session)
+    args = session.posargs or ["-v"]
+    session.run("pytest", str(TESTS_DIR), *args)
+
+
+@nox.session(python=PRIMARY_PYTHON)
 def coverage(session: nox.Session) -> None:
-    """Run all non-benchmark, non-eval tests with coverage."""
+    """Run tests under coverage and print a terminal summary."""
     _install_dev(session)
-    session.run(
-        "pytest",
-        TESTS,
-        "--cov=lauren_ai",
+    session.run("uv", "pip", "install", "coverage[toml]", "pytest-cov", external=True)
+    args = session.posargs or [
+        str(TESTS_DIR / "unit"),
+        str(TESTS_DIR / "integration"),
         "--cov-report=term-missing",
         "--cov-report=xml",
+    ]
+    session.run(
+        "pytest",
+        "--cov=lauren_ai",
+        "--cov-branch",
+        *args,
         "-q",
-        *session.posargs,
     )
 
 
-@nox.session(name="tests_unit", python=DEFAULT_PYTHON)
-def tests_unit(session: nox.Session) -> None:
-    """Run unit tests only."""
-    _install_dev(session)
-    session.run(
-        "pytest",
-        f"{TESTS}/unit",
-        "-v",
-        *session.posargs,
-    )
-
-
-@nox.session(name="tests_integration", python=DEFAULT_PYTHON)
-def tests_integration(session: nox.Session) -> None:
-    """Run integration tests (may require external services / API keys)."""
-    _install_dev(session)
-    session.run(
-        "pytest",
-        f"{TESTS}/integration",
-        "-v",
-        "--no-header",
-        *session.posargs,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Benchmarks
-# ---------------------------------------------------------------------------
-
-
-@nox.session(name="benchmark", python=DEFAULT_PYTHON)
+@nox.session(python=PRIMARY_PYTHON)
 def benchmark(session: nox.Session) -> None:
-    """Run benchmark tests (excluded from default run)."""
+    """Run performance benchmarks (excluded from the default test run)."""
     _install_dev(session)
-    session.install("pytest-benchmark>=4.0")
-    session.run(
-        "pytest",
-        f"{TESTS}/benchmarks",
-        "-m",
-        "benchmark",
-        "--benchmark-autosave",
-        *session.posargs,
-    )
+    session.run("uv", "pip", "install", "pytest-benchmark>=4.0", external=True)
+    args = session.posargs or ["-v", "-m", "benchmark", str(TESTS_DIR / "benchmarks")]
+    session.run("pytest", *args)
 
 
-# ---------------------------------------------------------------------------
-# Evaluation tests
-# ---------------------------------------------------------------------------
-
-
-@nox.session(name="eval", python=DEFAULT_PYTHON)
+@nox.session(python=PRIMARY_PYTHON)
 def eval_(session: nox.Session) -> None:
     """Run evaluation tests (requires ANTHROPIC_API_KEY)."""
     _install_dev(session)
-    session.run(
-        "pytest",
-        "-m",
-        "eval",
-        f"{TESTS}/eval",
-        "-v",
-        *session.posargs,
-    )
+    args = session.posargs or ["-m", "eval", "-v", str(TESTS_DIR / "eval")]
+    session.run("pytest", *args)
+
+
+# ---------------------------------------------------------------------------
+# Lint / type-check
+# ---------------------------------------------------------------------------
+
+
+@nox.session(python=PRIMARY_PYTHON, reuse_venv=True)
+def lint(session: nox.Session) -> None:
+    """Run ruff against the package and tests.
+
+    Use ``nox -s lint -- --fix`` to auto-fix.
+    """
+    session.install("ruff>=0.6")
+    extra = session.posargs or []
+    session.run("ruff", "check", "src", "tests", *extra)
+    session.run("ruff", "format", "--check", "src", "tests", external=False)
+
+
+@nox.session(python=PRIMARY_PYTHON, reuse_venv=True)
+def format(session: nox.Session) -> None:  # noqa: A001
+    """Auto-format the codebase with ruff.
+
+    This *writes* changes. Run ``nox -s lint`` afterwards to verify.
+    """
+    session.install("ruff>=0.6")
+    session.run("ruff", "format", "src", "tests")
+    session.run("ruff", "check", "--fix", "src", "tests")
+
+
+@nox.session(python=PRIMARY_PYTHON, reuse_venv=True)
+def typecheck(session: nox.Session) -> None:
+    """Run mypy over the lauren_ai package."""
+    _install_dev(session)
+    session.run("uv", "pip", "install", "mypy>=1.10", external=True)
+    args = session.posargs or ["src"]
+    session.run("mypy", *args)
 
 
 # ---------------------------------------------------------------------------
@@ -169,40 +202,65 @@ def eval_(session: nox.Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-@nox.session(name="docs", python=DEFAULT_PYTHON)
+@nox.session(python=PRIMARY_PYTHON, reuse_venv=True)
+def docs_install(session: nox.Session) -> None:
+    """Install MkDocs + Material requirements."""
+    if DOCS_REQUIREMENTS.exists():
+        session.install("-r", str(DOCS_REQUIREMENTS))
+    else:
+        session.install(
+            "mkdocs>=1.6",
+            "mkdocs-material>=9.5",
+            "pymdown-extensions>=10.7",
+            "mkdocstrings[python]>=0.27",
+            "griffe>=1.0",
+        )
+
+
+@nox.session(python=PRIMARY_PYTHON, reuse_venv=True)
 def docs(session: nox.Session) -> None:
-    """Build the MkDocs documentation site into ./site (strict mode).
+    """Build the documentation site into ./site (strict mode).
 
-    Also regenerates docs/generated-reference/ — plain-Markdown API reference
-    consumed by the lauren-ai-website (Next.js).  Generated files are committed
-    to the repo so the website's production build works without Python.
+    Also regenerates docs/generated-reference/ — the plain-Markdown API
+    reference consumed by the lauren-ai-website (Next.js).  The generated
+    files are committed to the repo so the website's production build works
+    without requiring Python.
+
+    Strict mode treats any warning as an error, matching CI.
     """
-    session.install(
-        "mkdocs>=1.6",
-        "mkdocs-material>=9.5",
-        "pymdown-extensions>=10.7",
-        "mkdocstrings[python]>=0.27",
-        "griffe>=1.0",
-    )
+    if DOCS_REQUIREMENTS.exists():
+        session.install("-r", str(DOCS_REQUIREMENTS))
+    else:
+        session.install(
+            "mkdocs>=1.6",
+            "mkdocs-material>=9.5",
+            "pymdown-extensions>=10.7",
+            "mkdocstrings[python]>=0.27",
+            "griffe>=1.0",
+        )
     session.run("python", "scripts/generate_api_docs.py")
-    session.run("mkdocs", "build", "--strict")
+    args = session.posargs or ["--strict"]
+    session.run("mkdocs", "build", *args)
 
 
-@nox.session(name="docs_serve", python=DEFAULT_PYTHON)
+@nox.session(python=PRIMARY_PYTHON, reuse_venv=True, name="docs_serve")
 def docs_serve(session: nox.Session) -> None:
-    """Serve the MkDocs documentation locally with live reload.
+    """Serve the docs locally with live reload at http://localhost:8000.
 
     Also regenerates docs/generated-reference/ before starting the server.
     """
-    session.install(
-        "mkdocs>=1.6",
-        "mkdocs-material>=9.5",
-        "pymdown-extensions>=10.7",
-        "mkdocstrings[python]>=0.27",
-        "griffe>=1.0",
-    )
+    if DOCS_REQUIREMENTS.exists():
+        session.install("-r", str(DOCS_REQUIREMENTS))
+    else:
+        session.install(
+            "mkdocs>=1.6",
+            "mkdocs-material>=9.5",
+            "pymdown-extensions>=10.7",
+            "mkdocstrings[python]>=0.27",
+            "griffe>=1.0",
+        )
     session.run("python", "scripts/generate_api_docs.py")
-    session.run("mkdocs", "serve")
+    session.run("mkdocs", "serve", *session.posargs)
 
 
 # ---------------------------------------------------------------------------
@@ -210,54 +268,123 @@ def docs_serve(session: nox.Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-@nox.session(name="build", python=DEFAULT_PYTHON)
+def _clean_build_artifacts() -> None:
+    for path in (DIST_DIR, BUILD_DIR):
+        if path.exists():
+            shutil.rmtree(path)
+    for egg in ROOT.glob("*.egg-info"):
+        shutil.rmtree(egg)
+
+
+@nox.session(python=PRIMARY_PYTHON)
 def build(session: nox.Session) -> None:
-    """Build source distribution and wheel."""
-    session.install("build>=1.0")
+    """Build wheel + sdist into ./dist."""
+    _clean_build_artifacts()
+    session.install("build>=1.2")
     session.run("python", "-m", "build")
+    if DIST_DIR.exists():
+        session.log("Built artefacts:")
+        for art in sorted(DIST_DIR.iterdir()):
+            session.log(f"  {art.name}  ({art.stat().st_size} bytes)")
 
 
-@nox.session(name="build_check", python=DEFAULT_PYTHON)
+@nox.session(python=PRIMARY_PYTHON, name="build_check")
 def build_check(session: nox.Session) -> None:
-    """Check the built distributions with twine."""
-    build(session)
-    session.install("twine>=5.0")
-    session.run("twine", "check", "dist/*")
+    """Validate the built distributions with ``twine check``."""
+    if not DIST_DIR.exists() or not any(DIST_DIR.iterdir()):
+        session.error(
+            "dist/ is empty; run `nox -s build` first or chain them: "
+            "`nox -s build build_check`."
+        )
+    session.install("twine>=5.1")
+    session.run("twine", "check", *[str(p) for p in DIST_DIR.iterdir()])
 
 
-@nox.session(name="release_test", python=DEFAULT_PYTHON)
+@nox.session(python=PRIMARY_PYTHON, name="release_test")
 def release_test(session: nox.Session) -> None:
-    """Publish to TestPyPI."""
-    build(session)
-    session.install("twine>=5.0")
+    """Upload wheel + sdist to TestPyPI."""
+    build(session)  # type: ignore[arg-type]
+    build_check(session)  # type: ignore[arg-type]
+    session.install("twine>=5.1")
+    session.log("Uploading to TestPyPI...")
     session.run(
         "twine",
         "upload",
-        "--repository",
-        "testpypi",
-        "dist/*",
+        "--repository-url",
+        "https://test.pypi.org/legacy/",
+        *[str(p) for p in DIST_DIR.iterdir()],
     )
 
 
-@nox.session(name="release", python=DEFAULT_PYTHON)
+@nox.session(python=PRIMARY_PYTHON)
 def release(session: nox.Session) -> None:
-    """Publish to PyPI."""
-    build(session)
-    session.install("twine>=5.0")
-    session.run("twine", "upload", "dist/*")
+    """Upload wheel + sdist to the real PyPI.
+
+    This is destructive and irreversible. Refuses to run without an
+    explicit ``--yes`` posarg::
+
+        nox -s release -- --yes
+
+    Prefer the GitHub Actions ``release`` workflow + PyPI Trusted
+    Publishing; this session is the local-only fallback.
+    """
+    if "--yes" not in session.posargs:
+        session.error(
+            "Refusing to release without --yes. "
+            "Run: nox -s release -- --yes\n"
+            "Better: tag the commit (`git tag vX.Y.Z && git push --tags`) "
+            "and let .github/workflows/release.yml publish via OIDC."
+        )
+    build(session)  # type: ignore[arg-type]
+    build_check(session)  # type: ignore[arg-type]
+    session.install("twine>=5.1")
+    session.log("Publishing to https://pypi.org/project/lauren-ai/ ...")
+    session.run("twine", "upload", *[str(p) for p in DIST_DIR.iterdir()])
+    session.log("")
+    session.log("Released. Verify with: pip install lauren-ai")
 
 
 # ---------------------------------------------------------------------------
-# CI composite
+# Repository hygiene
 # ---------------------------------------------------------------------------
 
 
-@nox.session(name="ci", python=DEFAULT_PYTHON)
-def ci(session: nox.Session) -> None:
-    """Run lint + tests + typecheck (full CI pipeline)."""
-    lint(session)
-    tests(session)
-    typecheck(session)
+@nox.session(python=False)
+def clean(session: nox.Session) -> None:
+    """Remove build artefacts, caches, and the docs site.
+
+    Uses ``python=False`` so we don't bother creating a virtualenv.
+    """
+    targets = [
+        BUILD_DIR,
+        DIST_DIR,
+        DOCS_BUILD_DIR,
+        ROOT / ".pytest_cache",
+        ROOT / ".mypy_cache",
+        ROOT / ".ruff_cache",
+        ROOT / ".coverage",
+        ROOT / "htmlcov",
+        ROOT / "coverage.xml",
+        ROOT / ".nox",
+    ]
+    for path in targets:
+        if path.exists():
+            session.log(f"Removing {path.relative_to(ROOT)}")
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+    for egg in ROOT.glob("*.egg-info"):
+        session.log(f"Removing {egg.relative_to(ROOT)}")
+        shutil.rmtree(egg)
+    removed = 0
+    for pycache in ROOT.rglob("__pycache__"):
+        if any(part in {".venv", "venv", ".nox"} for part in pycache.parts):
+            continue
+        shutil.rmtree(pycache)
+        removed += 1
+    if removed:
+        session.log(f"Removed {removed} __pycache__ directories")
 
 
 # ---------------------------------------------------------------------------
@@ -265,13 +392,13 @@ def ci(session: nox.Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-@nox.session(name="prek", python=DEFAULT_PYTHON, reuse_venv=True)
+@nox.session(python=PRIMARY_PYTHON, reuse_venv=True)
 def prek(session: nox.Session) -> None:
-    """Run the prek (pre-commit) hook suite.
+    """Run the prek (pre-commit) hook suite across the repository.
 
-    Locally, install prek globally once (``uv tool install prek``) and let
-    ``prek install`` wire up the git hook.  This session is for CI and one-off
-    runs.
+    Locally, you almost certainly want to install prek once globally
+    (``uv tool install prek``) and let ``prek install`` wire up the
+    git hook — this session exists for CI and one-off runs.
 
     Pass extra arguments after ``--``::
 
@@ -284,56 +411,74 @@ def prek(session: nox.Session) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Utilities
+# Convenience aggregator
 # ---------------------------------------------------------------------------
 
 
-@nox.session(name="clean", python=DEFAULT_PYTHON)
-def clean(session: nox.Session) -> None:
-    """Remove build artifacts and common junk files recursively."""
-    import shutil
-    from pathlib import Path
+@nox.session(python=False, name="ci")
+def ci(session: nox.Session) -> None:
+    """Run the full CI matrix locally (lint + tests + typecheck + docs).
 
-    ROOT = Path.cwd()
+    Equivalent to what GitHub Actions runs on a PR. Use sparingly — the
+    full matrix can take several minutes. Most of the time you only need
+    the default ``nox`` (which is ``lint`` + ``tests`` + ``typecheck``).
+    """
+    sessions = ["lint", "tests", "typecheck", "docs"]
+    nox_bin = shutil.which("nox") or "nox"
+    for s in sessions:
+        session.log(f"--- nox -s {s} ---")
+        session.run(nox_bin, "-s", s, external=True)
 
-    # Directories to remove entirely
-    DIR_TARGETS = {
-        "__pycache__",
-        ".pytest_cache",
-        ".mypy_cache",
-        ".ruff_cache",
-        ".nox",
-        ".tox",
-        "dist",
-        "build",
-        "htmlcov",
-        ".eggs",
-        "*.egg-info",
-        "node_modules",  # if present anywhere
-        ".cache",
-        "tmp",
+
+# ---------------------------------------------------------------------------
+# Backwards-compatible alias for `make help`
+# ---------------------------------------------------------------------------
+
+
+@nox.session(python=False, name="help")
+def help_session(session: nox.Session) -> None:
+    """Print every available session with its docstring."""
+    from inspect import getdoc
+
+    print("Available nox sessions:")
+    print()
+    _sessions = {
+        "benchmark", "build", "build_check", "ci", "clean", "coverage",
+        "docs", "docs_install", "docs_serve", "eval_", "format",
+        "help_session", "lint", "prek", "release", "release_test",
+        "tests", "tests_integration", "tests_unit", "tests_verbose",
+        "typecheck",
     }
+    for name, fn in sorted(globals().items()):
+        if name not in _sessions:
+            continue
+        doc = (getdoc(fn) or "").splitlines()[0] if getdoc(fn) else ""
+        display = name.rstrip("_")
+        print(f"  nox -s {display:<22}  {doc}")
+    print()
+    print("Run `nox -l` for nox's own listing.")
 
-    # File patterns to remove
-    FILE_TARGETS = {
-        "*.pyc",
-        "*.pyo",
-        "*.log",
-        "*.tmp",
-        "*.swp",
-        ".coverage",
-    }
 
-    # Remove directories
-    for pattern in DIR_TARGETS:
-        for path in ROOT.rglob(pattern):
-            if path.is_dir():
-                shutil.rmtree(path, ignore_errors=True)
-
-    # Remove files
-    for pattern in FILE_TARGETS:
-        for path in ROOT.rglob(pattern):
-            if path.is_file():
-                path.unlink(missing_ok=True)
-
-    session.log("Aggressively cleaned project junk.")
+__all__ = [
+    "benchmark",
+    "build",
+    "build_check",
+    "ci",
+    "clean",
+    "coverage",
+    "docs",
+    "docs_install",
+    "docs_serve",
+    "eval_",
+    "format",
+    "help_session",
+    "lint",
+    "prek",
+    "release",
+    "release_test",
+    "tests",
+    "tests_integration",
+    "tests_unit",
+    "tests_verbose",
+    "typecheck",
+]

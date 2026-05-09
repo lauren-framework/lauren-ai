@@ -728,10 +728,15 @@ class AgentModule:
             kb_tool = ks.kb.as_tool(name=ks.tool_name, top_k=ks.top_k)
             _categorize(kb_tool)
 
-            # Per-source DI registration.  ``type(ks)`` is ``KnowledgeSource``
-            # for the default class, the user's ``@injectable`` subclass
-            # otherwise — each becomes its own DI token bound via use_value.
-            _kb_value_providers.append(use_value(provide=type(ks), value=ks))
+            # Per-source DI registration with multi=True so that several
+            # KnowledgeSource instances sharing the same token (the common
+            # case — all use the default KnowledgeSource class) can coexist
+            # in the DI container.  Consumers that want all sources inject
+            # list[KnowledgeSource]; a user-defined subclass becomes its own
+            # distinct token and can still be injected singularly.
+            _kb_value_providers.append(
+                use_value(provide=type(ks), value=ks, multi=True)
+            )
 
             # Generate the per-source loader-injectable if the user
             # supplied loaders.  Each call creates a fresh class so the
@@ -772,9 +777,11 @@ class AgentModule:
         for _kb_loader_cls in _kb_loader_classes:
             providers.append(_kb_loader_cls)
 
-        # KnowledgeSource ``use_value`` providers — one per source.  Lets DI
-        # consumers ``Inject(KnowledgeSource)`` (or your subclass) to retrieve
-        # the configured instance.
+        # KnowledgeSource ``use_value(multi=True)`` providers — one per source.
+        # Registered as multi-bindings so several sources can share the same
+        # token without triggering DuplicateBindingError.  DI consumers inject
+        # ``list[KnowledgeSource]`` to receive all sources, or a user-defined
+        # subclass token to inject a specific source singularly.
         for _kb_value_provider in _kb_value_providers:
             providers.append(_kb_value_provider)
 
