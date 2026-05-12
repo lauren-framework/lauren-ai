@@ -23,7 +23,6 @@ from lauren_ai._tools import ToolContext, ToolResult, set_metadata, tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import TestClient
 
-
 # ---------------------------------------------------------------------------
 # SQLQueryTool implementation
 # ---------------------------------------------------------------------------
@@ -66,7 +65,7 @@ class SQLQueryTool:
             cursor = self._conn.execute(query)
             if cursor.description:
                 cols = [d[0] for d in cursor.description]
-                rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
+                rows = [dict(zip(cols, row, strict=False)) for row in cursor.fetchall()]
                 return {"rows": rows, "count": len(rows)}
             self._conn.commit()
             return {"affected": cursor.rowcount}

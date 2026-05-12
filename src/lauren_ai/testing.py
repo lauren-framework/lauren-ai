@@ -30,6 +30,7 @@ Example::
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import TYPE_CHECKING, Any
 
 __all__ = [
@@ -174,7 +175,7 @@ def _build_runner_for_agent(
     *,
     signals: Any = None,
     cache_backend: Any = None,
-    knowledge_tool_names: "set[str] | None" = None,
+    knowledge_tool_names: set[str] | None = None,
 ) -> Any:
     """Build an :class:`~lauren_ai._agents._runner.AgentRunnerBase` for *agent_instance*.
 
@@ -190,25 +191,22 @@ def _build_runner_for_agent(
     agent_cls = type(agent_instance)
     meta = getattr(agent_cls, AGENT_META, None)
 
-    tools: dict = {}
     if meta is not None:
+        tools: dict = {}
         for tool_ref in meta.tool_classes or []:
             if tool_ref is None:
                 continue
             if getattr(tool_ref, TOOL_META, None) is not None:
-                try:
+                with contextlib.suppress(Exception):  # noqa: BLE001
                     _add_to_tool_map(tools, tool_ref)
-                except Exception:  # noqa: BLE001
-                    pass
+        meta.tools = tools
 
     config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
     return AgentRunnerBase(
         transport=mock_transport,
-        tools=tools,
         config=config,
         signals=signals,
         cache_backend=cache_backend,
-        knowledge_tool_names=knowledge_tool_names,
     )
 
 
@@ -277,7 +275,7 @@ class TestClient:
         signals: Any = None,
         runner: Any = None,
         cache_backend: Any = None,
-        knowledge_tool_names: "set[str] | None" = None,
+        knowledge_tool_names: set[str] | None = None,
     ) -> None:
         from lauren_ai._transport._mock import MockTransport  # noqa: PLC0415
 
@@ -299,10 +297,10 @@ class TestClient:
         self,
         message: str,
         *,
-        conversation_id: "str | None" = None,
-        metadata: "dict[str, Any] | None" = None,
+        conversation_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
         execution_context: Any = None,
-        run_id: "str | None" = None,
+        run_id: str | None = None,
     ) -> Any:
         """Run the agent synchronously (blocks the calling thread).
 
@@ -338,10 +336,10 @@ class TestClient:
         self,
         message: str,
         *,
-        conversation_id: "str | None" = None,
-        metadata: "dict[str, Any] | None" = None,
+        conversation_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
         execution_context: Any = None,
-        run_id: "str | None" = None,
+        run_id: str | None = None,
     ) -> Any:
         """Run the agent asynchronously.
 
@@ -362,10 +360,10 @@ class TestClient:
         self,
         message: str,
         *,
-        conversation_id: "str | None" = None,
-        metadata: "dict[str, Any] | None" = None,
+        conversation_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
         execution_context: Any = None,
-        run_id: "str | None" = None,
+        run_id: str | None = None,
     ) -> Any:
         """Stream the agent's response asynchronously.
 

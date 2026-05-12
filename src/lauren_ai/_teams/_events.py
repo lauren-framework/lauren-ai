@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Stream events emitted during TeamRunner.run_stream()."""
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 

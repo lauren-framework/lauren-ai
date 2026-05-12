@@ -202,11 +202,10 @@ class InMemoryVectorStore:
         query_vec = self._embed_text(query)
 
         results: list[tuple[float, str]] = []
-        for doc_id, (content, meta, doc_vec) in self._documents.items():
+        for doc_id, (_content, meta, doc_vec) in self._documents.items():
             # Apply metadata filter
-            if filter is not None:
-                if not all(meta.get(k) == v for k, v in filter.items()):
-                    continue
+            if filter is not None and not all(meta.get(k) == v for k, v in filter.items()):
+                continue
 
             # Compute TF-IDF weighted doc vector
             tfidf_vec = self._apply_idf(doc_vec)
@@ -391,7 +390,7 @@ class InMemoryVectorStore:
             return 0.0
         if _HAS_NUMPY:
             return float(np.dot(np.array(a), np.array(b)))
-        return sum(x * y for x, y in zip(a, b))
+        return sum(x * y for x, y in zip(a, b, strict=False))
 
     # ------------------------------------------------------------------
     # Introspection

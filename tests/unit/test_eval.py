@@ -24,7 +24,6 @@ class FakeAgentClient:
         self._tool_names = tool_names or []
 
     async def run(self, message: str):
-
         class FakeToolCall:
             def __init__(self, name):
                 self.name = name

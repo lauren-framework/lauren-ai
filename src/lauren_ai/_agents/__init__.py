@@ -33,16 +33,12 @@ __all__ = [
     "use_tools",
 ]
 
-import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 if TYPE_CHECKING:
     from lauren_ai._config import AgentConfig
-    from lauren_ai._memory import ShortTermMemory
-    from lauren_ai._signals import SignalBus as _SignalBus
-    from lauren_ai._transport import TokenUsage, ToolCall
 
 C = TypeVar("C", bound=type)
 
@@ -111,6 +107,11 @@ class AgentMeta:
         :class:`~lauren_ai._module.AgentModule` this agent belongs to.  Set
         by ``AgentModule.for_root``.  Used by ``AgentRunner[X]`` resolution.
     :type runner_class: type | None
+    :param tools: Per-agent resolved tool map ``{name: (callable, ToolMeta)}``.
+        Populated by ``AgentModule.for_root`` at startup.  Mirrors exactly the
+        subset of the module's tool dict this agent is allowed to use (via
+        ``@use_tools()`` + opted-in KB tools).  Empty dict until ``for_root`` runs.
+    :type tools: dict[str, Any]
     """
 
     model: str | None
@@ -122,6 +123,7 @@ class AgentMeta:
     conversation_store: Any | None = None
     knowledge_source_filter: tuple[str, ...] | None = None
     runner_class: type | None = None
+    tools: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -399,7 +401,7 @@ def agent(
 
         return cls
 
-    return decorator  # type: ignore[return-value]
+    return decorator
 
 
 # ---------------------------------------------------------------------------
@@ -437,7 +439,7 @@ def use_tools(*tools: Any) -> Callable[[type[C]], type[C]]:
         setattr(cls, USE_TOOLS_META, existing + filtered)
         return cls
 
-    return decorator  # type: ignore[return-value]
+    return decorator
 
 
 # ---------------------------------------------------------------------------
@@ -501,7 +503,7 @@ def use_knowledge_sources(*sources: Any) -> Callable[[type[C]], type[C]]:
         setattr(cls, USE_KB_SOURCES_META, existing + names)
         return cls
 
-    return decorator  # type: ignore[return-value]
+    return decorator
 
 
 def _check_no_inherited_kb_sources(cls: type) -> None:

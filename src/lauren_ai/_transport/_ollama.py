@@ -124,10 +124,7 @@ def _message_to_ollama(message: Message) -> dict[str, Any]:
             )
         elif block.type == "tool_result":
             content = block.content
-            if isinstance(content, list):
-                content_str = json.dumps(content)
-            else:
-                content_str = str(content or "")
+            content_str = json.dumps(content) if isinstance(content, list) else str(content or "")
             tool_call_id_content.append((block.tool_use_id or "", content_str))
         elif block.type == "text":
             text_parts.append(block.text or "")
@@ -370,7 +367,8 @@ class OllamaTransport:
         return self._parse_response(data, model=model)
 
     def _parse_response(self, data: dict[str, Any], *, model: str) -> Completion:
-        """Parse an Ollama ``/api/chat`` JSON response into a :class:`~lauren_ai._transport.Completion`.
+        """Parse an Ollama ``/api/chat`` JSON response into a
+        :class:`~lauren_ai._transport.Completion`.
 
         :param data: Parsed JSON response dict.
         :param model: Model name.
@@ -461,10 +459,7 @@ class OllamaTransport:
                     for tc in raw_tool_calls:
                         fn = tc.get("function", {})
                         args = fn.get("arguments", {})
-                        if isinstance(args, dict):
-                            args_str = json.dumps(args)
-                        else:
-                            args_str = str(args)
+                        args_str = json.dumps(args) if isinstance(args, dict) else str(args)
                         tc_id = tc.get("id") or f"toolu_{uuid.uuid4().hex[:16]}"
                         _current_tool_use_id = tc_id
                         _current_tool_name = fn.get("name", "")
@@ -500,7 +495,7 @@ class OllamaTransport:
         except TransportError:
             raise
         except Exception as exc:  # noqa: BLE001
-            if isinstance(exc, httpx.TimeoutException) or isinstance(exc, httpx.ConnectError):
+            if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError)):
                 raise TransientTransportError(
                     f"Ollama connection error: {exc}",
                     provider="ollama",

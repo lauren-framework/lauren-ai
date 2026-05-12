@@ -448,7 +448,7 @@ class TestLLMGuardrail:
             prompt="Evaluate: {content}",
             block_if="BLOCK",
         )
-        decision = await guard.check("test input", make_ctx())
+        await guard.check("test input", make_ctx())
         # Verify the call was made (MockTransport records calls)
         assert len(transport.calls) == 1
         call = transport.calls[0]

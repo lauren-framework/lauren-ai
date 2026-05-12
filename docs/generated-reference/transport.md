@@ -492,4 +492,3 @@ def to_anthropic_block(self) -> dict[str, Any]
 Serialize to Anthropic API document-block format.
 
 **Returns:** `dict[str, Any]` — Dictionary suitable for the Anthropic messages API.
-

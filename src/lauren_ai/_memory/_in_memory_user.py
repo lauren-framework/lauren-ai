@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """In-memory implementation of UserMemoryStore for tests."""
+
+from __future__ import annotations
 
 from lauren_ai._memory._user import MemoryFact
 

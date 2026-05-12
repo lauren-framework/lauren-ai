@@ -191,7 +191,7 @@ class Parallel:
             return_exceptions=True,
         )
         step_results: list[StepResult] = []
-        for s, r in zip(self._steps, results):
+        for s, r in zip(self._steps, results, strict=False):
             if isinstance(r, BaseException):
                 step_results.append(StepResult(name=getattr(s, "name", "?"), output=None, error=r))
             else:

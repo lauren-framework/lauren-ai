@@ -103,4 +103,3 @@ Raised when `RetryOutputParser` exhausts its retry budget.
 |---|---|---|
 | `message` | `str` | Human-readable description of the exhaustion. |
 | `attempts` | `int` | Total number of parse attempts made. |
-

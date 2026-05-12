@@ -349,7 +349,8 @@ class TestClassToolDIInjectionAtExecution:
         assert r2.json()["tool_calls"] == 1
 
     def test_tool_result_from_dep_reaches_http_response(self):
-        """The value produced by the injected dep flows through the tool result to the HTTP response."""
+        """The value produced by the injected dep flows through
+        the tool result to the HTTP response."""
 
         @injectable(scope=Scope.SINGLETON)
         class GreetingService:
@@ -689,12 +690,13 @@ class TestSharedTools:
         return SharedTool, OwnerModule, calls
 
     def test_shared_tool_in_runner_tools(self):
-        """shared_tools instance lands in runner._tools under the correct key."""
+        """shared_tools instance lands in agent meta.tools when agent declares @use_tools."""
         import asyncio
 
         SharedTool, OwnerModule, _ = self._make_shared_tool()
 
         @agent(model=None)
+        @use_tools(SharedTool)
         class BorrowerAgent: ...
 
         cfg, mock = LLMConfig.for_testing()
@@ -711,11 +713,11 @@ class TestSharedTools:
         app = LaurenFactory.create(AppModule)
         loop = asyncio.new_event_loop()
         try:
-            runner = loop.run_until_complete(app.container.resolve(BorrowerMod.runner_class))
+            loop.run_until_complete(app.container.resolve(BorrowerMod.runner_class))
         finally:
             loop.close()
 
-        assert "shared_tool" in runner._tools
+        assert "shared_tool" in BorrowerAgent.__lauren_ai_agent__.tools
 
     def test_shared_tool_no_duplicate_provider_error(self):
         """shared_tools= does not re-register the tool, so no DuplicateBindingError."""
@@ -739,12 +741,13 @@ class TestSharedTools:
         assert app is not None
 
     def test_shared_tool_instance_is_the_di_singleton(self):
-        """The instance in runner._tools is the same object the container returns."""
+        """The instance in agent meta.tools is the same object the container returns."""
         import asyncio
 
         SharedTool, OwnerModule, _ = self._make_shared_tool()
 
         @agent(model=None)
+        @use_tools(SharedTool)
         class BorrowerAgent3: ...
 
         cfg, mock = LLMConfig.for_testing()
@@ -761,12 +764,12 @@ class TestSharedTools:
         app = LaurenFactory.create(AppModule)
         loop = asyncio.new_event_loop()
         try:
-            runner = loop.run_until_complete(app.container.resolve(BorrowerMod.runner_class))
+            loop.run_until_complete(app.container.resolve(BorrowerMod.runner_class))
             di_instance = loop.run_until_complete(app.container.resolve(SharedTool))
         finally:
             loop.close()
 
-        tool_instance, _ = runner._tools["shared_tool"]
+        tool_instance, _ = BorrowerAgent3.__lauren_ai_agent__.tools["shared_tool"]
         assert tool_instance is di_instance
 
     def test_shared_tool_agent_can_call_it(self):

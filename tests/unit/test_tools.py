@@ -38,7 +38,7 @@ class TestToolDecorator:
         assert meta.name == "custom_name"
 
     def test_bare_usage_raises(self):
-        with pytest.raises(Exception):  # DecoratorUsageError (from lauren or lauren_ai)
+        with pytest.raises(Exception):  # noqa: B017 — DecoratorUsageError
 
             @tool
             async def bad_tool(x: str) -> str:
@@ -287,7 +287,8 @@ class TestToolInheritance:
         assert "sub_ok_tool" in tools
 
     def test_non_subclass_unaffected(self):
-        """Registering an object with no TOOL_META raises ValueError, not MetadataInheritanceError."""
+        """Registering an object with no TOOL_META raises ValueError,
+        not MetadataInheritanceError."""
 
         class NoMeta:
             pass
@@ -432,7 +433,6 @@ class TestExecutionContext:
 
         runner = AgentRunner(
             transport=mock_transport,
-            tools={},
             config=LLMConfig(provider="anthropic", model="mock-model"),
         )
 
@@ -494,10 +494,10 @@ class TestExecutionContext:
 
         spy_tools = {}
         _add_to_tool_map(spy_tools, spy_tool)
+        SpyAgent.__lauren_ai_agent__.tools = spy_tools
 
         runner = AgentRunner(
             transport=mock_transport,
-            tools=spy_tools,
             config=LLMConfig(provider="anthropic", model="mock-model"),
         )
 
@@ -535,5 +535,5 @@ class TestTypeToJsonSchema:
     def test_optional_str(self):
         from typing import Optional
 
-        result = type_to_json_schema(Optional[str])
+        result = type_to_json_schema(Optional[str])  # noqa: UP045
         assert result == {"type": "string"}

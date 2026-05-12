@@ -145,7 +145,7 @@ def _make_runner(store_for_agent: InMemoryConversationStore | None = None):
 
     cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
     mock = MockTransport()
-    runner = AgentRunnerBase(transport=mock, tools={}, config=cfg)
+    runner = AgentRunnerBase(transport=mock, config=cfg)
     return runner, mock
 
 

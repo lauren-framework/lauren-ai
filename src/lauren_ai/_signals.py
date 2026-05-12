@@ -44,9 +44,11 @@ __all__ = [
     "SignalBus",
 ]
 
-T = TypeVar("T")
+import contextlib
 
 from lauren.signals import LifecycleEvent
+
+T = TypeVar("T")
 
 # ---------------------------------------------------------------------------
 # Model call signals
@@ -54,7 +56,7 @@ from lauren.signals import LifecycleEvent
 
 
 @dataclass
-class ModelCallStarted(LifecycleEvent):  # type: ignore[misc,valid-type]
+class ModelCallStarted(LifecycleEvent):  # type: ignore[misc]
     """Emitted immediately before invoking the LLM transport.
 
     :param model: The model identifier that will be called.
@@ -84,7 +86,7 @@ class ModelCallStarted(LifecycleEvent):  # type: ignore[misc,valid-type]
 
 
 @dataclass
-class ModelCallComplete(LifecycleEvent):  # type: ignore[misc,valid-type]
+class ModelCallComplete(LifecycleEvent):  # type: ignore[misc]
     """Emitted after a successful LLM completion.
 
     :param model: The model identifier that was called.
@@ -124,7 +126,7 @@ class ModelCallComplete(LifecycleEvent):  # type: ignore[misc,valid-type]
 
 
 @dataclass
-class ToolCallStarted(LifecycleEvent):  # type: ignore[misc,valid-type]
+class ToolCallStarted(LifecycleEvent):  # type: ignore[misc]
     """Emitted before dispatching a tool call.
 
     :param tool_name: Registered name of the tool being called.
@@ -148,7 +150,7 @@ class ToolCallStarted(LifecycleEvent):  # type: ignore[misc,valid-type]
 
 
 @dataclass
-class ToolCallComplete(LifecycleEvent):  # type: ignore[misc,valid-type]
+class ToolCallComplete(LifecycleEvent):  # type: ignore[misc]
     """Emitted after a tool call finishes (success or error).
 
     :param tool_name: Registered name of the tool.
@@ -177,7 +179,7 @@ class ToolCallComplete(LifecycleEvent):  # type: ignore[misc,valid-type]
 
 
 @dataclass
-class ToolPendingApproval(LifecycleEvent):  # type: ignore[misc,valid-type]
+class ToolPendingApproval(LifecycleEvent):  # type: ignore[misc]
     """Emitted when a human-in-the-loop confirmation step is required.
 
     Handlers should present the tool call details to the user and accept or
@@ -209,7 +211,7 @@ class ToolPendingApproval(LifecycleEvent):  # type: ignore[misc,valid-type]
 
 
 @dataclass
-class AgentTurnComplete(LifecycleEvent):  # type: ignore[misc,valid-type]
+class AgentTurnComplete(LifecycleEvent):  # type: ignore[misc]
     """Emitted after each agentic loop iteration (one model call + tool calls).
 
     :param agent_id: Unique identifier for the current agent run.
@@ -232,7 +234,7 @@ class AgentTurnComplete(LifecycleEvent):  # type: ignore[misc,valid-type]
 
 
 @dataclass
-class AgentRunComplete(LifecycleEvent):  # type: ignore[misc,valid-type]
+class AgentRunComplete(LifecycleEvent):  # type: ignore[misc]
     """Emitted when an agent run terminates (for any reason).
 
     :param agent_id: Unique identifier for the completed agent run.
@@ -268,7 +270,7 @@ class AgentRunComplete(LifecycleEvent):  # type: ignore[misc,valid-type]
 
 
 @dataclass
-class EmbeddingGenerated(LifecycleEvent):  # type: ignore[misc,valid-type]
+class EmbeddingGenerated(LifecycleEvent):  # type: ignore[misc]
     """Emitted after an embedding batch is generated.
 
     :param model: The embedding model identifier.
@@ -342,21 +344,6 @@ class SignalBus:
 
         return decorator
 
-    def clear(self, event_type: type) -> None:
-        """Remove all registered handlers for *event_type*.
-
-        No-op when no handlers are registered for *event_type*.
-
-        Use this to prevent handler accumulation when a subscriber class is
-        re-instantiated in the same process (e.g. hot-reload, or multiple
-        ``LaurenFactory.create()`` calls in integration tests that share a
-        module-level ``SignalBus`` singleton).
-
-        :param event_type: The event class whose handlers should be removed.
-        :type event_type: type
-        """
-        self._handlers.pop(event_type, None)
-
     async def emit(self, event: Any) -> None:
         """Emit *event* to all registered handlers for its type.
 
@@ -398,10 +385,8 @@ class SignalBus:
         handlers = self._handlers.get(event_type)
         if handlers is None:
             return
-        try:
+        with contextlib.suppress(ValueError):
             handlers.remove(handler)
-        except ValueError:
-            pass
         if not handlers:
             del self._handlers[event_type]
 

@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Prompt template implementations."""
+
+from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
@@ -123,7 +123,8 @@ class PromptTemplate:
 
 @dataclass
 class ChatPromptTemplate:
-    """Multi-turn prompt template producing a list of :class:`~lauren_ai._transport.Message` objects.
+    """Multi-turn prompt template producing a list of
+    :class:`~lauren_ai._transport.Message` objects.
 
     Supports ``("role", "template {var}")`` tuples and bare
     :class:`~lauren_ai._transport.Message` instances in the *messages* list.

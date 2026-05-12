@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """@team() decorator for multi-agent coordination."""
+
+from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass

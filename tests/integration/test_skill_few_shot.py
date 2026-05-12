@@ -7,8 +7,8 @@ works as expected.
 
 from dataclasses import dataclass
 
-from lauren_ai import FewShotPromptTemplate, FewShotExample as BuiltinFewShotExample
-
+from lauren_ai import FewShotExample as BuiltinFewShotExample
+from lauren_ai import FewShotPromptTemplate
 
 # ---------------------------------------------------------------------------
 # Implementation (inlined)

@@ -56,4 +56,3 @@ Result of a `SemanticRouter.route()` call.
 | `confidence` | `float` | Cosine-similarity score of the best match. |
 | `method` | `Literal['embedding', 'llm_fallback', 'default']` | How the match was determined: `"embedding"`,
 `"llm_fallback"`, or `"default"`. |
-

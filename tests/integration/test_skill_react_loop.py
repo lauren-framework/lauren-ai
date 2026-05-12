@@ -18,7 +18,6 @@ from lauren_ai._tools import tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Tool definitions
 # ---------------------------------------------------------------------------

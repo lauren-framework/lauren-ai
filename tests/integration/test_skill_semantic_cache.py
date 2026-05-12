@@ -14,10 +14,9 @@ NOTE: from __future__ import annotations is safe here (no @tool definitions).
 
 from __future__ import annotations
 
-import math
 import hashlib
+import math
 from typing import Any
-
 
 # ---------------------------------------------------------------------------
 # SemanticCache implementation (inline for test file)
@@ -41,7 +40,7 @@ class SemanticCache:
         return [x / norm for x in vec]
 
     def _cosine(self, a: list[float], b: list[float]) -> float:
-        dot = sum(x * y for x, y in zip(a, b))
+        dot = sum(x * y for x, y in zip(a, b, strict=False))
         na = math.sqrt(sum(x * x for x in a))
         nb = math.sqrt(sum(x * x for x in b))
         return dot / (na * nb) if na * nb > 0 else 0.0

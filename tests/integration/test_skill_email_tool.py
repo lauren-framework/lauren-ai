@@ -12,7 +12,6 @@ NOTE: No `from __future__ import annotations` — @tool() needs live annotations
 """
 
 import json
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -20,7 +19,6 @@ from lauren_ai._agents import AgentContext, agent, use_tools
 from lauren_ai._tools import ToolContext, ToolResult, tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Tool definition

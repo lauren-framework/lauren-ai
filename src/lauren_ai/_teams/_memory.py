@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """In-call shared memory for team workers."""
+
+from __future__ import annotations
 
 from typing import Any
 

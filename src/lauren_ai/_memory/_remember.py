@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """@remember() decorator for agents — automatic memory extraction and injection."""
+
+from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -90,7 +90,8 @@ async def extract_facts(
 
     prompt = (
         "Extract any facts about the user from this conversation turn. "
-        "Return a JSON array of objects with 'content' (fact) and 'topics' (list of topic strings). "
+        "Return a JSON array of objects with 'content' (fact) and "
+        "'topics' (list of topic strings). "
         "If no new facts, return []. "
         "Facts should be in third person: 'User prefers X' or 'User works on Y'.\n\n"
         f"Conversation:\n{conversation_turn}\n\n"

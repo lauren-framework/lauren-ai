@@ -6,18 +6,17 @@ SignalBus integration works via TestClient with signals.
 
 import pytest
 
-from lauren_ai._transport import Completion, TokenUsage
-from lauren_ai._agents import agent
 from lauren_ai import (
-    CostTracker,
-    default_pricing_table,
-    SignalBus,
-    ModelCallComplete,
-    TokenBudget,
     BudgetExceededError,
+    CostTracker,
+    ModelCallComplete,
+    SignalBus,
+    TokenBudget,
+    default_pricing_table,
 )
+from lauren_ai._agents import agent
+from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -134,7 +133,7 @@ class TestCostTrackerWithSignalBus:
         await client.run_async("First", conversation_id="acc-1")
         await client.run_async("Second", conversation_id="acc-2")
 
-        report = await tracker.report()
+        await tracker.report()
         total_calls = sum(len(v) for v in tracker._conv_usage.values())
         assert total_calls >= 2
 

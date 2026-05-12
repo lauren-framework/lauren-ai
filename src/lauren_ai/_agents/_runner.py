@@ -35,7 +35,7 @@ from lauren_ai._exceptions import (
     AgentConfigError,
 )
 from lauren_ai._memory import ShortTermMemory
-from lauren_ai._tools import TOOL_META, TOOL_METADATA, ToolContext, ToolMeta, ToolResult
+from lauren_ai._tools import TOOL_METADATA, ToolContext, ToolResult
 from lauren_ai._tools._executor import CacheBackend, ToolExecutor
 from lauren_ai._transport import Completion, CompletionChunk, TokenUsage, ToolCall
 
@@ -179,7 +179,7 @@ class AgentRunner(Protocol):
 # the typing.Protocol member scan (which would treat it as a non-method member
 # and break ``issubclass()`` matching).  Type-ignored because mypy doesn't
 # know about the class object's attribute slot.
-AgentRunner.__class_getitem__ = classmethod(_agent_runner_class_getitem)  # type: ignore[attr-defined,assignment]
+AgentRunner.__class_getitem__ = classmethod(_agent_runner_class_getitem)  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -264,24 +264,15 @@ class AgentRunnerBase(AgentRunner):
     def __init__(
         self,
         transport: Any,
-        tools: dict[str, tuple[Any, ToolMeta]],
         config: LLMConfig,
         signals: Any | None = None,
         cache_backend: CacheBackend | None = None,
-        knowledge_tool_names: set[str] | None = None,
     ) -> None:
         self._transport = transport
-        self._tools = tools
         self._config = config
         self._signals = signals
-        # Tool names declared at the module level via
-        # ``AgentModule.for_root(knowledge=...)``.  Each agent opts in via
-        # ``@use_knowledge_sources(...)`` — the runner's
-        # :meth:`_get_tool_schemas` filters this set against the agent's
-        # ``meta.knowledge_source_filter`` (``None`` = no KB tools).
-        self._knowledge_tool_names: set[str] = set(knowledge_tool_names or ())
         self._executor = ToolExecutor(
-            tools=tools,
+            tools={},
             cache_backend=cache_backend,
             signals=signals,
         )
@@ -1107,58 +1098,15 @@ class AgentRunnerBase(AgentRunner):
     def _get_tool_schemas(self, meta: AgentMeta) -> list[Any]:
         """Build the list of tool schemas for the agent's attached tools.
 
-        Includes:
-
-        * Tools the agent declared via ``@use_tools(...)`` (from
-          ``meta.tool_classes``).
-        * Knowledge-base tools the agent opted into via
-          ``@use_knowledge_sources(...)`` — only the names listed in
-          ``meta.knowledge_source_filter`` are attached.  Without that
-          decorator, ``meta.knowledge_source_filter is None`` and **no**
-          KB tools are attached (opt-in).
+        Reads directly from ``meta.tools`` — the per-agent map built once at
+        startup by ``AgentModule.for_root``.
 
         :param meta: The agent's ``AgentMeta``.
         :type meta: AgentMeta
         :return: List of JSON schema dicts suitable for passing to the transport.
         :rtype: list[Any]
         """
-        # Effective KB tool names for this agent.
-        # ``None`` filter ⇒ no KB tools.  Set filter ⇒ only those names that
-        # are also declared by the module's ``knowledge=`` list.
-        if meta.knowledge_source_filter is None:
-            allowed_kb: set[str] = set()
-        else:
-            allowed_kb = self._knowledge_tool_names & set(meta.knowledge_source_filter)
-        if not meta.tool_classes and not allowed_kb:
-            return []
-        schemas: list[Any] = []
-        seen_names: set[str] = set()
-        for tool_item in meta.tool_classes:
-            tool_meta: ToolMeta | None = getattr(tool_item, TOOL_META, None)
-            if tool_meta is None:
-                continue
-            if tool_meta.name in seen_names:
-                continue
-            entry = self._tools.get(tool_meta.name)
-            if entry is None:
-                logger.warning(
-                    "lauren_ai.AgentRunner: tool '%s' not found in tool map — skipping",
-                    tool_meta.name,
-                )
-                continue
-            schemas.append(tool_meta.parameters)
-            seen_names.add(tool_meta.name)
-        # Knowledge-base tools — opt-in via @use_knowledge_sources.
-        for kb_tool_name in allowed_kb:
-            if kb_tool_name in seen_names:
-                continue
-            entry = self._tools.get(kb_tool_name)
-            if entry is None:
-                continue
-            _, kb_tool_meta = entry
-            schemas.append(kb_tool_meta.parameters)
-            seen_names.add(kb_tool_name)
-        return schemas
+        return [tm.parameters for _, tm in meta.tools.values()]
 
     async def _execute_tools(
         self,
@@ -1211,10 +1159,10 @@ class AgentRunnerBase(AgentRunner):
         :return: The tool result.
         :rtype: ToolResult
         """
-        # Populate tool-level static metadata from @set_metadata decorators.
-        # self._tools maps name → (callable_or_instance, ToolMeta); the
-        # TOOL_METADATA sentinel lives on the original decorated entity.
-        _tool_entry = self._tools.get(tool_call.name)
+        # Resolve the per-agent tool map from the agent's AgentMeta, then
+        # pull static @set_metadata from the callable on the matching entry.
+        _tool_map: dict = getattr(agent, AGENT_META).tools
+        _tool_entry = _tool_map.get(tool_call.name)
         _tool_static_meta: dict[str, Any] = {}
         if _tool_entry is not None:
             _callable, _ = _tool_entry
@@ -1240,7 +1188,7 @@ class AgentRunnerBase(AgentRunner):
 
         t0 = time.monotonic()
         try:
-            result = await self._executor.execute(tool_call, tool_context)
+            result = await self._executor.execute(tool_call, tool_context, tool_map=_tool_map)
             duration_ms = (time.monotonic() - t0) * 1000
             await self._emit(
                 "ToolCallComplete",

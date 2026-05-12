@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.4
+    rev: v0.15.12
     hooks:
       - id: ruff
         args: ["--fix"]
@@ -25,12 +25,12 @@ repos:
         stages: [commit-msg]
         args: [feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert]
 
-  - repo: local
-    hooks:
-      - id: branch-name-check
-        name: Branch name convention check
-        language: system
-        entry: >
-          bash -c '[[ "$(git rev-parse --abbrev-ref HEAD)" =~ ^(feat|fix|chore|task|refactor|docs|test)(\(#?[0-9]+\))?-[a-z0-9\-]+$ ]] || (echo "Branch name must match: <type>(#<issue>)-<short-description>" && exit 1)'
-        always_run: true
-        pass_filenames: false
+  # - repo: local
+  #   hooks:
+  #     - id: branch-name-check
+  #       name: Branch name convention check
+  #       language: system
+  #       entry: >
+  #         bash -c '[[ "$(git rev-parse --abbrev-ref HEAD)" =~ ^(feat|fix|chore|task|refactor|docs|test)(\(#?[0-9]+\))?-[a-z0-9\-]+$ ]] || (echo "Branch name must match: <type>(#<issue>)-<short-description>" && exit 1)'
+  #       always_run: true
+  #       pass_filenames: false

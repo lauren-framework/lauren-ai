@@ -21,7 +21,6 @@ import asyncio
 from lauren_ai._knowledge import KnowledgeBase, TextLoader
 from lauren_ai._memory._vector import InMemoryVectorStore
 
-
 # ---------------------------------------------------------------------------
 # Mock embedding function (no API calls needed)
 # ---------------------------------------------------------------------------
@@ -158,7 +157,7 @@ class TestUpsertWithEmbedding:
         store = InMemoryVectorStore()
         texts = ["Python docs", "JavaScript docs", "Rust docs"]
         embeddings = mock_embed_fn(texts)
-        for i, (text, vec) in enumerate(zip(texts, embeddings)):
+        for i, (text, vec) in enumerate(zip(texts, embeddings, strict=False)):
             asyncio.run(store.upsert(text, id=f"doc-{i}", embedding=vec))
         assert len(store) == 3
 

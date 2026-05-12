@@ -248,4 +248,3 @@ Example::
         temperature=0.0,
         guardrail_name="OffTopicGuard",
     ) |
-

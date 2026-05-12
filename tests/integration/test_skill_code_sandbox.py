@@ -17,7 +17,6 @@ import asyncio
 import io
 from contextlib import redirect_stdout
 
-
 # ---------------------------------------------------------------------------
 # CodeExecutionTool implementation
 # ---------------------------------------------------------------------------
@@ -68,7 +67,7 @@ class CodeExecutionTool:
                 "locals": {k: repr(v) for k, v in local_vars.items() if not k.startswith("_")},
                 "success": True,
             }
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return {
                 "error": f"Execution timed out after {effective_timeout}s",
                 "success": False,

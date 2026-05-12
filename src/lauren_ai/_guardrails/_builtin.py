@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Built-in guardrail implementations."""
+
+from __future__ import annotations
 
 import re
 from typing import Any
@@ -63,7 +63,7 @@ class TopicFilter:
         for r in results[1:]:
             topic_vec = r.vector if hasattr(r, "vector") else r
             # cosine similarity
-            dot = sum(a * b for a, b in zip(query_vec, topic_vec))
+            dot = sum(a * b for a, b in zip(query_vec, topic_vec, strict=False))
             mag_a = math.sqrt(sum(x * x for x in query_vec))
             mag_b = math.sqrt(sum(x * x for x in topic_vec))
             if mag_a > 0 and mag_b > 0:

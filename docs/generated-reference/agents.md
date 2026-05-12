@@ -525,4 +525,3 @@ Reject a pending HITL tool call.
 | `agent_run_id` | `str` | The run identifier. |
 | `tool_use_id` | `str` | The tool call identifier to reject. |
 | `reason` | `str` | Optional human-readable rejection reason. |
-

@@ -138,4 +138,3 @@ Raised when the rate limiter's `max_retries` is exhausted.
 per-minute limit is configured). |
 | `retry_after` | `float` | Suggested number of seconds to wait before retrying,
 if known (`0.0` otherwise). |
-

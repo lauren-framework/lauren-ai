@@ -12,7 +12,6 @@ import asyncio
 import concurrent.futures
 import threading
 
-
 # ---------------------------------------------------------------------------
 # ApprovalGate implementation
 # ---------------------------------------------------------------------------
@@ -31,7 +30,7 @@ class ApprovalGate:
         self._pending[approval_id] = fut
         try:
             return await asyncio.wait_for(asyncio.shield(fut), timeout=self._timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._pending.pop(approval_id, None)
             return False
 

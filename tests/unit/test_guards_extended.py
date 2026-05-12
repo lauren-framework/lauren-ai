@@ -94,7 +94,7 @@ class TestTokenBudgetGuardExtended:
 
         # The guard may raise AgentBudgetExceededError or TypeError due to missing
         # required params — test that some error is raised when over budget
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             await guard.can_activate(FakeCtx())
 
     @pytest.mark.asyncio
@@ -152,7 +152,7 @@ class TestTokenBudgetGuardExtended:
 
         # Guard raises AgentBudgetExceededError (missing required params in constructor)
         # but the guard code raises it directly — both cases should raise an Exception
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             await guard.can_activate(FakeCtx())
 
 

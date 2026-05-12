@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Built-in output parsers for common LLM response formats."""
+
+from __future__ import annotations
 
 import json
 import re

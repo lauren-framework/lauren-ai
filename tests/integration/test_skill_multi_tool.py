@@ -12,10 +12,9 @@ NOTE: No `from __future__ import annotations` — @tool() needs live annotations
 """
 
 from lauren_ai._agents import agent, use_tools
+from lauren_ai._tools import tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import TestClient
-from lauren_ai._tools import tool
-
 
 # ---------------------------------------------------------------------------
 # Tool definitions

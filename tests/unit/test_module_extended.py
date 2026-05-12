@@ -512,7 +512,8 @@ class TestAgentModule:
         assert cls is not None
 
     def test_for_root_tool_register_exception_logs(self, caplog):
-        """If _add_to_tool_map raises (e.g. name collision), it should log a warning and continue."""
+        """If _add_to_tool_map raises (e.g. name collision),
+        it should log a warning and continue."""
         import logging
 
         from lauren_ai._agents import agent

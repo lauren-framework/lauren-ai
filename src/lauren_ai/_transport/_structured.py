@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """StructuredLLM — force schema-valid outputs via native provider mechanisms."""
+
+from __future__ import annotations
 
 from typing import Any, Generic, TypeVar
 

@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Chain — composable pipeline for template | llm | parser sequences."""
+
+from __future__ import annotations
 
 import inspect
 from collections.abc import Callable

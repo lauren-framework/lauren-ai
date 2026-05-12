@@ -13,13 +13,10 @@ Tests:
 NOTE: No from __future__ import annotations — tool() needs live annotations.
 """
 
-import pytest
-
 from lauren_ai._agents import agent, use_tools
 from lauren_ai._tools import tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import TestClient
-
 
 # ---------------------------------------------------------------------------
 # classify_intent tool
@@ -101,7 +98,6 @@ def _c(text="OK", *, n=1, stop_reason="end_turn"):
 
 class TestClassifyIntentTool:
     def test_billing_keyword_invoice(self):
-        result = pytest.mark.asyncio
         import asyncio
 
         data = asyncio.run(classify_intent("I need help with my invoice"))

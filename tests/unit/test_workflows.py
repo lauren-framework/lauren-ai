@@ -135,7 +135,7 @@ class TestLoop:
 
         step = Step("increment", increment)
         loop = Loop(step, condition=lambda ctx: True, max_iterations=5)
-        result = await loop.run({})
+        await loop.run({})
         assert count[0] == 5
 
 

@@ -20,7 +20,6 @@ from lauren_ai._transport import Completion, Message, TokenUsage
 from lauren_ai._transport._mock import MockTransport
 from lauren_ai.testing import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Helper functions (pure Python — no HTTP needed)
 # ---------------------------------------------------------------------------

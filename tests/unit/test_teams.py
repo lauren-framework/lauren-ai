@@ -82,7 +82,7 @@ class TestTeamDecorator:
         assert getattr(T, TEAM_META).coordinator_prompt == "custom prompt"
 
     def test_does_not_mutate_class(self):
-        original_dict_keys = set(object.__dict__.keys())
+        set(object.__dict__.keys())
 
         @team(mode="coordinator", model="m")
         class MyTeam:

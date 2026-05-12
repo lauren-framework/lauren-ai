@@ -88,7 +88,7 @@ class TestTokenBudgetGuard:
                 class client:
                     host = "127.0.0.1"
 
-        with pytest.raises(Exception):  # AgentBudgetExceededError
+        with pytest.raises(Exception):  # noqa: B017 — AgentBudgetExceededError
             # Set usage to exactly the limit
             await store.record_usage("127.0.0.1", tokens=1, window_seconds=3600)
             await guard.can_activate(FakeCtx())

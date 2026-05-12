@@ -46,9 +46,12 @@ __all__ = [
 
 import logging
 from collections.abc import AsyncIterator
-from typing import Any, TypeVar, get_origin
+from typing import TYPE_CHECKING, Any, TypeVar, get_origin
 
-T = TypeVar("T")
+if TYPE_CHECKING:
+    from lauren_ai._transport._structured import StructuredLLM
+
+from lauren import Scope, injectable, module, post_construct, use_class, use_factory, use_value
 
 from lauren_ai._config import AgentConfig, LLMConfig
 from lauren_ai._exceptions import AgentConfigError, DecoratorUsageError
@@ -57,7 +60,7 @@ from lauren_ai._transport import Completion, CompletionChunk, Embedding, Message
 
 logger = logging.getLogger(__name__)
 
-from lauren import Scope, injectable, module, post_construct, use_class, use_factory, use_value
+T = TypeVar("T")
 
 # ---------------------------------------------------------------------------
 # Transport builder
@@ -469,13 +472,47 @@ def _make_kb_loader_class(
     return _KnowledgeLoader
 
 
+def _attach_agent_tools(
+    agent_list: list[type],
+    full_tools: dict,
+    kb_names: frozenset[str],
+) -> None:
+    """Populate ``AgentMeta.tools`` for each agent from the module's full tool map."""
+    from lauren_ai._agents import AGENT_META  # noqa: PLC0415
+    from lauren_ai._tools import TOOL_META  # noqa: PLC0415
+
+    for agent_cls in agent_list:
+        meta = getattr(agent_cls, AGENT_META)
+        allowed_kb: set[str] = set()
+        if meta.knowledge_source_filter is not None:
+            allowed_kb = kb_names & set(meta.knowledge_source_filter)
+        import inspect as _std_inspect  # noqa: PLC0415
+
+        agent_tools: dict[str, type] = {}
+        for tool_item in meta.tool_classes:
+            # Support generic aliases like HandoffTo[AgentA]: look up TOOL_META on
+            # the origin class, which is what _add_to_tool_map uses as the key.
+            _origin = get_origin(tool_item)
+            _lookup = (
+                _origin if (_origin is not None and _std_inspect.isclass(_origin)) else tool_item
+            )
+            tm = getattr(_lookup, TOOL_META, None)
+            if tm is not None and tm.name in full_tools:
+                agent_tools[tm.name] = full_tools[tm.name]
+        for kb_name in allowed_kb:
+            if kb_name in full_tools:
+                agent_tools.setdefault(kb_name, full_tools[kb_name])
+        meta.tools = agent_tools
+
+
 # ---------------------------------------------------------------------------
 # AgentModule
 # ---------------------------------------------------------------------------
 
 
 class AgentModule:
-    """Factory that creates a ``@module`` providing the :class:`~lauren_ai._agents._runner.AgentRunner`,
+    """Factory that creates a ``@module`` providing the
+    :class:`~lauren_ai._agents._runner.AgentRunner`,
     :class:`~lauren_ai._tools._registry.ToolRegistry`, and all registered agent
     class instances.
 
@@ -734,9 +771,7 @@ class AgentModule:
             # in the DI container.  Consumers that want all sources inject
             # list[KnowledgeSource]; a user-defined subclass becomes its own
             # distinct token and can still be injected singularly.
-            _kb_value_providers.append(
-                use_value(provide=type(ks), value=ks, multi=True)
-            )
+            _kb_value_providers.append(use_value(provide=type(ks), value=ks, multi=True))
 
             # Generate the per-source loader-injectable if the user
             # supplied loaders.  Each call creates a fresh class so the
@@ -866,13 +901,13 @@ class AgentModule:
                                 instance,
                                 exc,
                             )
+                    # Attach per-agent tool maps (runs once; runner is SINGLETON).
+                    _attach_agent_tools(list(agents), tools, _captured_kb_tool_names)
                     return _runner_cls(
                         transport=transport,
-                        tools=tools,
                         config=cfg,
                         signals=_captured_signals_ref,
                         cache_backend=_captured_tool_cache_ref,
-                        knowledge_tool_names=set(_captured_kb_tool_names),
                     )
 
                 _runner_provider = use_factory(
@@ -899,15 +934,18 @@ class AgentModule:
                 _captured_runner_cls = _runner_cls
                 _captured_kb_tool_names_eager = frozenset(_kb_tool_names)
 
+                # Attach per-agent tool maps now (eager path — all fn tools resolved).
+                _attach_agent_tools(
+                    list(agents), _captured_eager_tools, _captured_kb_tool_names_eager
+                )
+
                 _runner_provider = use_factory(
                     provide=_runner_cls,
                     factory=lambda transport, cfg: _captured_runner_cls(
                         transport=transport,
-                        tools=_captured_eager_tools,
                         config=cfg,
                         signals=_captured_signals_ref,
                         cache_backend=_captured_tool_cache_ref,
-                        knowledge_tool_names=set(_captured_kb_tool_names_eager),
                     ),
                     injects=[_Transport, LLMConfig],
                     scope=_effective_scope,

@@ -103,4 +103,3 @@ A single input/output example for few-shot prompting.
 |---|---|---|
 | `input` | `str` | The example input text. |
 | `output` | `str` | The expected output text. |
-

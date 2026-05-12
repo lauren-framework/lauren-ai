@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Core tracing types: Span, Trace, TraceStore, TracingConfig."""
+
+from __future__ import annotations
 
 import time
 import uuid

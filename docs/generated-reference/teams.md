@@ -70,4 +70,3 @@ Emitted when the coordinator decides next action.
 ### `TeamFinalAnswer`
 
 Emitted when the team produces its final answer.
-

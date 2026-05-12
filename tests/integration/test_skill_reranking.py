@@ -15,9 +15,8 @@ Tests:
 NOTE: No from __future__ import annotations.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
-
 
 # ---------------------------------------------------------------------------
 # SearchResult dataclass + DocumentReranker implementation under test

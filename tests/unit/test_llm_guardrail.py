@@ -15,7 +15,6 @@ from lauren_ai._guardrails._base import GuardrailContext
 from lauren_ai._guardrails._llm import LLMGuardrail
 from lauren_ai._transport import Completion, TokenUsage
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

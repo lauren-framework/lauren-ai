@@ -12,20 +12,19 @@ NOTE: No `from __future__ import annotations` — @tool() needs live annotations
 """
 
 import json
-from enum import Enum
+from enum import StrEnum
 
 from lauren_ai._agents import AgentContext, agent, use_tools
 from lauren_ai._tools import ToolContext, ToolResult, set_metadata, tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Permission model
 # ---------------------------------------------------------------------------
 
 
-class Permission(str, Enum):
+class Permission(StrEnum):
     READ_ONLY = "read_only"
     MUTATE = "mutate"
     ADMIN = "admin"

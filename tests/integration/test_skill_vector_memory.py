@@ -24,7 +24,6 @@ from lauren_ai._memory._user import MemoryFact
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -8,10 +8,9 @@ import re
 
 import pytest
 
-from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._agents import agent
+from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Implementation (inlined)

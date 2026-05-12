@@ -22,7 +22,15 @@ Requirements:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
+
+try:
+    import griffe
+except ImportError:
+    raise SystemExit(
+        "griffe is required.  Install it with:\n    pip install griffe\n"
+    ) from ImportError
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -43,8 +51,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 PAGES: dict[str, list[str | tuple[str, str]]] = {
     "agents.md": [
         (
-            "# Agents\n\n"
-            "Decorators and types for building AI agents.",
+            "# Agents\n\nDecorators and types for building AI agents.",
             "",
         ),
         ("## Decorators", ""),
@@ -80,8 +87,7 @@ PAGES: dict[str, list[str | tuple[str, str]]] = {
     ],
     "tools.md": [
         (
-            "# Tools\n\n"
-            "The `@tool()` decorator and runtime context.",
+            "# Tools\n\nThe `@tool()` decorator and runtime context.",
             "",
         ),
         "lauren_ai.tool",
@@ -90,8 +96,7 @@ PAGES: dict[str, list[str | tuple[str, str]]] = {
     ],
     "guardrails.md": [
         (
-            "# Guardrails\n\n"
-            "Content safety filters for agent inputs and outputs.",
+            "# Guardrails\n\nContent safety filters for agent inputs and outputs.",
             "",
         ),
         ("## Decorators", ""),
@@ -112,8 +117,7 @@ PAGES: dict[str, list[str | tuple[str, str]]] = {
     ],
     "memory.md": [
         (
-            "# Memory\n\n"
-            "Short-term memory, conversation stores, vector stores, and user memory.",
+            "# Memory\n\nShort-term memory, conversation stores, vector stores, and user memory.",
             "",
         ),
         ("## Short-term memory", ""),
@@ -132,8 +136,7 @@ PAGES: dict[str, list[str | tuple[str, str]]] = {
     ],
     "cost.md": [
         (
-            "# Cost & Rate Tracking\n\n"
-            "Token budgets, cost estimation, and rate limiting.",
+            "# Cost & Rate Tracking\n\nToken budgets, cost estimation, and rate limiting.",
             "",
         ),
         ("## Pricing", ""),
@@ -153,8 +156,7 @@ PAGES: dict[str, list[str | tuple[str, str]]] = {
     ],
     "signals.md": [
         (
-            "# Signals\n\n"
-            "Observable lifecycle events emitted by the agent runner.",
+            "# Signals\n\nObservable lifecycle events emitted by the agent runner.",
             "",
         ),
         "lauren_ai.SignalBus",
@@ -167,8 +169,7 @@ PAGES: dict[str, list[str | tuple[str, str]]] = {
     ],
     "teams.md": [
         (
-            "# Agent Teams\n\n"
-            "Multi-agent coordination via coordinator and collaborate modes.",
+            "# Agent Teams\n\nMulti-agent coordination via coordinator and collaborate modes.",
             "",
         ),
         ("## Decorator", ""),
@@ -186,8 +187,7 @@ PAGES: dict[str, list[str | tuple[str, str]]] = {
     ],
     "transport.md": [
         (
-            "# Transport & Multimodal\n\n"
-            "Core message types exchanged with LLM providers.",
+            "# Transport & Multimodal\n\nCore message types exchanged with LLM providers.",
             "",
         ),
         ("## Messages & completions", ""),
@@ -208,8 +208,7 @@ PAGES: dict[str, list[str | tuple[str, str]]] = {
     ],
     "tracing.md": [
         (
-            "# Tracing\n\n"
-            "Observability spans, exporters, and the `@traced` decorator.",
+            "# Tracing\n\nObservability spans, exporters, and the `@traced` decorator.",
             "",
         ),
         ("## Decorator", ""),
@@ -231,8 +230,7 @@ PAGES: dict[str, list[str | tuple[str, str]]] = {
     ],
     "output-parsers.md": [
         (
-            "# Output Parsers\n\n"
-            "Structured extraction from LLM text responses.",
+            "# Output Parsers\n\nStructured extraction from LLM text responses.",
             "",
         ),
         "lauren_ai.StrOutputParser",
@@ -246,8 +244,7 @@ PAGES: dict[str, list[str | tuple[str, str]]] = {
     ],
     "prompts.md": [
         (
-            "# Prompt Templates\n\n"
-            "Reusable, composable prompt builders.",
+            "# Prompt Templates\n\nReusable, composable prompt builders.",
             "",
         ),
         "lauren_ai.PromptTemplate",
@@ -257,8 +254,7 @@ PAGES: dict[str, list[str | tuple[str, str]]] = {
     ],
     "router.md": [
         (
-            "# Semantic Router\n\n"
-            "Intent-based routing using embedding similarity.",
+            "# Semantic Router\n\nIntent-based routing using embedding similarity.",
             "",
         ),
         "lauren_ai.SemanticRouter",
@@ -267,8 +263,7 @@ PAGES: dict[str, list[str | tuple[str, str]]] = {
     ],
     "exceptions.md": [
         (
-            "# Exceptions\n\n"
-            "All exception classes raised by `lauren-ai`.",
+            "# Exceptions\n\nAll exception classes raised by `lauren-ai`.",
             "",
         ),
         ("## Base", ""),
@@ -296,16 +291,6 @@ PAGES: dict[str, list[str | tuple[str, str]]] = {
 # Griffe loading
 # ---------------------------------------------------------------------------
 
-import re
-
-try:
-    import griffe
-except ImportError:
-    raise SystemExit(
-        "griffe is required.  Install it with:\n"
-        "    pip install griffe\n"
-    )
-
 
 def _load_package() -> griffe.Module:
     # Use sphinx parser so :param:/:type:/:returns: directives are parsed
@@ -322,7 +307,7 @@ def _load_package() -> griffe.Module:
 def _resolve(pkg: griffe.Module, dotted: str) -> griffe.Object | None:
     # Strip "lauren_ai." prefix — pkg IS the lauren_ai module
     if dotted.startswith("lauren_ai."):
-        dotted = dotted[len("lauren_ai."):]
+        dotted = dotted[len("lauren_ai.") :]
 
     parts = dotted.split(".")
     obj: griffe.Object | None = pkg  # type: ignore[assignment]
@@ -332,10 +317,10 @@ def _resolve(pkg: griffe.Module, dotted: str) -> griffe.Object | None:
         try:
             obj = obj.get_member(part)
             if isinstance(obj, griffe.Alias):
-                try:
+                import contextlib
+
+                with contextlib.suppress(Exception):
                     obj = obj.target  # type: ignore[assignment]
-                except Exception:
-                    pass
         except Exception:
             return None
     return obj
@@ -404,23 +389,23 @@ def _render_signature(obj: griffe.Function | griffe.Class) -> str:
 def _clean_rst_inline(text: str) -> str:
     """Convert RST inline cross-references to plain Markdown backtick syntax."""
     # :class:`~module.ClassName` → `ClassName`  (strip module prefix)
-    text = re.sub(r':class:`~[^`]*\.([^`]+)`', r'`\1`', text)
+    text = re.sub(r":class:`~[^`]*\.([^`]+)`", r"`\1`", text)
     # :class:`ClassName` → `ClassName`
-    text = re.sub(r':class:`([^`]+)`', r'`\1`', text)
+    text = re.sub(r":class:`([^`]+)`", r"`\1`", text)
     # :attr:`obj.attr` → `obj.attr`
-    text = re.sub(r':attr:`([^`]+)`', r'`\1`', text)
+    text = re.sub(r":attr:`([^`]+)`", r"`\1`", text)
     # :meth:`method` → `method()`
-    text = re.sub(r':meth:`([^`]+)`', r'`\1()`', text)
+    text = re.sub(r":meth:`([^`]+)`", r"`\1()`", text)
     # :data:`CONST` → `CONST`
-    text = re.sub(r':data:`([^`]+)`', r'`\1`', text)
+    text = re.sub(r":data:`([^`]+)`", r"`\1`", text)
     # :func:`fn` → `fn()`
-    text = re.sub(r':func:`([^`]+)`', r'`\1()`', text)
+    text = re.sub(r":func:`([^`]+)`", r"`\1()`", text)
     # :exc:`Error`
-    text = re.sub(r':exc:`([^`]+)`', r'`\1`', text)
+    text = re.sub(r":exc:`([^`]+)`", r"`\1`", text)
     # :mod:`module` → `module`
-    text = re.sub(r':mod:`([^`]+)`', r'`\1`', text)
+    text = re.sub(r":mod:`([^`]+)`", r"`\1`", text)
     # ``double_backtick`` → `single_backtick`
-    text = re.sub(r'``([^`]+)``', r'`\1`', text)
+    text = re.sub(r"``([^`]+)``", r"`\1`", text)
     return text
 
 
@@ -440,7 +425,7 @@ def _render_docstring(obj: griffe.Object) -> str:
 
     parts: list[str] = []
     for section in sections:
-        kind_name: str = getattr(section.kind, 'value', str(section.kind))
+        kind_name: str = getattr(section.kind, "value", str(section.kind))
         val = section.value
 
         if kind_name == "text":
@@ -450,7 +435,7 @@ def _render_docstring(obj: griffe.Object) -> str:
 
         elif kind_name == "parameters":
             rows = []
-            for param in (val or []):
+            for param in val or []:
                 name = f"`{param.name}`"
                 ann = str(param.annotation) if param.annotation else ""
                 type_cell = f"`{ann}`" if ann else ""
@@ -459,12 +444,11 @@ def _render_docstring(obj: griffe.Object) -> str:
             if rows:
                 parts.append(
                     "**Parameters:**\n\n"
-                    "| Name | Type | Description |\n|---|---|---|\n"
-                    + "\n".join(rows) + "\n\n"
+                    "| Name | Type | Description |\n|---|---|---|\n" + "\n".join(rows) + "\n\n"
                 )
 
         elif kind_name == "returns":
-            for ret in (val or []):
+            for ret in val or []:
                 ann = str(ret.annotation) if ret.annotation else ""
                 desc = _clean_rst_inline(ret.description.strip()) if ret.description else ""
                 type_prefix = f"`{ann}` — " if ann else ""
@@ -473,15 +457,14 @@ def _render_docstring(obj: griffe.Object) -> str:
 
         elif kind_name == "raises":
             rows = []
-            for exc in (val or []):
+            for exc in val or []:
                 exc_name = f"`{exc.annotation}`" if exc.annotation else ""
                 desc = _clean_rst_inline(exc.description.strip()) if exc.description else ""
                 rows.append(f"| {exc_name} | {desc} |")
             if rows:
                 parts.append(
                     "**Raises:**\n\n"
-                    "| Exception | Description |\n|---|---|\n"
-                    + "\n".join(rows) + "\n\n"
+                    "| Exception | Description |\n|---|---|\n" + "\n".join(rows) + "\n\n"
                 )
 
         elif kind_name in ("examples", "example"):

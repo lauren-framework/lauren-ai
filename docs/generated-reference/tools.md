@@ -167,4 +167,3 @@ Create an error `ToolResult`.
 | `tool_use_id` | `str` | Matching provider tool-use identifier. |
 
 **Returns:** `ToolResult` — A new `ToolResult` with `is_error=True`.
-

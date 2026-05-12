@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """LLM-based guardrail — uses a secondary model to judge content."""
+
+from __future__ import annotations
 
 from typing import Any, Literal
 

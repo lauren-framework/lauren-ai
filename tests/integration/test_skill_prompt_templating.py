@@ -5,7 +5,6 @@ Verifies SystemPromptBuilder and PromptTemplate behaviour directly.
 
 from lauren_ai import PromptTemplate
 
-
 # ---------------------------------------------------------------------------
 # Implementation (inlined)
 # ---------------------------------------------------------------------------

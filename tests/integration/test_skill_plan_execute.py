@@ -20,7 +20,6 @@ from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
 from lauren_ai.testing import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -11,7 +11,6 @@ import pytest
 
 from lauren_ai import RateLimiter
 
-
 # ---------------------------------------------------------------------------
 # Implementation (inlined)
 # ---------------------------------------------------------------------------
@@ -34,9 +33,7 @@ class LLMRateLimiter:
         if len(self._request_times) >= self._rpm:
             return False
         token_sum = sum(c for _, c in self._token_counts) + estimated_tokens
-        if token_sum > self._tpm:
-            return False
-        return True
+        return not token_sum > self._tpm
 
     def record_call(self, tokens_used: int = 0) -> None:
         now = time.monotonic()

@@ -299,4 +299,3 @@ the model must satisfy. |
 
 **Returns:** `StructuredLLM[T]` — A `StructuredLLM`
 bound to this service.
-

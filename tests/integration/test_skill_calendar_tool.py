@@ -14,7 +14,6 @@ NOTE: No `from __future__ import annotations` — @tool() needs live annotations
 """
 
 import json
-
 from dataclasses import dataclass, field
 from uuid import uuid4
 
@@ -22,7 +21,6 @@ from lauren_ai._agents import AgentContext, agent, use_tools
 from lauren_ai._tools import ToolContext, ToolResult, set_metadata, tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Tool definition
@@ -315,7 +313,7 @@ class TestCalendarCancel:
         # Second run: cancel the event
         agent_inst2 = _make_agent()
         # Copy the event into the new tool instance
-        cal_tool = (
+        (
             agent_inst2.__class__.__lauren_ai_tools__[0]
             if hasattr(agent_inst2.__class__, "__lauren_ai_tools__")
             else None

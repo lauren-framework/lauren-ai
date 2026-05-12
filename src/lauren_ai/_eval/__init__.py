@@ -25,10 +25,9 @@ Example::
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import time
-from collections.abc import Callable
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -84,7 +83,7 @@ class EvalDataset:
     def __len__(self) -> int:
         return len(self.examples)
 
-    def __iter__(self):  # type: ignore[override]
+    def __iter__(self) -> Iterator[EvalExample]:  # type: ignore[override]
         return iter(self.examples)
 
 
@@ -185,7 +184,8 @@ class EvalReport:
         """
         lines = [
             f"Eval: {self.evaluator_name!r}  Dataset: {self.dataset_name!r}",
-            f"Pass rate: {self.pass_rate:.1%}  ({sum(r.passed for r in self.results)}/{len(self.results)})",
+            f"Pass rate: {self.pass_rate:.1%}"
+            f"  ({sum(r.passed for r in self.results)}/{len(self.results)})",
             f"Avg latency: {self.avg_latency_ms:.0f}ms",
         ]
         if self.avg_score is not None:

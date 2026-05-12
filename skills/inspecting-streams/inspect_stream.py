@@ -45,6 +45,12 @@ from pathlib import Path
 from lauren_ai import LLMConfig
 from lauren_ai._transport import Message
 
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from lauren_ai._transport._anthropic import AnthropicTransport
+    from lauren_ai._transport._ollama import OllamaTransport
+    from lauren_ai._transport._openai import OpenAITransport
+
 
 def _build_config() -> LLMConfig:
     """Build an :class:`LLMConfig` from environment variables."""
@@ -72,7 +78,7 @@ def _build_config() -> LLMConfig:
     return LLMConfig(**kwargs)
 
 
-def _build_transport(cfg: LLMConfig):
+def _build_transport(cfg: LLMConfig) -> AnthropicTransport | OpenAITransport | OllamaTransport:
     """Pick the transport class matching the configured provider."""
     if cfg.provider == "anthropic":
         from lauren_ai._transport._anthropic import AnthropicTransport

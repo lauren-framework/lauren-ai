@@ -162,7 +162,6 @@ class TestToolExecutor:
 
     @pytest.mark.asyncio
     async def test_hitl_raises_pending_approval(self):
-
         @tool(requires_confirmation=True)
         async def dangerous_tool(action: str) -> str:
             """A dangerous tool. Args: action: The action."""

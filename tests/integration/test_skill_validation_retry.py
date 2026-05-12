@@ -6,14 +6,12 @@ accepts the second valid response; also tests validator factory functions.
 
 import asyncio
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
-import pytest
-
-from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._agents import agent
+from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Implementation (inlined)

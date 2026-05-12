@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """TokenBudget -- enforce token/cost limits per conversation."""
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 

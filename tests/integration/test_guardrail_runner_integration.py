@@ -17,7 +17,6 @@ from lauren_ai._guardrails._base import GuardrailContext, GuardrailDecision
 from lauren_ai._transport import Completion, CompletionChunk, TokenUsage
 from lauren_ai._transport._mock import MockTransport
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -87,7 +86,7 @@ class _ModifyOutputGuard:
 
 def _make_runner(mock: MockTransport) -> AgentRunner:
     cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, tools={}, config=cfg)
+    return AgentRunner(transport=mock, config=cfg)
 
 
 # ---------------------------------------------------------------------------

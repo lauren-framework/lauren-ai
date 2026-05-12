@@ -727,7 +727,8 @@ class TestAgentConfigOverrides:
                 return {"stop_reason": response.stop_reason}
 
         cfg, mock = LLMConfig.for_testing()
-        # Only one tool-use completion queued; with max_turns=1 the loop stops before calling the model again
+        # Only one tool-use completion queued; with max_turns=1 the loop
+        # stops before calling the model again
         mock.queue_tool_use("endless_tool", {"x": "loop"})
 
         LLMProvider = LLMModule.for_root(cfg, transport_override=mock)

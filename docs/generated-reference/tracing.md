@@ -168,4 +168,3 @@ Usage::
 | Name | Type | Description |
 |---|---|---|
 | `path` | `str | Path` | Path to the output NDJSON file.  Appended to on each export. |
-

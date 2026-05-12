@@ -201,13 +201,19 @@ def token_budget_guard(
             if usage.tokens >= max_tokens_per_hour:
                 raise AgentBudgetExceededError(
                     f"Token budget exhausted for key '{key}': "
-                    f"{usage.tokens}/{max_tokens_per_hour} tokens used this hour."
+                    f"{usage.tokens}/{max_tokens_per_hour} tokens used this hour.",
+                    budget_type="tokens",
+                    used=usage.tokens,
+                    limit=max_tokens_per_hour,
                 )
 
             if max_cost_usd_per_hour is not None and usage.cost_usd >= max_cost_usd_per_hour:
                 raise AgentBudgetExceededError(
                     f"Cost budget exhausted for key '{key}': "
-                    f"${usage.cost_usd:.4f}/${max_cost_usd_per_hour:.4f} used this hour."
+                    f"${usage.cost_usd:.4f}/${max_cost_usd_per_hour:.4f} used this hour.",
+                    budget_type="cost",
+                    used=usage.cost_usd,
+                    limit=max_cost_usd_per_hour,
                 )
 
             return True

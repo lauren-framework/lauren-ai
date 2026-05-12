@@ -16,16 +16,15 @@ from __future__ import annotations
 import pytest
 
 from lauren_ai import SignalBus, use_guardrails
-from lauren_ai._agents import AGENT_META, AgentResponse, agent, use_tools
+from lauren_ai._agents import AgentResponse, agent, use_tools
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
 from lauren_ai._config import LLMConfig
 from lauren_ai._guardrails._base import GuardrailContext, GuardrailDecision
 from lauren_ai._memory import ShortTermMemory
 from lauren_ai._memory._stores import InMemoryConversationStore
-from lauren_ai._tools import TOOL_META, ToolContext, tool
+from lauren_ai._tools import tool
 from lauren_ai._transport import Completion, CompletionChunk, TokenUsage, ToolCall
 from lauren_ai._transport._mock import MockTransport
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -67,7 +66,7 @@ def _make_runner(
     if mock is None:
         mock = MockTransport()
     cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, tools={}, config=cfg, signals=signals)
+    runner = AgentRunner(transport=mock, config=cfg, signals=signals)
     return runner, mock
 
 
@@ -135,11 +134,13 @@ class TestRunNoGuardrails:
         tools = {}
         _add_to_tool_map(tools, noop_tool)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, tools=tools, config=cfg)
+        runner = AgentRunner(transport=mock, config=cfg)
 
         @use_tools(noop_tool)
         @agent(model="mock-model")
         class MultiTurnAgent: ...
+
+        MultiTurnAgent.__lauren_ai_agent__.tools = tools
 
         resp = await runner.run(MultiTurnAgent(), "do it")
         assert resp.turns == 2
@@ -194,11 +195,13 @@ class TestRunNoGuardrails:
         tools = {}
         _add_to_tool_map(tools, echo_tool)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, tools=tools, config=cfg)
+        runner = AgentRunner(transport=mock, config=cfg)
 
         @use_tools(echo_tool)
         @agent(model="mock-model")
         class EchoAgent: ...
+
+        EchoAgent.__lauren_ai_agent__.tools = tools
 
         resp = await runner.run(EchoAgent(), "echo hello")
         assert len(resp.tool_calls_made) == 1
@@ -607,12 +610,14 @@ class TestRunOutputGuardrails:
         _add_to_tool_map(tools, noop)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, tools=tools, config=cfg)
+        runner = AgentRunner(transport=mock, config=cfg)
 
         @use_guardrails(output=[spy])
         @use_tools(noop)
         @agent(model="mock-model")
         class MultiAgent: ...
+
+        MultiAgent.__lauren_ai_agent__.tools = tools
 
         # Turn 1: tool_use (content = "thinking..."), Turn 2: end_turn
         mock.queue_response(
@@ -633,8 +638,7 @@ class TestRunOutputGuardrails:
 
     @pytest.mark.asyncio
     async def test_output_guard_fires_on_turn2_not_turn1(self):
-        spy_fire_on = _SpyGuardrail(action="pass")
-        modified_on_second: list[str] = []
+        _SpyGuardrail(action="pass")
 
         class _Turn2Guard:
             call_count = 0
@@ -662,12 +666,14 @@ class TestRunOutputGuardrails:
         _add_to_tool_map(tools, noop)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, tools=tools, config=cfg)
+        runner = AgentRunner(transport=mock, config=cfg)
 
         @use_guardrails(output=[guard])
         @use_tools(noop)
         @agent(model="mock-model")
         class TwoTurnAgent: ...
+
+        TwoTurnAgent.__lauren_ai_agent__.tools = tools
 
         mock.queue_response(
             Completion(
@@ -842,11 +848,13 @@ class TestRunStreamNoGuardrails:
         _add_to_tool_map(tools, ping)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, tools=tools, config=cfg)
+        runner = AgentRunner(transport=mock, config=cfg)
 
         @use_tools(ping)
         @agent(model="mock-model")
         class PingAgent: ...
+
+        PingAgent.__lauren_ai_agent__.tools = tools
 
         # Use proper ToolCallDelta chunks so the streaming runner can see the tool call
         mock.queue_stream(
@@ -1322,7 +1330,7 @@ class TestRunStreamOutputGuardrails:
         _add_to_tool_map(tools, should_not_run)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner_with_tools = AgentRunner(transport=mock, tools=tools, config=cfg)
+        runner_with_tools = AgentRunner(transport=mock, config=cfg)
 
         spy = _SpyGuardrail(action="modify", content="[BLOCKED]")
 
@@ -1330,6 +1338,8 @@ class TestRunStreamOutputGuardrails:
         @use_tools(should_not_run)
         @agent(model="mock-model")
         class ToolGuardAgent: ...
+
+        ToolGuardAgent.__lauren_ai_agent__.tools = tools
 
         # Stream that includes both text AND a tool call delta
         # Guardrail fires on the text → tool should not execute
@@ -1446,12 +1456,14 @@ class TestRunStreamOutputGuardrails:
         _add_to_tool_map(tools, noop)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner_tools = AgentRunner(transport=mock, tools=tools, config=cfg)
+        runner_tools = AgentRunner(transport=mock, config=cfg)
 
         @use_guardrails(output=[spy])
         @use_tools(noop)
         @agent(model="mock-model")
         class MultiTurnAgent: ...
+
+        MultiTurnAgent.__lauren_ai_agent__.tools = tools
 
         # Turn 1: tool_use with text content
         mock.queue_response(
@@ -1788,13 +1800,15 @@ class TestRunLifecycleHooks:
         _add_to_tool_map(tools, noop)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, tools=tools, config=cfg)
+        runner = AgentRunner(transport=mock, config=cfg)
 
         @use_tools(noop)
         @agent(model="mock-model")
         class HookAgent:
             async def on_turn_complete(self, completion, ctx):
                 turns_seen.append(ctx.turn)
+
+        HookAgent.__lauren_ai_agent__.tools = tools
 
         mock.queue_response(
             Completion(
@@ -1826,7 +1840,7 @@ class TestRunLifecycleHooks:
         _add_to_tool_map(tools, spy_tool)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, tools=tools, config=cfg)
+        runner = AgentRunner(transport=mock, config=cfg)
 
         @use_tools(spy_tool)
         @agent(model="mock-model")
@@ -1834,6 +1848,8 @@ class TestRunLifecycleHooks:
             async def on_tool_result(self, result, ctx):
                 results_seen.append(result.content)
                 return None
+
+        ToolHookAgent.__lauren_ai_agent__.tools = tools
 
         mock.queue_tool_use("spy_tool", {"x": 42})
         mock.queue_response(_completion("done"))
@@ -1876,7 +1892,7 @@ class TestRunSignals:
 
         cfg = LLMConfig(provider="anthropic", model="special-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, tools={}, config=cfg, signals=bus)
+        runner = AgentRunner(transport=mock, config=cfg, signals=bus)
         mock.queue_response(_completion("OK", model="special-model"))
 
         @agent(model="special-model")
@@ -1904,11 +1920,13 @@ class TestRunSignals:
         _add_to_tool_map(tools, sig_tool)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, tools=tools, config=cfg, signals=bus)
+        runner = AgentRunner(transport=mock, config=cfg, signals=bus)
 
         @use_tools(sig_tool)
         @agent(model="mock-model")
         class SigAgent: ...
+
+        SigAgent.__lauren_ai_agent__.tools = tools
 
         mock.queue_tool_use("sig_tool", {})
         mock.queue_response(_completion("done"))
@@ -1936,11 +1954,13 @@ class TestRunSignals:
         _add_to_tool_map(tools, done_tool)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, tools=tools, config=cfg, signals=bus)
+        runner = AgentRunner(transport=mock, config=cfg, signals=bus)
 
         @use_tools(done_tool)
         @agent(model="mock-model")
         class SigAgent: ...
+
+        SigAgent.__lauren_ai_agent__.tools = tools
 
         mock.queue_tool_use("done_tool", {})
         mock.queue_response(_completion("done"))
@@ -2006,11 +2026,13 @@ class TestRunEdgeCases:
         _add_to_tool_map(tools, bad_tool)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, tools=tools, config=cfg)
+        runner = AgentRunner(transport=mock, config=cfg)
 
         @use_tools(bad_tool)
         @agent(model="mock-model", tool_error_policy="skip")
         class SkipAgent: ...
+
+        SkipAgent.__lauren_ai_agent__.tools = tools
 
         mock.queue_tool_use("bad_tool", {"x": 1})
         mock.queue_response(_completion("recovered"))
@@ -2033,11 +2055,13 @@ class TestRunEdgeCases:
         _add_to_tool_map(tools, bad_tool)
         cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, tools=tools, config=cfg)
+        runner = AgentRunner(transport=mock, config=cfg)
 
         @use_tools(bad_tool)
         @agent(model="mock-model", tool_error_policy="raise")
         class RaiseAgent: ...
+
+        RaiseAgent.__lauren_ai_agent__.tools = tools
 
         mock.queue_tool_use("bad_tool", {"x": 1})
 

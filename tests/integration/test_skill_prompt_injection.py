@@ -11,14 +11,11 @@ Input guardrail behaviour:
 import asyncio
 import re
 
-import pytest
-
-from lauren_ai._transport import Completion, TokenUsage
+from lauren_ai import PromptInjectionFilter, use_guardrails
 from lauren_ai._agents import agent
-from lauren_ai import use_guardrails, PromptInjectionFilter
 from lauren_ai._guardrails._base import GuardrailContext, GuardrailDecision
+from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Custom guardrail (inlined)

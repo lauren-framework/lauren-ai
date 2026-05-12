@@ -5,9 +5,9 @@ consistency per user_id, via direct calls.
 """
 
 import hashlib
-import pytest
 from dataclasses import dataclass
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # Implementation (inlined)
@@ -51,7 +51,7 @@ class PromptVersionRegistry:
             weights = [1.0 / len(variants)] * len(variants)
         bucket = int(hashlib.md5(user_id.encode()).hexdigest(), 16) % 100
         cumulative = 0.0
-        for variant, weight in zip(variants, weights):
+        for variant, weight in zip(variants, weights, strict=False):
             cumulative += weight * 100
             if bucket < cumulative:
                 return variant

@@ -32,17 +32,11 @@ import re
 import sys
 import types
 import typing
-from typing import Any, get_args, get_origin
+from typing import Any, TypedDict, get_args, get_origin
 
 from ._types_compat import is_optional, peel_optional
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Forward-declare ToolSchema locally to avoid circular import.
-# The real ToolSchema is imported from __init__ at call time.
-# ---------------------------------------------------------------------------
-from typing import TypedDict
 
 
 class _InputSchema(TypedDict, total=False):
@@ -87,10 +81,7 @@ def _parse_docstring(doc: str) -> tuple[str, dict[str, str]]:
     # Find the common indent of non-empty lines (excluding the first line which
     # may be on the same line as the opening ``"""``)
     non_empty = [ln for ln in lines[1:] if ln.strip()]
-    if non_empty:
-        common_indent = min(len(ln) - len(ln.lstrip()) for ln in non_empty)
-    else:
-        common_indent = 0
+    common_indent = min(len(ln) - len(ln.lstrip()) for ln in non_empty) if non_empty else 0
 
     # Strip common indent from all lines except the first
     stripped_lines: list[str] = [lines[0].strip()]
@@ -119,7 +110,7 @@ def _parse_docstring(doc: str) -> tuple[str, dict[str, str]]:
     # Allow any indent that is > 0
     param_line_re = re.compile(r"^(\s{2,})(\w+)\s*:\s*(.*)")
     # Continuation line: more indented than param line
-    continuation_re = re.compile(r"^(\s{4,})(.*)")
+    re.compile(r"^(\s{4,})(.*)")
 
     param_indent: int | None = None
 
@@ -381,10 +372,7 @@ def generate_tool_schema(
     else:
         raw_name = func_or_class.__name__ if is_class else func_or_class.__name__
         # Convert CamelCase class names to snake_case
-        if is_class:
-            tool_name = re.sub(r"(?<!^)(?=[A-Z])", "_", raw_name).lower()
-        else:
-            tool_name = raw_name
+        tool_name = re.sub(r"(?<!^)(?=[A-Z])", "_", raw_name).lower() if is_class else raw_name
 
     # Resolve description
     tool_description = description if description else parsed_desc

@@ -4,14 +4,11 @@ Verifies PIIRedactor, LengthFilter, and custom TopicScopeGuard via
 TestClient with MockTransport.
 """
 
-import pytest
-
-from lauren_ai._transport import Completion, TokenUsage
+from lauren_ai import LengthFilter, PIIRedactor, use_guardrails
 from lauren_ai._agents import agent
-from lauren_ai import use_guardrails, PIIRedactor, LengthFilter
 from lauren_ai._guardrails._base import GuardrailContext, GuardrailDecision
+from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Custom guardrail for testing

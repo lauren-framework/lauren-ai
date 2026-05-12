@@ -231,7 +231,7 @@ class TestShortTermMemoryExtended:
             {"role": "system", "content": "System message " * 100},
             {"role": "system", "content": "Another system " * 100},
         ]
-        initial_len = len(mem)
+        len(mem)
         mem.trim_to_fit(max_tokens=1)  # Impossible budget
         # Cannot trim system messages — should stop after trying
         # (at least some messages remain)

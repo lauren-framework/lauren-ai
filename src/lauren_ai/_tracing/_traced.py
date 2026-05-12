@@ -160,6 +160,6 @@ def traced(
                             except Exception:
                                 pass
 
-        return wrapper  # type: ignore[return-value]
+        return wrapper
 
-    return decorator  # type: ignore[return-value]
+    return decorator

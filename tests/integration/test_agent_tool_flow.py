@@ -35,7 +35,7 @@ def make_runner(
 ) -> AgentRunner:
     tools = tools if tools is not None else {}
     config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, tools=tools, config=config)
+    return AgentRunner(transport=mock, config=config)
 
 
 def text_completion(content: str, *, id: str = "c1") -> Completion:
@@ -96,16 +96,25 @@ class WeatherAgent:
     pass
 
 
+WeatherAgent.__lauren_ai_agent__.tools = _make_tool_map(get_weather)
+
+
 @agent(model="mock-model", system="You are a multi-tool agent.")
 @use_tools(get_weather, get_forecast)
 class MultiToolAgent:
     pass
 
 
+MultiToolAgent.__lauren_ai_agent__.tools = _make_tool_map(get_weather, get_forecast)
+
+
 @agent(model="mock-model", system="You are an error-prone agent.")
 @use_tools(always_fails)
 class ErrorAgent:
     pass
+
+
+ErrorAgent.__lauren_ai_agent__.tools = _make_tool_map(always_fails)
 
 
 @agent(model="mock-model", system="You are a simple assistant.")
@@ -270,24 +279,27 @@ class TestToolErrorHandling:
 
     @pytest.mark.asyncio
     async def test_tool_error_policy_raise(self):
-        """With tool_error_policy='raise', tool exceptions propagate (wrapped in ToolExecutionError)."""
+        """With tool_error_policy='raise', tool exceptions propagate
+        (wrapped in ToolExecutionError)."""
         # The executor wraps tool exceptions in its own ToolExecutionError.
         # Import it from the executor module directly.
 
         mock = MockTransport()
         tools = _make_tool_map(always_fails)
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, tools=tools, config=config)
+        runner = AgentRunner(transport=mock, config=config)
 
         @agent(model="mock-model", tool_error_policy="raise")
         @use_tools(always_fails)
         class RaisingErrorAgent:
             pass
 
+        RaisingErrorAgent.__lauren_ai_agent__.tools = tools
+
         mock.queue_tool_use("always_fails", {"query": "will raise"})
 
         instance = RaisingErrorAgent()
-        with pytest.raises(Exception):  # ToolExecutionError (from executor) wraps RuntimeError
+        with pytest.raises(Exception):  # noqa: B017 — ToolExecutionError wraps RuntimeError
             await runner.run(instance, "Try the failing tool.")
 
     @pytest.mark.asyncio
@@ -296,12 +308,14 @@ class TestToolErrorHandling:
         mock = MockTransport()
         tools = _make_tool_map(always_fails)
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, tools=tools, config=config)
+        runner = AgentRunner(transport=mock, config=config)
 
         @agent(model="mock-model", tool_error_policy="skip")
         @use_tools(always_fails)
         class SkippingErrorAgent:
             pass
+
+        SkippingErrorAgent.__lauren_ai_agent__.tools = tools
 
         mock.queue_tool_use("always_fails", {"query": "silently skip"})
         mock.queue_response(text_completion("I skipped the error.", id="c2"))

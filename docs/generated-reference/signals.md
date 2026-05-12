@@ -228,4 +228,3 @@ or the class `__name__` when not explicitly set. |
 | `total_cost_usd` | `float` | Estimated total cost in USD for the run. |
 | `stop_reason` | `str` | Why the agent loop terminated (e.g. `"end_turn"`,
 `"max_turns"`, `"budget_exceeded"`). |
-

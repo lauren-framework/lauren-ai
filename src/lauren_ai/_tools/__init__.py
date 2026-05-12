@@ -21,6 +21,12 @@ Typical usage::
 
 from __future__ import annotations
 
+import inspect
+import json
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any, TypedDict, TypeVar
+
 __all__ = [
     "TOOL_META",
     "TOOL_METADATA",
@@ -37,12 +43,6 @@ __all__ = [
 # @tool()-decorated functions and classes — same pattern as lauren.set_metadata
 # on route handlers.
 TOOL_METADATA = "__lauren_ai_tool_metadata__"
-
-import inspect
-import json
-from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import Any, TypedDict, TypeVar
 
 _T = TypeVar("_T")
 
@@ -138,7 +138,7 @@ class ToolContext:
 # ---------------------------------------------------------------------------
 
 
-def get_tool_context_from_func_args(*args: Any, **kwargs: Any) -> "ToolContext | None":
+def get_tool_context_from_func_args(*args: Any, **kwargs: Any) -> ToolContext | None:
     """Return the first :class:`ToolContext` found in a tool call's arguments.
 
     The tool executor injects :class:`ToolContext` as a named keyword argument
@@ -197,7 +197,7 @@ def get_tool_context_from_func_args(*args: Any, **kwargs: Any) -> "ToolContext |
 # ---------------------------------------------------------------------------
 
 
-def set_metadata(key: str, value: Any) -> "Callable[[_T], _T]":
+def set_metadata(key: str, value: Any) -> Callable[[_T], _T]:
     """Attach static metadata to a ``@tool()`` function or class.
 
     Mirrors ``lauren.set_metadata`` for route handlers: the key-value pair is
@@ -229,7 +229,7 @@ def set_metadata(key: str, value: Any) -> "Callable[[_T], _T]":
     :returns: A class/function decorator that attaches the key-value pair.
     """
 
-    def decorator(target: "_T") -> "_T":
+    def decorator(target: _T) -> _T:
         existing: dict[str, Any] = dict(getattr(target, TOOL_METADATA, {}))
         existing[key] = value
         setattr(target, TOOL_METADATA, existing)
@@ -486,10 +486,7 @@ def _build_meta(
     )
 
     # Determine entry-point for is_async / reads_context
-    if inspect.isclass(fn_or_cls):
-        entry = getattr(fn_or_cls, "run", None)
-    else:
-        entry = fn_or_cls
+    entry = getattr(fn_or_cls, "run", None) if inspect.isclass(fn_or_cls) else fn_or_cls
 
     if entry is None:
         raise ValueError(

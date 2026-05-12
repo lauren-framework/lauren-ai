@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Base types for output parsers."""
+
+from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 

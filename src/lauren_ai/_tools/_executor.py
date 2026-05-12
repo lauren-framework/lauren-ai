@@ -21,6 +21,7 @@ __all__ = [
 ]
 
 import asyncio
+import contextlib
 import inspect
 import json
 import logging
@@ -271,6 +272,8 @@ class ToolExecutor:
         self,
         tool_call: ToolCall,
         tool_context: ToolContext,
+        *,
+        tool_map: dict | None = None,
     ) -> ToolResult:
         """Execute a single tool call.
 
@@ -290,13 +293,14 @@ class ToolExecutor:
         tool_use_id = tool_call.tool_use_id
         tool_input = tool_call.input or {}
 
-        entry = self._tools.get(name)
+        entry = (tool_map if tool_map is not None else self._tools).get(name)
         if entry is None:
             agent_name = (
                 tool_context.agent_context.agent_name if tool_context.agent_context else "unknown"
             )
             logger.warning(
-                "lauren_ai.ToolExecutor: agent with name '%s' called unknown tool '%s' — returning error result",
+                "lauren_ai.ToolExecutor: agent '%s' called unknown tool '%s'"
+                " — returning error result",
                 agent_name,
                 name,
             )
@@ -342,10 +346,8 @@ class ToolExecutor:
             )
             # Error hook
             if meta.error_hook is not None:
-                try:
+                with contextlib.suppress(Exception):
                     await self._call_hook(meta.error_hook, exc, tool_context)
-                except Exception:  # noqa: BLE001
-                    pass
             raise ToolExecutionError(name, exc) from exc
 
         # Build ToolResult

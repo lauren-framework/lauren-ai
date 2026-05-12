@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Guardrail decorators for ``lauren-ai``.
 
 Two decorators are provided:
@@ -13,6 +11,8 @@ Two decorators are provided:
   instances to an ``@agent()``-decorated class, identical to how
   ``@use_guards()`` attaches guard classes to a controller.
 """
+
+from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field

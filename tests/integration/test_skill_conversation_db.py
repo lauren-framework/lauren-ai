@@ -30,13 +30,12 @@ try:
 except ImportError:
     HAS_AIOSQLITE = False
 
-pytestmark = pytest.mark.skipif(not HAS_AIOSQLITE, reason="aiosqlite not installed")
-
 from lauren_ai._agents import agent
 from lauren_ai._memory import ConversationStore
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import TestClient
 
+pytestmark = pytest.mark.skipif(not HAS_AIOSQLITE, reason="aiosqlite not installed")
 
 # ---------------------------------------------------------------------------
 # SQLiteConversationStore implementation under test

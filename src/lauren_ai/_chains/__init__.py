@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Composable chain primitives (template | llm | parser)."""
+
+from __future__ import annotations
 
 from lauren_ai._chains._chain import Chain, Runnable, RunnableLambda, chain
 

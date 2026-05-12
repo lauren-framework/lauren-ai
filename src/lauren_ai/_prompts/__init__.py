@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Prompt template primitives for lauren-ai."""
+
+from __future__ import annotations
 
 from lauren_ai._prompts._templates import (
     ChatPromptTemplate,

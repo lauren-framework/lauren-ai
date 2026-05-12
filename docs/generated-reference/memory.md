@@ -452,4 +452,3 @@ and stored in the UserMemoryStore.
 | `inject` | `bool` | Inject relevant memories before each turn. |
 | `top_k` | `int` | Number of memories to inject. |
 | `extraction_model` | `str | None` | Model for fact extraction (defaults to agent model). |
-

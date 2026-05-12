@@ -177,4 +177,3 @@ preserve deterministic ordering guarantees. |
 provider default. |
 | `include_reasoning_in_response` | `bool` | When `True` thinking blocks are
 included in the `Completion` response. |
-

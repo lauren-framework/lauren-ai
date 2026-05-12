@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """CostTracker -- accumulates token usage and estimates per conversation/user."""
+
+from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator

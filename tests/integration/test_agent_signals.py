@@ -45,7 +45,7 @@ def make_runner_with_signals(
 ) -> AgentRunner:
     tools = tools if tools is not None else {}
     config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, tools=tools, config=config, signals=bus)
+    return AgentRunner(transport=mock, config=config, signals=bus)
 
 
 def text_completion(content: str, *, id: str = "c1") -> Completion:
@@ -78,6 +78,9 @@ async def echo_tool(message: str) -> str:
 @use_tools(echo_tool)
 class SignalTestAgent:
     pass
+
+
+SignalTestAgent.__lauren_ai_agent__.tools = _make_tool_map(echo_tool)
 
 
 @agent(model="mock-model", system="Simple signal test agent.")
@@ -312,12 +315,14 @@ class TestToolCallSignals:
         mock = MockTransport()
         tools = _make_tool_map(boom_tool)
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, tools=tools, config=config, signals=bus)
+        runner = AgentRunner(transport=mock, config=config, signals=bus)
 
         @agent(model="mock-model")
         @use_tools(boom_tool)
         class BoomAgent:
             pass
+
+        BoomAgent.__lauren_ai_agent__.tools = tools
 
         completed: list[ToolCallComplete] = []
 
@@ -424,7 +429,8 @@ class TestAgentRunCompleteSignal:
 class TestSignalOrdering:
     @pytest.mark.asyncio
     async def test_signal_order_simple_run(self):
-        """For a simple (no-tool) run, order is: ModelCallStarted, ModelCallComplete, AgentRunComplete."""
+        """For a simple (no-tool) run, order is: ModelCallStarted, ModelCallComplete,
+        AgentRunComplete."""
         bus = SignalBus()
         mock = MockTransport()
         runner = make_runner_with_signals(mock, bus)
@@ -452,7 +458,8 @@ class TestSignalOrdering:
 
     @pytest.mark.asyncio
     async def test_signal_order_with_tool(self):
-        """With a tool call: ModelCallStarted (once), ModelCallComplete x2, ToolCallStarted, ToolCallComplete, AgentRunComplete.
+        """With a tool call: ModelCallStarted (once), ModelCallComplete x2,
+        ToolCallStarted, ToolCallComplete, AgentRunComplete.
 
         The runner emits ModelCallStarted once before the loop begins, then
         ModelCallComplete after each LLM call within the loop.
@@ -509,7 +516,6 @@ class TestSignalOrdering:
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         runner = AgentRunner(
             transport=mock,
-            tools={},
             config=config,
             signals=None,  # explicitly no bus
         )

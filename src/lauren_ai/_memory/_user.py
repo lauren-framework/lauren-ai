@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """User-level persistent memory that spans conversations."""
+
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime

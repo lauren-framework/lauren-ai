@@ -546,7 +546,8 @@ class OpenAITransport:
         raise TransportError("Unexpected retry loop exit", provider="openai")
 
     def _response_to_completion(self, response: Any, *, model: str) -> Completion:
-        """Convert an OpenAI chat completion response to a :class:`~lauren_ai._transport.Completion`.
+        """Convert an OpenAI chat completion response to a
+        :class:`~lauren_ai._transport.Completion`.
 
         :param response: OpenAI SDK ``ChatCompletion`` object.
         :param model: Model name.
@@ -614,7 +615,8 @@ class OpenAITransport:
         *,
         model: str,
     ) -> AsyncIterator[CompletionChunk]:
-        """Perform a streaming completion and yield :class:`~lauren_ai._transport.CompletionChunk` objects.
+        """Perform a streaming completion and yield
+        :class:`~lauren_ai._transport.CompletionChunk` objects.
 
         :param client: OpenAI async client.
         :param call_kwargs: API call kwargs (``stream=True`` must be set).

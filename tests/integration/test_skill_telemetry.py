@@ -17,14 +17,13 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 
-from lauren_ai import SignalBus, ModelCallComplete, AgentRunComplete
+from lauren_ai import AgentRunComplete, ModelCallComplete, SignalBus
 from lauren_ai._agents import agent
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
 from lauren_ai._config import LLMConfig
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
 from lauren_ai.testing import TestClient
-
 
 # ---------------------------------------------------------------------------
 # AgentTelemetry implementation (inline)
@@ -110,7 +109,7 @@ def _completion(content="OK", *, n=1, stop_reason="end_turn"):
 
 def _make_runner_with_bus(bus: SignalBus, mock: MockTransport) -> AgentRunner:
     cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, tools={}, config=cfg, signals=bus)
+    return AgentRunner(transport=mock, config=cfg, signals=bus)
 
 
 # ---------------------------------------------------------------------------

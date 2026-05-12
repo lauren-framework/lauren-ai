@@ -25,9 +25,8 @@ NOTE: No from __future__ import annotations.
 import asyncio
 
 from lauren_ai._knowledge import KnowledgeBase, TextLoader
-from lauren_ai._memory import MemoryResult, MemoryStore
+from lauren_ai._memory import MemoryStore
 from lauren_ai._memory._vector import InMemoryVectorStore
-
 
 # ---------------------------------------------------------------------------
 # Tests: InMemoryVectorStore CRUD (direct Python)

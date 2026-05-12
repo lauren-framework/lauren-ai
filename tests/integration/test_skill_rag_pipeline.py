@@ -27,11 +27,9 @@ from lauren_ai._knowledge import (
     SentenceChunker,
     TextLoader,
 )
-from lauren_ai._memory import MemoryResult
 from lauren_ai._memory._vector import InMemoryVectorStore
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Multimodal content types for vision, audio, and document inputs."""
+
+from __future__ import annotations
 
 import base64
 from dataclasses import dataclass, field

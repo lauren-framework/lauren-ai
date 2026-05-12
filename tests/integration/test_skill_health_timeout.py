@@ -26,7 +26,6 @@ from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
 from lauren_ai.testing import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Timeout + circuit breaker implementations (inline for test file)
 # ---------------------------------------------------------------------------
@@ -48,7 +47,7 @@ async def run_with_timeout(
             "content": response.content,
             "turns": response.turns,
         }
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return {"status": "timeout", "error": f"Agent timed out after {timeout}s"}
     except Exception as e:
         return {"status": "error", "error": str(e)}
@@ -114,7 +113,7 @@ def _completion(content="OK", *, n=1, stop_reason="end_turn"):
 
 def _make_runner(mock: MockTransport) -> AgentRunner:
     cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, tools={}, config=cfg)
+    return AgentRunner(transport=mock, config=cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +144,7 @@ class TestRunWithTimeout:
         runner = _make_runner(mock)
 
         async def always_timeout(*args, **kwargs):
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
 
         with patch("asyncio.wait_for", side_effect=always_timeout):
             result = await run_with_timeout(runner, HealthAgent(), "slow prompt", timeout=0.001)
@@ -158,7 +157,7 @@ class TestRunWithTimeout:
         runner = _make_runner(mock)
 
         async def always_timeout(*args, **kwargs):
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
 
         with patch("asyncio.wait_for", side_effect=always_timeout):
             result = await run_with_timeout(runner, HealthAgent(), "prompt", timeout=15.5)

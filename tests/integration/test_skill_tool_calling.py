@@ -20,7 +20,6 @@ from lauren_ai._tools import TOOL_META, tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Tool definitions (module level — no future annotations)
 # ---------------------------------------------------------------------------

@@ -293,8 +293,7 @@ def build_check(session: nox.Session) -> None:
     """Validate the built distributions with ``twine check``."""
     if not DIST_DIR.exists() or not any(DIST_DIR.iterdir()):
         session.error(
-            "dist/ is empty; run `nox -s build` first or chain them: "
-            "`nox -s build build_check`."
+            "dist/ is empty; run `nox -s build` first or chain them: `nox -s build build_check`."
         )
     session.install("twine>=5.1")
     session.run("twine", "check", *[str(p) for p in DIST_DIR.iterdir()])
@@ -443,10 +442,26 @@ def help_session(session: nox.Session) -> None:
     print("Available nox sessions:")
     print()
     _sessions = {
-        "benchmark", "build", "build_check", "ci", "clean", "coverage",
-        "docs", "docs_install", "docs_serve", "eval_", "format",
-        "help_session", "lint", "prek", "release", "release_test",
-        "tests", "tests_integration", "tests_unit", "tests_verbose",
+        "benchmark",
+        "build",
+        "build_check",
+        "ci",
+        "clean",
+        "coverage",
+        "docs",
+        "docs_install",
+        "docs_serve",
+        "eval_",
+        "format",
+        "help_session",
+        "lint",
+        "prek",
+        "release",
+        "release_test",
+        "tests",
+        "tests_integration",
+        "tests_unit",
+        "tests_verbose",
         "typecheck",
     }
     for name, fn in sorted(globals().items()):

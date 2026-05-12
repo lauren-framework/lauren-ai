@@ -96,7 +96,7 @@ class TestTypeToJsonSchemaExtended:
     def test_union_non_optional(self):
         from typing import Union
 
-        result = type_to_json_schema(Union[str, int])
+        result = type_to_json_schema(Union[str, int])  # noqa: UP007
         assert "anyOf" in result
         types = {s.get("type") for s in result["anyOf"]}
         assert "string" in types
@@ -105,20 +105,20 @@ class TestTypeToJsonSchemaExtended:
     def test_union_collapses_to_single(self):
         from typing import Union
 
-        result = type_to_json_schema(Union[str, None])
+        result = type_to_json_schema(Union[str, None])  # noqa: UP007
         # Optional[str] → str
         assert result == {"type": "string"}
 
     def test_optional_int(self):
         from typing import Optional
 
-        result = type_to_json_schema(Optional[int])
+        result = type_to_json_schema(Optional[int])  # noqa: UP045
         assert result == {"type": "integer"}
 
     def test_optional_list_str(self):
         from typing import Optional
 
-        result = type_to_json_schema(Optional[list[str]])
+        result = type_to_json_schema(Optional[list[str]])  # noqa: UP045
         assert result["type"] == "array"
         assert result["items"] == {"type": "string"}
 
@@ -184,19 +184,11 @@ class TestTypeToJsonSchemaExtended:
         assert result.get("type") in ("object", "string")
 
     def test_python310_union_syntax(self):
-        import sys
-
-        if sys.version_info < (3, 10):
-            pytest.skip("Python 3.10+ only")
         # str | int union syntax
         result = type_to_json_schema(eval("str | int"))
         assert "anyOf" in result
 
     def test_python310_optional_syntax(self):
-        import sys
-
-        if sys.version_info < (3, 10):
-            pytest.skip("Python 3.10+ only")
         result = type_to_json_schema(eval("str | None"))
         assert result == {"type": "string"}
 
@@ -364,7 +356,6 @@ class TestGenerateToolSchema:
         assert "ctx" not in schema["input_schema"]["properties"]
 
     def test_optional_params_not_required(self):
-
         async def opt_func(required: str, optional: int | None = None) -> str:
             """A function. Args: required: Required. optional: Optional."""
             return required

@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """RateLimiter -- token-bucket rate limiter with exponential backoff on 429."""
+
+from __future__ import annotations
 
 import asyncio
 import random

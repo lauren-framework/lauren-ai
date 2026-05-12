@@ -20,7 +20,6 @@ from lauren_ai._tools import ToolContext, ToolResult, tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai.testing import TestClient
 
-
 # ---------------------------------------------------------------------------
 # RestAPITool implementation
 # ---------------------------------------------------------------------------
@@ -296,9 +295,7 @@ class TestRestAPIToolAuth:
         mock_resp = _mock_response(200, "ok")
         mock_client, mock_fn = _make_mock_client("get", mock_resp)
         with patch("httpx.AsyncClient", return_value=mock_client):
-            result = asyncio.run(
-                tool_inst.run(ctx, url="https://api.example.com/secure", method="GET")
-            )
+            asyncio.run(tool_inst.run(ctx, url="https://api.example.com/secure", method="GET"))
         sent_headers = mock_fn.call_args.kwargs.get("headers", {})
         assert sent_headers.get("Authorization") == "Bearer request-token"
 

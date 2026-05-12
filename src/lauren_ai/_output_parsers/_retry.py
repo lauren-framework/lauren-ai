@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """RetryOutputParser — auto-retry with LLM correction on parse failure."""
+
+from __future__ import annotations
 
 from typing import Any
 
@@ -106,7 +106,7 @@ class RetryOutputParser:
 
         messages = list(original_messages)
         # Append the assistant's (potentially malformed) response to the history
-        messages.append(Message(role="assistant", content=completion.content))  # type: ignore[arg-type]
+        messages.append(Message(role="assistant", content=completion.content))
 
         last_error: OutputParserError | None = None
 
@@ -125,7 +125,7 @@ class RetryOutputParser:
                     f"Please provide a corrected response following this format:\n"
                     f"{self._parser.format_instructions}"
                 )
-                messages.append(Message(role="user", content=correction))  # type: ignore[arg-type]
+                messages.append(Message(role="user", content=correction))
 
                 # Request a correction from the LLM
                 result = await self._llm.complete(messages)
@@ -145,7 +145,7 @@ class RetryOutputParser:
                         stop_reason="end_turn",
                         usage=TokenUsage(0, 0),
                     )
-                messages.append(Message(role="assistant", content=completion.content))  # type: ignore[arg-type]
+                messages.append(Message(role="assistant", content=completion.content))
 
         raise MaxRetryError(
             f"Failed to parse after {self._max_retries + 1} attempts. Last error: {last_error}",

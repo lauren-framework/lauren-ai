@@ -165,4 +165,3 @@ such as a misconfigured exporter or a failed export operation.
 |---|---|---|
 | `message` | `str` | Human-readable description of the failure. |
 | `cause` | `BaseException | None` | The underlying exception. |
-

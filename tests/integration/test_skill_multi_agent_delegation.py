@@ -15,11 +15,10 @@ NOTE: Class-form tools must annotate ctx as ToolContext for context injection.
 from lauren_ai._agents import agent, use_tools
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
 from lauren_ai._config import LLMConfig
-from lauren_ai._tools import ToolContext, TOOL_META, _add_to_tool_map, tool
+from lauren_ai._tools import TOOL_META, ToolContext, _add_to_tool_map, tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
 from lauren_ai.testing import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,7 +38,7 @@ def _c(content: str = "OK", *, n: int = 1) -> Completion:
 
 def _make_runner(mock: MockTransport) -> AgentRunner:
     cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, tools={}, config=cfg)
+    return AgentRunner(transport=mock, config=cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +118,8 @@ def build_orchestrator(
         @use_tools(DelegateToBilling)
         class OrchestratorAgent: ...
 
-        orch_runner = AgentRunner(transport=orch_mock, tools=orch_tools, config=orch_cfg)
+        OrchestratorAgent.__lauren_ai_agent__.tools = orch_tools
+        orch_runner = AgentRunner(transport=orch_mock, config=orch_cfg)
         return TestClient(OrchestratorAgent(), runner=orch_runner)
     else:
         delegate_tool = DelegateToTechSupport(specialist_runner=spec_runner)
@@ -130,7 +130,8 @@ def build_orchestrator(
         @use_tools(DelegateToTechSupport)
         class TechOrchestratorAgent: ...
 
-        orch_runner = AgentRunner(transport=orch_mock, tools=orch_tools, config=orch_cfg)
+        TechOrchestratorAgent.__lauren_ai_agent__.tools = orch_tools
+        orch_runner = AgentRunner(transport=orch_mock, config=orch_cfg)
         return TestClient(TechOrchestratorAgent(), runner=orch_runner)
 
 

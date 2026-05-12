@@ -70,7 +70,8 @@ def _require_anthropic() -> Any:
 
 
 def _content_block_to_anthropic(block: Any) -> dict[str, Any]:
-    """Convert a :class:`~lauren_ai._transport.ContentBlock` (or plain dict) to the Anthropic API dict.
+    """Convert a :class:`~lauren_ai._transport.ContentBlock` (or plain dict)
+    to the Anthropic API dict.
 
     Accepts both ``ContentBlock`` dataclass instances and plain dicts (as stored
     by ``ShortTermMemory`` at runtime).
@@ -121,7 +122,8 @@ def _content_block_to_anthropic(block: Any) -> dict[str, Any]:
 
 
 def _message_to_anthropic(message: Any) -> dict[str, Any]:
-    """Convert a :class:`~lauren_ai._transport.Message` (or plain dict) to an Anthropic message dict.
+    """Convert a :class:`~lauren_ai._transport.Message` (or plain dict)
+    to an Anthropic message dict.
 
     Accepts both ``Message`` dataclass instances and plain dicts (as stored by
     ``ShortTermMemory`` at runtime).
@@ -606,7 +608,8 @@ class AnthropicTransport:
         raise TransportError("Unexpected retry loop exit", provider="anthropic")
 
     def _response_to_completion(self, response: Any, *, model: str) -> Completion:
-        """Convert an Anthropic SDK ``Message`` response to a :class:`~lauren_ai._transport.Completion`.
+        """Convert an Anthropic SDK ``Message`` response to a
+        :class:`~lauren_ai._transport.Completion`.
 
         :param response: The Anthropic SDK response object.
         :param model: Model name.
@@ -640,7 +643,8 @@ class AnthropicTransport:
         client: Any,
         call_kwargs: dict[str, Any],
     ) -> AsyncIterator[CompletionChunk]:
-        """Perform a streaming completion and yield :class:`~lauren_ai._transport.CompletionChunk` objects.
+        """Perform a streaming completion and yield
+        :class:`~lauren_ai._transport.CompletionChunk` objects.
 
         :param client: The async Anthropic client.
         :param call_kwargs: Arguments for the API streaming call.
@@ -669,15 +673,14 @@ class AnthropicTransport:
                         elif delta_type == "thinking_delta":
                             yield CompletionChunk(thinking_delta=getattr(delta, "thinking", ""))
 
-                        elif delta_type == "input_json_delta":
-                            if _current_tool_use_id is not None:
-                                yield CompletionChunk(
-                                    tool_call_delta=ToolCallDelta(
-                                        tool_use_id=_current_tool_use_id,
-                                        name=None,
-                                        input_delta=getattr(delta, "partial_json", ""),
-                                    )
+                        elif delta_type == "input_json_delta" and _current_tool_use_id is not None:
+                            yield CompletionChunk(
+                                tool_call_delta=ToolCallDelta(
+                                    tool_use_id=_current_tool_use_id,
+                                    name=None,
+                                    input_delta=getattr(delta, "partial_json", ""),
                                 )
+                            )
 
                     elif event_type == "content_block_start":
                         block = getattr(event, "content_block", None)

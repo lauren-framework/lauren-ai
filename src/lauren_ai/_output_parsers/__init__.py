@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Output parser implementations for lauren-ai."""
+
+from __future__ import annotations
 
 from lauren_ai._output_parsers._base import MaxRetryError, OutputParserError
 from lauren_ai._output_parsers._builtin import (

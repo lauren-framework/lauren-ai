@@ -173,8 +173,6 @@ class TestAiRateLimit:
             class client:
                 host = "127.0.0.1"
 
-        responses = []
-
         async def call_next(req):
             return "ok"
 

@@ -33,7 +33,7 @@ __all__ = [
 
 import copy
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 # ---------------------------------------------------------------------------

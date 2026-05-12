@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Semantic routing — route queries to agents/chains by embedding similarity."""
+
+from __future__ import annotations
 
 import math
 from collections.abc import Callable
@@ -263,7 +263,7 @@ class SemanticRouter:
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     if len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     mag_a = math.sqrt(sum(x * x for x in a))
     mag_b = math.sqrt(sum(x * x for x in b))
     if mag_a == 0 or mag_b == 0:

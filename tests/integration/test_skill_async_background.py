@@ -10,7 +10,6 @@ import threading
 from dataclasses import dataclass
 from uuid import uuid4
 
-
 # ---------------------------------------------------------------------------
 # AgentTask and AgentTaskQueue implementation
 # ---------------------------------------------------------------------------

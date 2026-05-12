@@ -16,7 +16,6 @@ from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
 from lauren_ai.testing import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -77,7 +76,7 @@ class TestLLMConfigDirectConstructor:
 
     def test_config_is_frozen(self):
         cfg = LLMConfig(provider="anthropic", model="claude-opus-4-6")
-        with pytest.raises(Exception):
+        with pytest.raises(AttributeError):  # FrozenInstanceError subclasses AttributeError
             cfg.model = "changed"  # type: ignore[misc]
 
 

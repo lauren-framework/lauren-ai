@@ -14,8 +14,6 @@ NOTE: from __future__ import annotations IS safe here (no @tool definitions).
 
 from __future__ import annotations
 
-import asyncio
-
 from lauren_ai import ShortTermMemory, agent
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
 from lauren_ai._config import LLMConfig
@@ -23,7 +21,6 @@ from lauren_ai._memory._stores import InMemoryConversationStore
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
 from lauren_ai.testing import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Helper utilities from the skill
@@ -73,7 +70,7 @@ def _make_runner(mock=None):
     if mock is None:
         mock = MockTransport()
     cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, tools={}, config=cfg)
+    runner = AgentRunner(transport=mock, config=cfg)
     return runner, mock
 
 
@@ -168,7 +165,7 @@ class TestShortTermMemory:
     def test_messages_trimmed_when_over_budget(self):
         # 10 tokens budget = 40 chars; add many long messages
         mem = ShortTermMemory(max_tokens=10)
-        for i in range(20):
+        for _i in range(20):
             mem.add_user("A" * 50)  # 50 chars = ~12 tokens each
         trimmed = mem.messages()
         # Should have fewer messages than were added

@@ -11,10 +11,8 @@ Tests cover:
 """
 
 from lauren_ai._agents import agent
-from lauren_ai._transport import Completion, CompletionChunk, TokenUsage
-from lauren_ai._transport._mock import MockTransport
+from lauren_ai._transport import CompletionChunk, TokenUsage
 from lauren_ai.testing import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -51,7 +49,7 @@ class TestStreamBasic:
         client = TestClient(StreamAgent())
         client.mock.queue_stream(_chunks("Hello"))
         chunk_count = 0
-        async for chunk in await client.run_stream_async("hi"):
+        async for _chunk in await client.run_stream_async("hi"):
             chunk_count += 1
         assert chunk_count > 0
 

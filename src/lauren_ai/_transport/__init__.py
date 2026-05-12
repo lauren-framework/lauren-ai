@@ -21,9 +21,9 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, runtime_checkable
 
-from typing_extensions import Protocol, runtime_checkable
+from typing_extensions import Protocol
 
 __all__ = [
     # Primitive data types

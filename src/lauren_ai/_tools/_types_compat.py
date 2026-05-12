@@ -52,4 +52,4 @@ def peel_optional(ann: Any) -> Any:
     if len(non_none) == 1:
         return non_none[0]
     # Reconstruct Union for multi-type optionals
-    return typing.Union[tuple(non_none)]
+    return typing.Union[tuple(non_none)]  # noqa: UP007 — runtime, not annotation

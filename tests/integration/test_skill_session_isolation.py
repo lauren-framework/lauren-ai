@@ -20,8 +20,6 @@ from lauren_ai._config import LLMConfig
 from lauren_ai._memory._stores import InMemoryConversationStore
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
-from lauren_ai.testing import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Agent definitions
@@ -88,7 +86,7 @@ def _completion(content="OK", *, n=1, stop_reason="end_turn"):
 
 def _make_runner(mock: MockTransport) -> AgentRunner:
     cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, tools={}, config=cfg)
+    return AgentRunner(transport=mock, config=cfg)
 
 
 # ---------------------------------------------------------------------------

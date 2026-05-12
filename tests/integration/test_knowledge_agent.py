@@ -36,7 +36,7 @@ def make_runner(
 ) -> AgentRunner:
     tools = tools if tools is not None else {}
     config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, tools=tools, config=config)
+    return AgentRunner(transport=mock, config=config)
 
 
 def text_completion(content: str, *, id: str = "c1") -> Completion:
@@ -241,6 +241,8 @@ class TestKnowledgeAgentIntegration:
         class DocsAgent:
             pass
 
+        DocsAgent.__lauren_ai_agent__.tools = tools
+
         mock.queue_tool_use("search_lauren_docs", {"query": "Lauren framework"})
         mock.queue_response(
             text_completion("Lauren is a Python web framework inspired by NestJS.", id="c2")
@@ -288,6 +290,8 @@ class TestKnowledgeAgentIntegration:
         class EmptyKbAgent:
             pass
 
+        EmptyKbAgent.__lauren_ai_agent__.tools = tools
+
         mock.queue_tool_use("empty_kb_search", {"query": "anything"})
         mock.queue_response(text_completion("I could not find relevant documentation.", id="c2"))
 
@@ -320,6 +324,8 @@ class TestKnowledgeAgentIntegration:
         @use_tools(kb_tool_a, kb_tool_b)
         class DualKbAgent:
             pass
+
+        DualKbAgent.__lauren_ai_agent__.tools = tools
 
         mock.queue_tool_use("search_cats", {"query": "feline"})
         mock.queue_tool_use("search_dogs", {"query": "canine"})
@@ -381,10 +387,13 @@ class TestKnowledgeParameter:
 
     @pytest.mark.asyncio
     async def test_attaches_search_tool_to_runner(self):
-        """A KnowledgeSource shows up as ``search_knowledge_base`` in the runner."""
+        """A KnowledgeSource shows up in meta.tools for opted-in agents."""
+        from lauren_ai._agents import use_knowledge_sources  # noqa: PLC0415
+
         kb = await _populated_kb()
         ks = KnowledgeSource(kb=kb)
 
+        @use_knowledge_sources(ks)
         @agent(model=None)
         class SearchAgent: ...
 
@@ -399,10 +408,9 @@ class TestKnowledgeParameter:
         @module(imports=[LLMProv, AIMod])
         class AppMod: ...
 
-        app = LaurenFactory.create(AppMod)
-        runner = await _resolve(app, AIMod.runner_class)
+        LaurenFactory.create(AppMod)
 
-        assert "search_knowledge_base" in runner._tools
+        assert "search_knowledge_base" in SearchAgent.__lauren_ai_agent__.tools
 
     @pytest.mark.asyncio
     async def test_appears_in_agent_schema(self):
@@ -438,8 +446,12 @@ class TestKnowledgeParameter:
     @pytest.mark.asyncio
     async def test_custom_name_via_knowledge_source(self):
         """KnowledgeSource(tool_name=, top_k=) overrides the defaults."""
-        kb = await _populated_kb()
+        from lauren_ai._agents import use_knowledge_sources  # noqa: PLC0415
 
+        kb = await _populated_kb()
+        ks = KnowledgeSource(kb=kb, tool_name="search_lauren_docs", top_k=2)
+
+        @use_knowledge_sources(ks)
         @agent(model=None)
         class CustomNameAgent: ...
 
@@ -448,17 +460,16 @@ class TestKnowledgeParameter:
         AIMod = AgentModule.for_root(
             agents=[CustomNameAgent],
             imports=[LLMProv],
-            knowledge=[KnowledgeSource(kb=kb, tool_name="search_lauren_docs", top_k=2)],
+            knowledge=[ks],
         )
 
         @module(imports=[LLMProv, AIMod])
         class AppMod: ...
 
-        app = LaurenFactory.create(AppMod)
-        runner = await _resolve(app, AIMod.runner_class)
+        LaurenFactory.create(AppMod)
 
-        assert "search_lauren_docs" in runner._tools
-        assert "search_knowledge_base" not in runner._tools
+        assert "search_lauren_docs" in CustomNameAgent.__lauren_ai_agent__.tools
+        assert "search_knowledge_base" not in CustomNameAgent.__lauren_ai_agent__.tools
 
     @pytest.mark.asyncio
     async def test_two_kbs_with_default_name_collision_raises(self):
@@ -480,10 +491,15 @@ class TestKnowledgeParameter:
 
     @pytest.mark.asyncio
     async def test_two_kbs_distinct_names_both_attached(self):
-        """Two KnowledgeSources with distinct tool names both end up in the runner."""
+        """Two KnowledgeSources with distinct tool names both end up in agent meta."""
+        from lauren_ai._agents import use_knowledge_sources  # noqa: PLC0415
+
         kb_a = await _populated_kb("Cats purr.")
         kb_b = await _populated_kb("Dogs bark.")
+        ks_a = KnowledgeSource(kb=kb_a, tool_name="search_cats")
+        ks_b = KnowledgeSource(kb=kb_b, tool_name="search_dogs")
 
+        @use_knowledge_sources(ks_a, ks_b)
         @agent(model=None)
         class DualKbAgent: ...
 
@@ -492,20 +508,16 @@ class TestKnowledgeParameter:
         AIMod = AgentModule.for_root(
             agents=[DualKbAgent],
             imports=[LLMProv],
-            knowledge=[
-                KnowledgeSource(kb=kb_a, tool_name="search_cats"),
-                KnowledgeSource(kb=kb_b, tool_name="search_dogs"),
-            ],
+            knowledge=[ks_a, ks_b],
         )
 
         @module(imports=[LLMProv, AIMod])
         class AppMod: ...
 
-        app = LaurenFactory.create(AppMod)
-        runner = await _resolve(app, AIMod.runner_class)
+        LaurenFactory.create(AppMod)
 
-        assert "search_cats" in runner._tools
-        assert "search_dogs" in runner._tools
+        assert "search_cats" in DualKbAgent.__lauren_ai_agent__.tools
+        assert "search_dogs" in DualKbAgent.__lauren_ai_agent__.tools
 
     @pytest.mark.asyncio
     async def test_unsupported_entry_type_raises(self):

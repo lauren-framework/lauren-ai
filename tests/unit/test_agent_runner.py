@@ -23,7 +23,7 @@ def _make_tool_map(*tool_funcs) -> dict:
 def make_runner(mock: MockTransport, max_turns: int = 10) -> AgentRunner:
     """Build a runner + simple agent class for testing."""
     config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, tools={}, config=config)
+    runner = AgentRunner(transport=mock, config=config)
     return runner
 
 
@@ -67,7 +67,7 @@ class TestAgentRunnerBasic:
 
         tools = _make_tool_map(get_time)
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, tools=tools, config=config)
+        runner = AgentRunner(transport=mock, config=config)
 
         # Turn 1: model calls the tool
         mock.queue_tool_use("get_time", {})
@@ -88,6 +88,8 @@ class TestAgentRunnerBasic:
         class TimeAgent:
             pass
 
+        TimeAgent.__lauren_ai_agent__.tools = tools
+
         instance = TimeAgent()
         response = await runner.run(instance, "What time is it?")
         assert "12:00" in response.content
@@ -105,7 +107,7 @@ class TestAgentRunnerBasic:
             pass
 
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, tools={}, config=config)
+        runner = AgentRunner(transport=mock, config=config)
 
         instance = StuckAgent()
         response = await runner.run(instance, "Do something")
@@ -175,7 +177,7 @@ class TestAgentRunnerBasic:
 
         tools = _make_tool_map(failing_tool)
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, tools=tools, config=config)
+        runner = AgentRunner(transport=mock, config=config)
 
         mock.queue_tool_use("failing_tool", {})
         mock.queue_response(
@@ -193,6 +195,8 @@ class TestAgentRunnerBasic:
         @use_tools(failing_tool)
         class ErrorAgent:
             pass
+
+        ErrorAgent.__lauren_ai_agent__.tools = tools
 
         instance = ErrorAgent()
         # Should NOT raise — policy is "return_error" by default
@@ -226,7 +230,7 @@ def make_runner_with_store(mock: MockTransport, store: InMemoryConversationStore
     """
     config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
     _MemAgent.__lauren_ai_agent__.conversation_store = store
-    return AgentRunner(transport=mock, tools={}, config=config)
+    return AgentRunner(transport=mock, config=config)
 
 
 @agent(model="mock-model")
@@ -366,7 +370,7 @@ class TestRunStreamParity:
     async def test_run_stream_budget_exceeded_swallows_and_yields(self, mock):
         """Budget breach swallows the exception and ends the stream cleanly."""
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, tools={}, config=config)
+        runner = AgentRunner(transport=mock, config=config)
 
         @agent(model="mock-model", max_cost_usd=0.0)
         class TightBudgetAgent: ...
@@ -393,7 +397,7 @@ class TestRunStreamParity:
                 captured.append(response)
 
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, tools={}, config=config)
+        runner = AgentRunner(transport=mock, config=config)
 
         mock.queue_stream(_stream_chunks("Hello", " world", "!"))
 
@@ -410,7 +414,7 @@ class TestRunStreamParity:
         store = InMemoryConversationStore()
         config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         _MemAgent.__lauren_ai_agent__.conversation_store = store
-        runner = AgentRunner(transport=mock, tools={}, config=config)
+        runner = AgentRunner(transport=mock, config=config)
 
         mock.queue_stream(_stream_chunks("First reply"))
         async for _ in await runner.run_stream(_MemAgent(), "Hi", conversation_id="sess"):

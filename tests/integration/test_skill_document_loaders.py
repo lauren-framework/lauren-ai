@@ -22,7 +22,6 @@ import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-
 # ---------------------------------------------------------------------------
 # Document loader implementations under test
 # ---------------------------------------------------------------------------

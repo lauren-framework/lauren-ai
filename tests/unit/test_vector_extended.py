@@ -72,7 +72,7 @@ class TestInMemoryVectorStoreExtended:
     @pytest.mark.asyncio
     async def test_upsert_updates_existing(self):
         store = InMemoryVectorStore()
-        doc_id = await store.upsert("Original content", id="doc-1")
+        await store.upsert("Original content", id="doc-1")
         await store.upsert("Updated content", id="doc-1")
         result = await store.get("doc-1")
         assert result.content == "Updated content"

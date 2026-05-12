@@ -41,12 +41,12 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any, TypeVar
 
+from lauren import Scope, injectable
+from lauren.extractors import ExtractionMarker
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
-
-from lauren import Scope, injectable
-from lauren.extractors import ExtractionMarker
 
 # ---------------------------------------------------------------------------
 # Agent[T] extractor

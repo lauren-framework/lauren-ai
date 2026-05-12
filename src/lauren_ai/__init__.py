@@ -360,7 +360,6 @@ from lauren_ai._output_parsers import (
     JSONOutputParser,
     MarkdownCodeBlockParser,
     MaxRetryError,
-    OutputParserError,
     PydanticOutputParser,
     RegexParser,
     RetryOutputParser,

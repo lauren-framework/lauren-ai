@@ -5,6 +5,7 @@ Provides middleware for conversation history management and AI endpoint rate lim
 
 from __future__ import annotations
 
+import contextlib
 import time
 import uuid
 from collections import defaultdict
@@ -102,10 +103,8 @@ def conversation_middleware(
             if cid and hasattr(request.state, "conversation_id"):
                 updated = getattr(request.state, "updated_conversation", None)
                 if updated:
-                    try:
+                    with contextlib.suppress(Exception):  # Best-effort save
                         await self._store.save(cid, updated)
-                    except Exception:
-                        pass  # Best-effort save; never fail the response
 
             return response
 

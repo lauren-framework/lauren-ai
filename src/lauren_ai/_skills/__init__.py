@@ -94,7 +94,6 @@ async def CodeExecutionTool(  # noqa: N802
         This is a minimal sandbox.  For production use, execute in an isolated
         subprocess or a container.
     """
-    import subprocess  # noqa: PLC0415
     import sys  # noqa: PLC0415
 
     effective_timeout = min(timeout, 30.0)
