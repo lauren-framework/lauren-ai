@@ -42,15 +42,15 @@ async def classify_intent(message: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@agent(model=None, system="You handle billing questions.")
+@agent(model="mock-model", system="You handle billing questions.")
 class BillingAgent: ...
 
 
-@agent(model=None, system="You handle technical support.")
+@agent(model="mock-model", system="You handle technical support.")
 class TechSupportAgent: ...
 
 
-@agent(model=None, system="You handle general questions.")
+@agent(model="mock-model", system="You handle general questions.")
 class GeneralAgent: ...
 
 
@@ -59,7 +59,9 @@ class GeneralAgent: ...
 # ---------------------------------------------------------------------------
 
 
-@agent(model=None, system="Route user to the correct specialist. Call classify_intent first.")
+@agent(
+    model="mock-model", system="Route user to the correct specialist. Call classify_intent first."
+)
 @use_tools(classify_intent)
 class SupervisorAgent: ...
 

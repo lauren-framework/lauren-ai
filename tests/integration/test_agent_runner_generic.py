@@ -75,7 +75,7 @@ class TestAgentRunnerSubscript:
 class TestAgentRunnerDIResolution:
     @pytest.mark.asyncio
     async def test_resolves_to_module_runner(self):
-        @agent(model=None)
+        @agent(model="mock-model")
         class SoloAgent:
             """."""
 
@@ -93,11 +93,11 @@ class TestAgentRunnerDIResolution:
 
     @pytest.mark.asyncio
     async def test_two_agents_same_module_share_runner_instance(self):
-        @agent(model=None)
+        @agent(model="mock-model")
         class TwinA:
             """."""
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class TwinB:
             """."""
 
@@ -121,7 +121,7 @@ class TestAgentRunnerDIResolution:
         """A consumer in the same module can still inject ``runner: AgentRunner``."""
         from lauren import injectable
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class HostAgent:
             """."""
 

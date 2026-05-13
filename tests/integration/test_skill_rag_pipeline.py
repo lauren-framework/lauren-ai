@@ -213,7 +213,7 @@ class TestKnowledgeBaseAsTool:
         asyncio.run(kb.load(TextLoader("The refund policy allows 30-day returns.", is_file=False)))
         search_tool = kb.as_tool(name="search_docs")
 
-        @agent(model=None, system="Answer questions using the knowledge base.")
+        @agent(model="mock-model", system="Answer questions using the knowledge base.")
         @use_tools(search_tool)
         class RAGAgent: ...
 

@@ -129,7 +129,7 @@ class _Capture:
 # ---------------------------------------------------------------------------
 
 
-@agent(model=None, system="Permission test agent")
+@agent(model="mock-model", system="Permission test agent")
 @use_tools(UpdateRecordTool, DeleteRecordTool, ReadRecordTool)
 class PermissionTestAgent(_Capture):
     def __init__(self):

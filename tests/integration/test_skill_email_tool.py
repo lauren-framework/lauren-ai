@@ -103,7 +103,7 @@ def _make_agent(backend: "EmailBackend | None" = None):
     """Create a fresh agent with the given email backend."""
     email_tool = EmailDispatchTool(backend=backend)
 
-    @agent(model=None, system="Email assistant")
+    @agent(model="mock-model", system="Email assistant")
     @use_tools(email_tool)
     class EmailTestAgent(_Capture):
         def __init__(self):

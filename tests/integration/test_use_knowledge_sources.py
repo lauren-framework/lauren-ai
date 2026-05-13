@@ -48,7 +48,7 @@ class TestKnowledgeSourceFilter:
         kb = await _populated_kb()
         ks = KnowledgeSource(kb=kb, tool_name="search_x")
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class NoOptInAgent: ...
 
         cfg, mock = LLMConfig.for_testing()
@@ -83,10 +83,10 @@ class TestKnowledgeSourceFilter:
         ks_x = KnowledgeSource(kb=kb_x, tool_name="search_x")
 
         @use_knowledge_sources(ks_x)
-        @agent(model=None)
+        @agent(model="mock-model")
         class OptInAgent: ...
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class OptOutAgent: ...  # no @use_knowledge_sources
 
         cfg, mock = LLMConfig.for_testing()
@@ -120,7 +120,7 @@ class TestKnowledgeSourceFilter:
         ks_y = KnowledgeSource(kb=kb_y, tool_name="search_y")
 
         @use_knowledge_sources(ks_x)  # only X
-        @agent(model=None)
+        @agent(model="mock-model")
         class OnlyXAgent: ...
 
         cfg, mock = LLMConfig.for_testing()
@@ -152,7 +152,7 @@ class TestKnowledgeSourceValidation:
         ks_out = KnowledgeSource(kb=kb_out, tool_name="search_out")
 
         @use_knowledge_sources(ks_out)  # not declared at module level
-        @agent(model=None)
+        @agent(model="mock-model")
         class StrayAgent: ...
 
         cfg, mock = LLMConfig.for_testing()
@@ -175,11 +175,11 @@ class TestKnowledgeSourceValidation:
         ks = KnowledgeSource(kb=kb, tool_name="search_inherit")
 
         @use_knowledge_sources(ks)
-        @agent(model=None)
+        @agent(model="mock-model")
         class ParentAgent:
             """."""
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class ChildAgent(ParentAgent):
             """Inherits @use_knowledge_sources without redeclaring — forbidden."""
 
@@ -204,7 +204,7 @@ class TestKnowledgeSourceDIRegistration:
         ks = KnowledgeSource(kb=kb, tool_name="search_di")
 
         @use_knowledge_sources(ks)
-        @agent(model=None)
+        @agent(model="mock-model")
         class DIAgent: ...
 
         cfg, mock = LLMConfig.for_testing()

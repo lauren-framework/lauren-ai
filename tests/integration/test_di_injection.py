@@ -436,11 +436,11 @@ class TestInjectsBreaksCircularDependency:
             async def run(self, task: str) -> dict:
                 return {"delegated": True}
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class SpecialistAgent:
             """Specialist agent."""
 
-        @agent(model=None)
+        @agent(model="mock-model")
         @use_tools(DelegateTool)
         class OrchestratorAgent:
             """Orchestrator agent."""
@@ -695,7 +695,7 @@ class TestSharedTools:
 
         SharedTool, OwnerModule, _ = self._make_shared_tool()
 
-        @agent(model=None)
+        @agent(model="mock-model")
         @use_tools(SharedTool)
         class BorrowerAgent: ...
 
@@ -723,7 +723,7 @@ class TestSharedTools:
         """shared_tools= does not re-register the tool, so no DuplicateBindingError."""
         SharedTool, OwnerModule, _ = self._make_shared_tool()
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class BorrowerAgent2: ...
 
         cfg, mock = LLMConfig.for_testing()
@@ -746,7 +746,7 @@ class TestSharedTools:
 
         SharedTool, OwnerModule, _ = self._make_shared_tool()
 
-        @agent(model=None)
+        @agent(model="mock-model")
         @use_tools(SharedTool)
         class BorrowerAgent3: ...
 

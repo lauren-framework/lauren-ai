@@ -35,8 +35,7 @@ def make_runner(
     tools: dict | None = None,
 ) -> AgentRunner:
     tools = tools if tools is not None else {}
-    config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, config=config)
+    return AgentRunner(transport=mock)
 
 
 def text_completion(content: str, *, id: str = "c1") -> Completion:
@@ -394,7 +393,7 @@ class TestKnowledgeParameter:
         ks = KnowledgeSource(kb=kb)
 
         @use_knowledge_sources(ks)
-        @agent(model=None)
+        @agent(model="mock-model")
         class SearchAgent: ...
 
         cfg, mock = LLMConfig.for_testing()
@@ -421,7 +420,7 @@ class TestKnowledgeParameter:
         ks = KnowledgeSource(kb=kb)
 
         @use_knowledge_sources(ks)
-        @agent(model=None)
+        @agent(model="mock-model")
         class SchemaAgent: ...
 
         cfg, mock = LLMConfig.for_testing()
@@ -452,7 +451,7 @@ class TestKnowledgeParameter:
         ks = KnowledgeSource(kb=kb, tool_name="search_lauren_docs", top_k=2)
 
         @use_knowledge_sources(ks)
-        @agent(model=None)
+        @agent(model="mock-model")
         class CustomNameAgent: ...
 
         cfg, mock = LLMConfig.for_testing()
@@ -477,7 +476,7 @@ class TestKnowledgeParameter:
         kb_a = await _populated_kb("Document A.")
         kb_b = await _populated_kb("Document B.")
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class CollideAgent: ...
 
         cfg, mock = LLMConfig.for_testing()
@@ -500,7 +499,7 @@ class TestKnowledgeParameter:
         ks_b = KnowledgeSource(kb=kb_b, tool_name="search_dogs")
 
         @use_knowledge_sources(ks_a, ks_b)
-        @agent(model=None)
+        @agent(model="mock-model")
         class DualKbAgent: ...
 
         cfg, mock = LLMConfig.for_testing()
@@ -523,7 +522,7 @@ class TestKnowledgeParameter:
     async def test_unsupported_entry_type_raises(self):
         """Anything other than KnowledgeSource raises TypeError (bare KBs forbidden)."""
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class BadEntryAgent: ...
 
         cfg, mock = LLMConfig.for_testing()
@@ -574,7 +573,7 @@ class TestKnowledgeParameter:
         kb = KnowledgeBase(store=InMemoryVectorStore())  # NOT pre-loaded
         text = "The mitochondria is the powerhouse of the cell."
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class StartupLoadAgent: ...
 
         cfg, mock = LLMConfig.for_testing()
@@ -624,7 +623,7 @@ class TestKnowledgeParameter:
 
         kb = KnowledgeBase(store=InMemoryVectorStore())
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class LoopSafeAgent: ...
 
         cfg, mock = LLMConfig.for_testing()
@@ -661,7 +660,7 @@ class TestKnowledgeParameter:
         """
         kb = KnowledgeBase(store=InMemoryVectorStore())
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class NoStartupAgent: ...
 
         cfg, mock = LLMConfig.for_testing()

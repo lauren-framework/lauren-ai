@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from lauren_ai._config import AgentConfig, LLMConfig
+from lauren_ai._config import LLMConfig
 from lauren_ai._exceptions import AgentConfigError
 from lauren_ai._module import AgentModule, EmbedService, LLMModule, LLMService, _build_transport
 from lauren_ai._transport import Completion, Message, TokenUsage
@@ -488,8 +488,7 @@ class TestAgentModule:
         class AgentWithConfig:
             """Agent."""
 
-        config = AgentConfig(max_turns=3, max_cost_usd=1.0)
-        cls = AgentModule.for_root(agents=[AgentWithConfig], config=config)
+        cls = AgentModule.for_root(agents=[AgentWithConfig])
         assert cls is not None
 
     def test_for_root_duplicate_tool_skipped(self):

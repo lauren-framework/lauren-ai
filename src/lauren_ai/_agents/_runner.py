@@ -29,7 +29,7 @@ from collections.abc import AsyncIterator
 from typing import Any, Protocol, runtime_checkable
 
 from lauren_ai._agents import AGENT_META, AgentContext, AgentMeta, AgentResponse
-from lauren_ai._config import AgentConfig, LLMConfig
+from lauren_ai._config import AgentConfig
 from lauren_ai._exceptions import (
     AgentBudgetExceededError,
     AgentConfigError,
@@ -250,11 +250,6 @@ class AgentRunnerBase(AgentRunner):
 
     :param transport: Provider-agnostic LLM transport.
     :type transport: Any
-    :param tools: Mapping of tool name to ``(callable_or_instance, ToolMeta)``.
-        Built by ``AgentModule.for_root()`` or ``AgentTestClient``.
-    :type tools: dict[str, tuple[Any, ToolMeta]]
-    :param config: Application-level LLM configuration (model, max_tokens, etc.).
-    :type config: LLMConfig
     :param signals: Optional signal bus for emitting lifecycle events.
     :type signals: Any | None
     :param cache_backend: Optional cache backend for tool result caching.
@@ -264,12 +259,10 @@ class AgentRunnerBase(AgentRunner):
     def __init__(
         self,
         transport: Any,
-        config: LLMConfig,
         signals: Any | None = None,
         cache_backend: CacheBackend | None = None,
     ) -> None:
         self._transport = transport
-        self._config = config
         self._signals = signals
         self._executor = ToolExecutor(
             tools={},
@@ -409,7 +402,7 @@ class AgentRunnerBase(AgentRunner):
         )
 
         # Determine model to use
-        model = meta.model or self._config.model
+        model = meta.model
         system_prompt = meta.system or effective_config.system_prompt
 
         # Gather tool schemas for attached tools
@@ -731,7 +724,7 @@ class AgentRunnerBase(AgentRunner):
             signals=self._signals,
         )
 
-        model = meta.model or self._config.model
+        model = meta.model
         system_prompt = meta.system or effective_config.system_prompt
         tool_schemas = self._get_tool_schemas(meta)
 

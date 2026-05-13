@@ -12,7 +12,6 @@ import pytest
 
 from lauren_ai import agent, use_guardrails
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
-from lauren_ai._config import LLMConfig
 from lauren_ai._guardrails._base import GuardrailContext, GuardrailDecision
 from lauren_ai._transport import Completion, CompletionChunk, TokenUsage
 from lauren_ai._transport._mock import MockTransport
@@ -85,8 +84,7 @@ class _ModifyOutputGuard:
 
 
 def _make_runner(mock: MockTransport) -> AgentRunner:
-    cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, config=cfg)
+    return AgentRunner(transport=mock)
 
 
 # ---------------------------------------------------------------------------

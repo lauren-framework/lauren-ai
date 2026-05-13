@@ -407,7 +407,6 @@ class TestExecutionContext:
 
         from lauren_ai._agents import agent
         from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
-        from lauren_ai._config import LLMConfig
         from lauren_ai._transport import Completion, TokenUsage
 
         @agent(model="mock-model")
@@ -433,7 +432,6 @@ class TestExecutionContext:
 
         runner = AgentRunner(
             transport=mock_transport,
-            config=LLMConfig(provider="anthropic", model="mock-model"),
         )
 
         sentinel = object()
@@ -451,7 +449,6 @@ class TestExecutionContext:
 
         from lauren_ai._agents import agent
         from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
-        from lauren_ai._config import LLMConfig
         from lauren_ai._transport import Completion, TokenUsage
         from lauren_ai._transport import ToolCall as TransportToolCall
 
@@ -498,7 +495,6 @@ class TestExecutionContext:
 
         runner = AgentRunner(
             transport=mock_transport,
-            config=LLMConfig(provider="anthropic", model="mock-model"),
         )
 
         sentinel = object()

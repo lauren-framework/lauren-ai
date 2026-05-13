@@ -12,7 +12,6 @@ import pytest
 
 from lauren_ai._agents import agent, use_tools
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
-from lauren_ai._config import LLMConfig
 from lauren_ai._signals import (
     AgentRunComplete,
     ModelCallComplete,
@@ -44,8 +43,7 @@ def make_runner_with_signals(
     tools: dict | None = None,
 ) -> AgentRunner:
     tools = tools if tools is not None else {}
-    config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, config=config, signals=bus)
+    return AgentRunner(transport=mock, signals=bus)
 
 
 def text_completion(content: str, *, id: str = "c1") -> Completion:
@@ -314,8 +312,7 @@ class TestToolCallSignals:
         bus = SignalBus()
         mock = MockTransport()
         tools = _make_tool_map(boom_tool)
-        config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, config=config, signals=bus)
+        runner = AgentRunner(transport=mock, signals=bus)
 
         @agent(model="mock-model")
         @use_tools(boom_tool)
@@ -513,10 +510,8 @@ class TestSignalOrdering:
     async def test_no_signals_without_bus(self):
         """When no SignalBus is configured, the runner still works without errors."""
         mock = MockTransport()
-        config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         runner = AgentRunner(
             transport=mock,
-            config=config,
             signals=None,  # explicitly no bus
         )
 

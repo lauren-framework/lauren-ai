@@ -91,7 +91,7 @@ class _Capture:
         return None
 
 
-@agent(model=None, system="Shopping cart agent")
+@agent(model="mock-model", system="Shopping cart agent")
 @use_tools(shopping_cart_tool)
 class CartAgent(_Capture):
     def __init__(self):

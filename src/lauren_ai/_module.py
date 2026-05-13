@@ -901,11 +901,15 @@ class AgentModule:
                                 instance,
                                 exc,
                             )
-                    # Attach per-agent tool maps (runs once; runner is SINGLETON).
+                    # Attach per-agent tool maps and resolve model fallback
+                    # (runs once; runner is SINGLETON).
                     _attach_agent_tools(list(agents), tools, _captured_kb_tool_names)
+                    for _a in agents:
+                        _am = getattr(_a, AGENT_META)
+                        if _am.model is None:
+                            _am.model = cfg.model
                     return _runner_cls(
                         transport=transport,
-                        config=cfg,
                         signals=_captured_signals_ref,
                         cache_backend=_captured_tool_cache_ref,
                     )
@@ -938,15 +942,22 @@ class AgentModule:
                 _attach_agent_tools(
                     list(agents), _captured_eager_tools, _captured_kb_tool_names_eager
                 )
+                _captured_agents = list(agents)
+
+                def _eager_factory(transport: Any, cfg: Any) -> Any:
+                    for _a in _captured_agents:
+                        _am = getattr(_a, AGENT_META)
+                        if _am.model is None:
+                            _am.model = cfg.model
+                    return _captured_runner_cls(
+                        transport=transport,
+                        signals=_captured_signals_ref,
+                        cache_backend=_captured_tool_cache_ref,
+                    )
 
                 _runner_provider = use_factory(
                     provide=_runner_cls,
-                    factory=lambda transport, cfg: _captured_runner_cls(
-                        transport=transport,
-                        config=cfg,
-                        signals=_captured_signals_ref,
-                        cache_backend=_captured_tool_cache_ref,
-                    ),
+                    factory=_eager_factory,
                     injects=[_Transport, LLMConfig],
                     scope=_effective_scope,
                 )

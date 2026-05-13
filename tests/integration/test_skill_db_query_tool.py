@@ -106,7 +106,7 @@ class _Capture:
 _ro_db = SQLQueryTool(read_only=True)
 
 
-@agent(model=None, system="DB read agent")
+@agent(model="mock-model", system="DB read agent")
 @use_tools(_ro_db)
 class DBReadAgent(_Capture):
     def __init__(self):
@@ -240,7 +240,7 @@ class TestSQLQueryToolWriteBlocked:
         # Use a write-enabled DB instance with the per-call flag set to True
         write_db = SQLQueryTool(read_only=False)
 
-        @agent(model=None, system="DB write agent")
+        @agent(model="mock-model", system="DB write agent")
         @use_tools(write_db)
         class DBWriteAgentBlocked(_Capture):
             def __init__(self):
@@ -268,7 +268,7 @@ class TestSQLQueryToolWriteEnabled:
         """INSERT succeeds when the tool is write-enabled."""
         write_db = SQLQueryTool(read_only=False)
 
-        @agent(model=None, system="DB write agent")
+        @agent(model="mock-model", system="DB write agent")
         @use_tools(write_db)
         class DBWriteAgent(_Capture):
             def __init__(self):
@@ -290,7 +290,7 @@ class TestSQLQueryToolWriteEnabled:
         """A row inserted via the write tool is visible in subsequent SELECTs."""
         write_db = SQLQueryTool(read_only=False)
 
-        @agent(model=None, system="DB write agent")
+        @agent(model="mock-model", system="DB write agent")
         @use_tools(write_db)
         class DBWriteAgent2(_Capture):
             def __init__(self):

@@ -123,7 +123,7 @@ def _make_agent():
     """Create a fresh CalendarTool instance and a fresh agent for isolation."""
     cal_tool = CalendarTool()
 
-    @agent(model=None, system="Calendar agent")
+    @agent(model="mock-model", system="Calendar agent")
     @use_tools(cal_tool)
     class CalendarTestAgent(_Capture):
         def __init__(self):

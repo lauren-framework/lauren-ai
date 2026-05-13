@@ -185,7 +185,6 @@ def _build_runner_for_agent(
     """
     from lauren_ai._agents import AGENT_META  # noqa: PLC0415
     from lauren_ai._agents._runner import AgentRunnerBase  # noqa: PLC0415
-    from lauren_ai._config import LLMConfig  # noqa: PLC0415
     from lauren_ai._tools import TOOL_META, _add_to_tool_map  # noqa: PLC0415
 
     agent_cls = type(agent_instance)
@@ -200,11 +199,11 @@ def _build_runner_for_agent(
                 with contextlib.suppress(Exception):  # noqa: BLE001
                     _add_to_tool_map(tools, tool_ref)
         meta.tools = tools
+        if meta.model is None:
+            meta.model = "mock-model"
 
-    config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
     return AgentRunnerBase(
         transport=mock_transport,
-        config=config,
         signals=signals,
         cache_backend=cache_backend,
     )

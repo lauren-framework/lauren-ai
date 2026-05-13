@@ -10,7 +10,6 @@ Tests cover:
 
 from lauren_ai._agents import agent
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
-from lauren_ai._config import LLMConfig
 from lauren_ai._signals import AgentRunComplete, ModelCallComplete, SignalBus
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
@@ -99,8 +98,7 @@ def _make_client(
     mock = MockTransport()
     for content in responses:
         mock.queue_response(_completion(content))
-    cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, config=cfg, signals=bus)
+    runner = AgentRunner(transport=mock, signals=bus)
     client = AgentTestClient(TracingTestAgent(), mock, runner=runner)
     return client, bus
 
@@ -127,8 +125,7 @@ class TestSimpleTracerSpans:
         tracer = SimpleTracer(bus)
         mock = MockTransport()
         mock.queue_response(_completion_custom_tokens(42, 7))
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, config=cfg, signals=bus)
+        runner = AgentRunner(transport=mock, signals=bus)
         client = AgentTestClient(TracingTestAgent(), mock, runner=runner)
         await client.run_async("Test")
         llm_spans = [s for s in tracer.spans if s["type"] == "llm_call"]
@@ -168,8 +165,7 @@ class TestSimpleTracerSpans:
     async def test_run_completes_without_bus(self):
         """Agent run succeeds when no SignalBus is provided (signals=None)."""
         mock = MockTransport()
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, config=cfg, signals=None)
+        runner = AgentRunner(transport=mock, signals=None)
         mock.queue_response(_completion("No bus"))
         client = AgentTestClient(TracingTestAgent(), mock, runner=runner)
         response = await client.run_async("Hello")

@@ -25,7 +25,6 @@ import pytest
 from lauren_ai import AgentModule
 from lauren_ai._agents import AGENT_META, agent
 from lauren_ai._agents._runner import AgentRunnerBase
-from lauren_ai._config import LLMConfig
 from lauren_ai._memory import ShortTermMemory
 from lauren_ai._memory._stores import InMemoryConversationStore
 from lauren_ai._transport import Completion, TokenUsage
@@ -143,9 +142,8 @@ def _make_runner(store_for_agent: InMemoryConversationStore | None = None):
     on __init__ — the runner consults AgentMeta on every call."""
     from lauren_ai._transport._mock import MockTransport
 
-    cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
     mock = MockTransport()
-    runner = AgentRunnerBase(transport=mock, config=cfg)
+    runner = AgentRunnerBase(transport=mock)
     return runner, mock
 
 

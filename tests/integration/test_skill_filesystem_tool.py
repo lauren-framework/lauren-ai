@@ -94,7 +94,7 @@ def _make_agent(base_path: str):
     """Create a fresh FileSystemTool + agent for a given base_path."""
     fs_tool = FileSystemTool(base_path=base_path)
 
-    @agent(model=None, system="Filesystem agent")
+    @agent(model="mock-model", system="Filesystem agent")
     @use_tools(fs_tool)
     class FsTestAgent(_Capture):
         def __init__(self):

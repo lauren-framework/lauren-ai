@@ -18,7 +18,6 @@ import pytest
 from lauren_ai import SignalBus, use_guardrails
 from lauren_ai._agents import AgentResponse, agent, use_tools
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
-from lauren_ai._config import LLMConfig
 from lauren_ai._guardrails._base import GuardrailContext, GuardrailDecision
 from lauren_ai._memory import ShortTermMemory
 from lauren_ai._memory._stores import InMemoryConversationStore
@@ -65,8 +64,7 @@ def _make_runner(
 ) -> tuple[AgentRunner, MockTransport]:
     if mock is None:
         mock = MockTransport()
-    cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, config=cfg, signals=signals)
+    runner = AgentRunner(transport=mock, signals=signals)
     return runner, mock
 
 
@@ -133,8 +131,7 @@ class TestRunNoGuardrails:
 
         tools = {}
         _add_to_tool_map(tools, noop_tool)
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, config=cfg)
+        runner = AgentRunner(transport=mock)
 
         @use_tools(noop_tool)
         @agent(model="mock-model")
@@ -194,8 +191,7 @@ class TestRunNoGuardrails:
 
         tools = {}
         _add_to_tool_map(tools, echo_tool)
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, config=cfg)
+        runner = AgentRunner(transport=mock)
 
         @use_tools(echo_tool)
         @agent(model="mock-model")
@@ -608,9 +604,8 @@ class TestRunOutputGuardrails:
 
         tools = {}
         _add_to_tool_map(tools, noop)
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, config=cfg)
+        runner = AgentRunner(transport=mock)
 
         @use_guardrails(output=[spy])
         @use_tools(noop)
@@ -664,9 +659,8 @@ class TestRunOutputGuardrails:
 
         tools = {}
         _add_to_tool_map(tools, noop)
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, config=cfg)
+        runner = AgentRunner(transport=mock)
 
         @use_guardrails(output=[guard])
         @use_tools(noop)
@@ -846,9 +840,8 @@ class TestRunStreamNoGuardrails:
 
         tools = {}
         _add_to_tool_map(tools, ping)
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, config=cfg)
+        runner = AgentRunner(transport=mock)
 
         @use_tools(ping)
         @agent(model="mock-model")
@@ -1328,9 +1321,8 @@ class TestRunStreamOutputGuardrails:
 
         tools = {}
         _add_to_tool_map(tools, should_not_run)
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner_with_tools = AgentRunner(transport=mock, config=cfg)
+        runner_with_tools = AgentRunner(transport=mock)
 
         spy = _SpyGuardrail(action="modify", content="[BLOCKED]")
 
@@ -1454,9 +1446,8 @@ class TestRunStreamOutputGuardrails:
 
         tools = {}
         _add_to_tool_map(tools, noop)
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner_tools = AgentRunner(transport=mock, config=cfg)
+        runner_tools = AgentRunner(transport=mock)
 
         @use_guardrails(output=[spy])
         @use_tools(noop)
@@ -1798,9 +1789,8 @@ class TestRunLifecycleHooks:
 
         tools = {}
         _add_to_tool_map(tools, noop)
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, config=cfg)
+        runner = AgentRunner(transport=mock)
 
         @use_tools(noop)
         @agent(model="mock-model")
@@ -1838,9 +1828,8 @@ class TestRunLifecycleHooks:
 
         tools = {}
         _add_to_tool_map(tools, spy_tool)
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, config=cfg)
+        runner = AgentRunner(transport=mock)
 
         @use_tools(spy_tool)
         @agent(model="mock-model")
@@ -1890,9 +1879,8 @@ class TestRunSignals:
         bus = SignalBus()
         bus.on(ModelCallComplete)(lambda e: events.append(e))
 
-        cfg = LLMConfig(provider="anthropic", model="special-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, config=cfg, signals=bus)
+        runner = AgentRunner(transport=mock, signals=bus)
         mock.queue_response(_completion("OK", model="special-model"))
 
         @agent(model="special-model")
@@ -1918,9 +1906,8 @@ class TestRunSignals:
 
         tools = {}
         _add_to_tool_map(tools, sig_tool)
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, config=cfg, signals=bus)
+        runner = AgentRunner(transport=mock, signals=bus)
 
         @use_tools(sig_tool)
         @agent(model="mock-model")
@@ -1952,9 +1939,8 @@ class TestRunSignals:
 
         tools = {}
         _add_to_tool_map(tools, done_tool)
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, config=cfg, signals=bus)
+        runner = AgentRunner(transport=mock, signals=bus)
 
         @use_tools(done_tool)
         @agent(model="mock-model")
@@ -2024,9 +2010,8 @@ class TestRunEdgeCases:
 
         tools = {}
         _add_to_tool_map(tools, bad_tool)
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, config=cfg)
+        runner = AgentRunner(transport=mock)
 
         @use_tools(bad_tool)
         @agent(model="mock-model", tool_error_policy="skip")
@@ -2053,9 +2038,8 @@ class TestRunEdgeCases:
 
         tools = {}
         _add_to_tool_map(tools, bad_tool)
-        cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         mock = MockTransport()
-        runner = AgentRunner(transport=mock, config=cfg)
+        runner = AgentRunner(transport=mock)
 
         @use_tools(bad_tool)
         @agent(model="mock-model", tool_error_policy="raise")

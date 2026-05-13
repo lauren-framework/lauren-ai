@@ -6,7 +6,6 @@ import pytest
 
 from lauren_ai._agents import AgentResponse, agent, use_tools
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
-from lauren_ai._config import LLMConfig
 from lauren_ai._tools import TOOL_META, tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
@@ -22,8 +21,7 @@ def _make_tool_map(*tool_funcs) -> dict:
 
 def make_runner(mock: MockTransport, max_turns: int = 10) -> AgentRunner:
     """Build a runner + simple agent class for testing."""
-    config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, config=config)
+    runner = AgentRunner(transport=mock)
     return runner
 
 
@@ -66,8 +64,7 @@ class TestAgentRunnerBasic:
             return "12:00 PM UTC"
 
         tools = _make_tool_map(get_time)
-        config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, config=config)
+        runner = AgentRunner(transport=mock)
 
         # Turn 1: model calls the tool
         mock.queue_tool_use("get_time", {})
@@ -106,8 +103,7 @@ class TestAgentRunnerBasic:
         class StuckAgent:
             pass
 
-        config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, config=config)
+        runner = AgentRunner(transport=mock)
 
         instance = StuckAgent()
         response = await runner.run(instance, "Do something")
@@ -176,8 +172,7 @@ class TestAgentRunnerBasic:
             raise RuntimeError("Tool exploded!")
 
         tools = _make_tool_map(failing_tool)
-        config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, config=config)
+        runner = AgentRunner(transport=mock)
 
         mock.queue_tool_use("failing_tool", {})
         mock.queue_response(
@@ -228,9 +223,8 @@ def make_runner_with_store(mock: MockTransport, store: InMemoryConversationStore
     Stores live on AgentMeta now (set by ``@agent(conversation_store=…)`` or
     written here for testing).  The runner consults AgentMeta on every call.
     """
-    config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
     _MemAgent.__lauren_ai_agent__.conversation_store = store
-    return AgentRunner(transport=mock, config=config)
+    return AgentRunner(transport=mock)
 
 
 @agent(model="mock-model")
@@ -369,8 +363,7 @@ class TestRunStreamParity:
     @pytest.mark.asyncio
     async def test_run_stream_budget_exceeded_swallows_and_yields(self, mock):
         """Budget breach swallows the exception and ends the stream cleanly."""
-        config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, config=config)
+        runner = AgentRunner(transport=mock)
 
         @agent(model="mock-model", max_cost_usd=0.0)
         class TightBudgetAgent: ...
@@ -396,8 +389,7 @@ class TestRunStreamParity:
             async def on_finish(self, response: AgentResponse, ctx) -> None:
                 captured.append(response)
 
-        config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, config=config)
+        runner = AgentRunner(transport=mock)
 
         mock.queue_stream(_stream_chunks("Hello", " world", "!"))
 
@@ -412,9 +404,8 @@ class TestRunStreamParity:
     async def test_run_stream_persists_conversation_history(self, mock):
         """run_stream loads prior history and saves the new turn back."""
         store = InMemoryConversationStore()
-        config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
         _MemAgent.__lauren_ai_agent__.conversation_store = store
-        runner = AgentRunner(transport=mock, config=config)
+        runner = AgentRunner(transport=mock)
 
         mock.queue_stream(_stream_chunks("First reply"))
         async for _ in await runner.run_stream(_MemAgent(), "Hi", conversation_id="sess"):

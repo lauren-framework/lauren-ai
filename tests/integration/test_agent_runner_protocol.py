@@ -46,7 +46,7 @@ class TestSingleModuleProtocolResolution:
     def test_runner_resolves_as_agent_runner_protocol(self):
         """runner: AgentRunner resolves to the dynamic subclass instance."""
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class SimpleAgent:
             """Agent."""
 
@@ -74,7 +74,7 @@ class TestSingleModuleProtocolResolution:
     def test_isinstance_checks_pass(self):
         """isinstance(runner, AgentRunner) and isinstance(runner, AgentRunnerBase) both True."""
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class CheckAgent:
             """Agent."""
 
@@ -95,7 +95,7 @@ class TestSingleModuleProtocolResolution:
     def test_runner_class_is_dynamic_subclass_of_agent_runner_base(self):
         """for_root() with no injects= generates a subclass of AgentRunnerBase."""
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class DynAgent:
             """Agent."""
 
@@ -113,11 +113,11 @@ class TestMultiModuleNoAmbiguity:
     def test_two_agent_modules_no_conflict(self):
         """Two independent AgentModules start up without any ambiguity error."""
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class AlphaAgent:
             """Alpha agent."""
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class BetaAgent:
             """Beta agent."""
 
@@ -136,11 +136,11 @@ class TestMultiModuleNoAmbiguity:
     def test_each_module_runner_class_is_distinct(self):
         """Two for_root() calls produce distinct runner classes."""
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class GammaAgent:
             """Gamma."""
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class DeltaAgent:
             """Delta."""
 
@@ -160,7 +160,7 @@ class TestDelegationToolResolvesTargetRunner:
     def test_delegation_tool_runner_matches_target_module(self):
         """DelegateTool with runner: AgentRunner resolves to the target runner."""
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class TargetAgent:
             """Target."""
 
@@ -215,7 +215,7 @@ class TestRunnerParam:
         class MySpecialRunner(AgentRunnerBase):
             """Custom runner subclass."""
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class RunnerParamAgent:
             """Agent."""
 
@@ -238,7 +238,7 @@ class TestRunnerParam:
         class MyRunner2(AgentRunnerBase):
             """Custom runner 2."""
 
-        @agent(model=None)
+        @agent(model="mock-model")
         class RunnerParamAgent2:
             """Agent."""
 

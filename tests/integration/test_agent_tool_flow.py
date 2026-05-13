@@ -11,7 +11,6 @@ import pytest
 
 from lauren_ai._agents import agent, use_tools
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
-from lauren_ai._config import LLMConfig
 from lauren_ai._tools import TOOL_META, tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
@@ -34,8 +33,7 @@ def make_runner(
     tools: dict | None = None,
 ) -> AgentRunner:
     tools = tools if tools is not None else {}
-    config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, config=config)
+    return AgentRunner(transport=mock)
 
 
 def text_completion(content: str, *, id: str = "c1") -> Completion:
@@ -286,8 +284,7 @@ class TestToolErrorHandling:
 
         mock = MockTransport()
         tools = _make_tool_map(always_fails)
-        config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, config=config)
+        runner = AgentRunner(transport=mock)
 
         @agent(model="mock-model", tool_error_policy="raise")
         @use_tools(always_fails)
@@ -307,8 +304,7 @@ class TestToolErrorHandling:
         """With tool_error_policy='skip', the loop continues silently after a tool error."""
         mock = MockTransport()
         tools = _make_tool_map(always_fails)
-        config = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-        runner = AgentRunner(transport=mock, config=config)
+        runner = AgentRunner(transport=mock)
 
         @agent(model="mock-model", tool_error_policy="skip")
         @use_tools(always_fails)

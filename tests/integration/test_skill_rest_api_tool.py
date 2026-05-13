@@ -136,7 +136,7 @@ class _Capture:
 def _make_agent(tool_instance):
     """Create a fresh test agent with the given RestAPITool instance."""
 
-    @agent(model=None, system="REST API test agent")
+    @agent(model="mock-model", system="REST API test agent")
     @use_tools(tool_instance)
     class RestAPITestAgent(_Capture):
         def __init__(self):

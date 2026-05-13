@@ -21,7 +21,6 @@ from unittest.mock import patch
 
 from lauren_ai._agents import agent
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner
-from lauren_ai._config import LLMConfig
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
 from lauren_ai.testing import TestClient
@@ -91,7 +90,7 @@ class CircuitBreaker:
 # ---------------------------------------------------------------------------
 
 
-@agent(model=None, system="You are helpful.")
+@agent(model="mock-model", system="You are helpful.")
 class HealthAgent: ...
 
 
@@ -112,8 +111,7 @@ def _completion(content="OK", *, n=1, stop_reason="end_turn"):
 
 
 def _make_runner(mock: MockTransport) -> AgentRunner:
-    cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, config=cfg)
+    return AgentRunner(transport=mock)
 
 
 # ---------------------------------------------------------------------------

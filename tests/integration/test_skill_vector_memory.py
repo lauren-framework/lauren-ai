@@ -49,7 +49,7 @@ class TestRememberDecoratorMetadata:
     def test_remember_attaches_metadata(self):
         store = InMemoryUserMemoryStore()
 
-        @agent(model=None, system="personalized assistant")
+        @agent(model="mock-model", system="personalized assistant")
         @remember(store=store, extract=True, inject=True, top_k=5)
         class PA: ...
 
@@ -59,7 +59,7 @@ class TestRememberDecoratorMetadata:
     def test_remember_inject_true(self):
         store = InMemoryUserMemoryStore()
 
-        @agent(model=None)
+        @agent(model="mock-model")
         @remember(store=store, inject=True)
         class InjectAgent: ...
 
@@ -70,7 +70,7 @@ class TestRememberDecoratorMetadata:
     def test_remember_extract_true(self):
         store = InMemoryUserMemoryStore()
 
-        @agent(model=None)
+        @agent(model="mock-model")
         @remember(store=store, extract=True)
         class ExtractAgent: ...
 
@@ -80,7 +80,7 @@ class TestRememberDecoratorMetadata:
     def test_remember_extract_false(self):
         store = InMemoryUserMemoryStore()
 
-        @agent(model=None)
+        @agent(model="mock-model")
         @remember(store=store, extract=False)
         class NoExtractAgent: ...
 
@@ -90,7 +90,7 @@ class TestRememberDecoratorMetadata:
     def test_remember_top_k_stored(self):
         store = InMemoryUserMemoryStore()
 
-        @agent(model=None)
+        @agent(model="mock-model")
         @remember(store=store, top_k=10)
         class TopKAgent: ...
 
@@ -100,7 +100,7 @@ class TestRememberDecoratorMetadata:
     def test_remember_inject_false(self):
         store = InMemoryUserMemoryStore()
 
-        @agent(model=None)
+        @agent(model="mock-model")
         @remember(store=store, inject=False)
         class NoInjectAgent: ...
 
@@ -117,7 +117,7 @@ class TestRememberAgentRuns:
     def test_agent_with_remember_runs_successfully(self):
         store = InMemoryUserMemoryStore()
 
-        @agent(model=None, system="You are a personalized assistant.")
+        @agent(model="mock-model", system="You are a personalized assistant.")
         @remember(store=store, extract=False, inject=False)
         class PersonalizedAgent: ...
 
@@ -129,7 +129,7 @@ class TestRememberAgentRuns:
     def test_agent_with_remember_inject_only_runs_successfully(self):
         store = InMemoryUserMemoryStore()
 
-        @agent(model=None, system="Personalized assistant.")
+        @agent(model="mock-model", system="Personalized assistant.")
         @remember(store=store, extract=False, inject=True, top_k=3)
         class InjectOnlyAgent: ...
 
