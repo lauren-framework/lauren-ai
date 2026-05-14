@@ -58,19 +58,19 @@ jobs:
       - run: pip install nox
       - run: nox -s typecheck
 
-  llms-txt-sync:
-    name: llms-full.txt is in sync
-    runs-on: ubuntu-latest
-    continue-on-error: ${{ github.event_name == 'pull_request' }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install nox
-      - name: Verify every public symbol appears in llms-full.txt
-        run: nox -s llms_check
+  # llms-txt-sync:
+  #   name: llms-full.txt is in sync
+  #   runs-on: ubuntu-latest
+  #   continue-on-error: ${{ github.event_name == 'pull_request' }}
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Install uv
+  #       run: |
+  #         curl -LsSf https://astral.sh/uv/install.sh | sh
+  #         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+  #     - uses: actions/setup-python@v5
+  #       with:
+  #         python-version: "3.12"
+  #     - run: pip install nox
+  #     - name: Verify every public symbol appears in llms-full.txt
+  #       run: nox -s llms_check

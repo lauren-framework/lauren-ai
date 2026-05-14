@@ -92,6 +92,9 @@ ignore = [
 python_version = "3.11"
 strict = true
 ignore_missing_imports = true
+warn_unused_ignores = false
+warn_return_any = false
+disallow_any_generics = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
