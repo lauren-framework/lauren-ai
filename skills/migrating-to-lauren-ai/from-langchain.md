@@ -16,7 +16,7 @@ def get_weather(city: str) -> str:
 ```python
 from lauren_ai import tool
 
-# IMPORTANT: do NOT add `from __future__ import annotations` in tool files
+# IMPORTANT: tool annotations must resolve when schema generation runs
 @tool()
 async def get_weather(city: str) -> dict:
     """Get weather for a city.
@@ -29,7 +29,7 @@ async def get_weather(city: str) -> dict:
 Key differences:
 - Lauren AI tools must be `async`
 - Use `@tool()` with parentheses (bare `@tool` raises `DecoratorUsageError`)
-- Never add `from __future__ import annotations` — it breaks JSON schema generation
+- Future annotations are supported, but tool signature types must resolve when schema generation runs
 - Return `dict` (auto-serialized) rather than `str`
 
 ## Class-form tools (with DI injection)
@@ -88,7 +88,7 @@ class WeatherAgent: ...
 cfg = LLMConfig(provider="openai", model="gpt-4o", api_key="sk-...")
 LLMProvider = LLMModule.for_root(cfg)
 transport = LLMProvider.transport_instance
-runner = AgentRunnerBase(transport=transport, tools={}, config=cfg)
+runner = AgentRunnerBase(transport=transport)
 result = await runner.run(WeatherAgent(), "What's the weather in Paris?")
 print(result.content)
 ```

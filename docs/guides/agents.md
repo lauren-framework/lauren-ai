@@ -186,9 +186,9 @@ user_id = ctx.get_metadata("user_id", default="anonymous")
 
 `AgentRunner` is a `@runtime_checkable Protocol`; `AgentRunnerBase` is the concrete
 implementation. `AgentModule.for_root()` generates a unique `AgentRunnerBase` subclass
-and registers it as the module's runner. Inject it via `runner: AgentRunner` (Protocol)
-when only one AgentModule is in scope, or via the named concrete subclass when two or
-more modules are in scope (see `runner=MyRunner` in [lauren-integration.md](lauren-integration.md)):
+and registers it as the module's runner. Inject it via `runner: AgentRunner` when only
+one `AgentModule` is in scope, or `runner: AgentRunner[MyAgent]` when you need a
+specific module's runner across module boundaries:
 
 ```python
 from lauren_ai import AgentRunner  # @runtime_checkable Protocol

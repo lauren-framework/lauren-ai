@@ -11,7 +11,8 @@ guardrail, team, or memory code.
 ```python
 from lauren_ai import LLMConfig, LLMModule, LLMService, agent, tool, use_tools
 
-# 1. Define a tool (NO from __future__ import annotations in function-form tool files!)
+# 1. Define a tool. Future annotations are supported as long as every
+# referenced type resolves when @tool() runs.
 @tool()
 async def get_weather(city: str) -> dict:
     """Get weather for a city.
@@ -21,7 +22,7 @@ async def get_weather(city: str) -> dict:
     return {"city": city, "temp_c": 18, "condition": "cloudy"}
 
 # 2. Define an agent — @agent() outermost, @use_tools() below it
-@agent(model="claude-opus-4-6", system="You are a weather assistant.")
+@agent(system="You are a weather assistant.")
 @use_tools(get_weather)
 class WeatherAgent: ...
 
@@ -31,7 +32,7 @@ from lauren_ai import AgentRunnerBase
 cfg = LLMConfig(provider="anthropic", model="claude-opus-4-6", api_key="sk-...")
 LLMProvider = LLMModule.for_root(cfg)
 transport = LLMProvider.transport_instance
-runner = AgentRunnerBase(transport=transport, tools={}, config=cfg)
+runner = AgentRunnerBase(transport=transport)
 
 # 4. Run
 result = await runner.run(WeatherAgent(), "What's the weather in Paris?")
@@ -62,7 +63,9 @@ async def bad_tool(...): ...
 ```
 
 **Rules:**
-- No `from __future__ import annotations` in the file containing `@tool()`.
+- `from __future__ import annotations` works with `@tool()`, but every annotated
+  type must be importable when schema generation runs. Avoid unresolved forward
+  references or circular imports in function-form tool files.
 - Use Google-style docstrings (`Args:` section) for parameter descriptions.
 - The `ctx: ToolContext | None = None` parameter (if present) is injected
   internally and never included in the JSON schema.
@@ -345,16 +348,14 @@ async def my_operation(input: str) -> str:
 
 `AgentRunner` is a `@runtime_checkable Protocol`. Use `AgentRunnerBase` for direct
 construction. In production, `AgentModule.for_root()` auto-generates the runner and
-wires everything; inject it via `runner: AgentRunner` (single-module scope) or the
-named concrete subclass (multi-module scope).
+wires everything; inject it via `runner: AgentRunner` when one agent module is in
+scope, or `runner: AgentRunner[MyAgent]` when you need a specific module's runner.
 
 ```python
 from lauren_ai import AgentRunnerBase
 
 runner = AgentRunnerBase(
     transport=...,
-    tools={},              # dict[str, ToolSchema], or empty dict
-    config=...,
     signals=...,           # Optional SignalBus
     cache_backend=...,     # Optional tool-result cache
     # No conversation_store — it lives on each @agent() now.
@@ -432,7 +433,7 @@ Use a class-form `@tool()` that injects the target agent and its runner via
 runner token is visible to DI.  No named `AgentRunnerBase` subclass needed.
 
 ```python
-# delegation.py — NO from __future__ import annotations (function-form schema generation)
+# delegation.py — future annotations are allowed, but keep tool types importable
 from lauren_ai import AgentRunner, tool, ToolContext
 
 @tool()
@@ -891,7 +892,7 @@ class DelegateToBankingTransfer:
 
 | Error / Symptom | Cause | Fix |
 |---|---|---|
-| Tool schema is `{}` or missing parameters | Tool file has `from __future__ import annotations` | Remove the import — PEP 563 lazy evaluation breaks `inspect.signature()` |
+| Tool schema is `{}` or missing parameters | A tool annotation could not be resolved at schema-build time | Import the referenced type in the tool module, or avoid unresolved forward refs / circular imports |
 | `AgentRunner[X]` resolves to wrong runner | Two `AgentModule.for_root()` calls register the same agent | Use `shared_tools=` to deduplicate, or merge into one module |
 | `ModuleExportViolation` on `AgentRunner[X]` | Runner injected across module boundary without export | Add the type to `exports=` in the owning `AgentModule` |
 | `ProtocolAmbiguityError` on `AgentRunner` | Bare `AgentRunner` annotation where two runners are visible | Use `AgentRunner[AgentX]` (parameterized form) — see CLAUDE.md §4 |
@@ -939,7 +940,7 @@ Full index: [`skills/README.md`](skills/README.md)
 
 ## Anti-patterns to avoid
 
-- **Do not** use `from __future__ import annotations` in **function-form** `@tool()` files — it breaks schema generation (see note in `@tool()` section; class-form tools may use it for DI cycle-breaking).
+- **Do not** rely on unresolved forward references in function-form `@tool()` files. `from __future__ import annotations` is supported, but `@tool()` still needs every referenced type to resolve when schema generation runs.
 - **Do not** swap decorator order — `@agent` must be outermost (topmost in code), `@use_tools` innermost.
 - **Do not** use bare `@agent`, `@tool`, `@use_guardrails`, `@guardrail`, `@remember`, `@team` (always use parentheses).
 - **Do not** use `@guardrail(input=[...], output=[...])` on agents — that form is for DI-injectable guardrail classes; use `@use_guardrails(input=[...], output=[...])` on agents instead.

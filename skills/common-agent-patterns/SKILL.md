@@ -34,14 +34,14 @@ async def calculator(expression: str) -> dict:
     except Exception as e:
         return {"error": str(e)}
 
-@agent(model=None, system="You are a math tutor. Use the calculator for any arithmetic.")
+@agent(model="claude-haiku-4-5-20251001", system="You are a math tutor. Use the calculator for any arithmetic.")
 @use_tools(calculator)
 class MathTutorAgent: ...
 
 # Wire (or inject via AgentModule in production)
 cfg = LLMConfig(provider="anthropic", model="claude-haiku-4-5-20251001", api_key="sk-ant-...")
 provider = LLMModule.for_root(cfg)
-runner = AgentRunnerBase(transport=provider.transport_instance, tools={}, config=cfg)
+runner = AgentRunnerBase(transport=provider.transport_instance)
 agent_instance = MathTutorAgent()
 
 # Blocking

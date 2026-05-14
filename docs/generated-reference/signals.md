@@ -50,22 +50,6 @@ Can be used as a decorator::
 **Returns:** `Callable` — A decorator that registers the handler and returns it
 unchanged.
 
-#### `SignalBus.clear`
-
-```python
-def clear(self, event_type: type | None = None) -> None
-```
-
-Remove all handlers, optionally scoped to a specific *event_type*.
-
-**Parameters:**
-
-| Name | Type | Description |
-|---|---|---|
-| `event_type` | `type | None` | When provided, only handlers for this event type
-are removed.  When `None`, all handlers across all types are
-cleared. |
-
 #### `SignalBus.emit`
 
 ```python
@@ -100,6 +84,22 @@ A no-op if *handler* is not registered for *event_type*.
 |---|---|---|
 | `event_type` | `type` | The event type the handler was registered for. |
 | `handler` | `Callable[..., Awaitable[None]]` | The handler to unregister. |
+
+#### `SignalBus.clear`
+
+```python
+def clear(self, event_type: type | None = None) -> None
+```
+
+Remove all handlers, optionally scoped to a specific *event_type*.
+
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `event_type` | `type | None` | When provided, only handlers for this event type
+are removed.  When `None`, all handlers across all types are
+cleared. |
 
 #### `SignalBus.handler_count`
 

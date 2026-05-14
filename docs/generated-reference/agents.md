@@ -163,7 +163,7 @@ not declared at module level.
 ### `AgentMeta`
 
 ```python
-class AgentMeta(model: str | None, system: str | None, config: AgentConfig, tool_classes: tuple[Any, ...] = tuple(), name: str = '', memory: Any | None = None, conversation_store: Any | None = None, knowledge_source_filter: tuple[str, ...] | None = None, runner_class: type | None = None)
+class AgentMeta(model: str | None, system: str | None, config: AgentConfig, tool_classes: tuple[Any, ...] = tuple(), name: str = '', memory: Any | None = None, conversation_store: Any | None = None, knowledge_source_filter: tuple[str, ...] | None = None, runner_class: type | None = None, tools: dict[str, Any] = dict())
 ```
 
 Metadata attached to a class decorated with `@agent()`.
@@ -202,6 +202,10 @@ inherited from parent classes). |
 | `runner_class` | `type | None` | The concrete `AgentRunnerBase` subclass for the
 `AgentModule` this agent belongs to.  Set
 by `AgentModule.for_root`.  Used by `AgentRunner[X]` resolution. |
+| `tools` | `dict[str, Any]` | Per-agent resolved tool map `{name: (callable, ToolMeta)}`.
+Populated by `AgentModule.for_root` at startup.  Mirrors exactly the
+subset of the module's tool dict this agent is allowed to use (via
+`@use_tools()` + opted-in KB tools).  Empty dict until `for_root` runs. |
 
 ### `AgentContext`
 
@@ -377,7 +381,7 @@ def reject_tool(self, agent_run_id: str, tool_use_id: str, reason: str = '') -> 
 ### `AgentRunnerBase`
 
 ```python
-class AgentRunnerBase(transport: Any, tools: dict[str, tuple[Any, ToolMeta]], config: LLMConfig, signals: Any | None = None, cache_backend: CacheBackend | None = None, knowledge_tool_names: set[str] | None = None)
+class AgentRunnerBase(transport: Any, signals: Any | None = None, cache_backend: CacheBackend | None = None)
 ```
 
 Concrete implementation of the `AgentRunner` Protocol.
@@ -393,9 +397,6 @@ dispatches tool calls, and aggregates results into an
 | Name | Type | Description |
 |---|---|---|
 | `transport` | `Any` | Provider-agnostic LLM transport. |
-| `tools` | `dict[str, tuple[Any, ToolMeta]]` | Mapping of tool name to `(callable_or_instance, ToolMeta)`.
-Built by `AgentModule.for_root()` or `AgentTestClient`. |
-| `config` | `LLMConfig` | Application-level LLM configuration (model, max_tokens, etc.). |
 | `signals` | `Any | None` | Optional signal bus for emitting lifecycle events. |
 | `cache_backend` | `CacheBackend | None` | Optional cache backend for tool result caching. |
 

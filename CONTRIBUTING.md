@@ -11,13 +11,13 @@ test, and release `lauren-ai`.
 |---|---|
 | Python | ≥ 3.11 |
 | uv | ≥ 0.4 |
-| nox | ≥ 2026.4 |
 | git | any recent |
 
-Install `uv` and `nox` globally:
+Install `uv` globally. `nox` is already included in the dev dependencies and is
+normally invoked through `uv run`:
 
 ```bash
-pip install uv nox
+pip install uv
 ```
 
 ---
@@ -28,8 +28,8 @@ pip install uv nox
 git clone https://github.com/lauren-framework/lauren-ai
 cd lauren-ai
 
-# Install the project + dev extras in editable mode
-uv sync --all-extras
+# Install the project + dev extras
+uv sync --extra dev
 
 # Activate the venv
 source .venv/bin/activate
@@ -45,17 +45,20 @@ prek install
 
 ```bash
 # Unit tests only (fast)
-nox -s tests_unit
+uv run nox -s tests_unit
 
 # All tests
-nox -s tests
+uv run nox -s tests
 
 # With coverage report
-pytest tests/ --cov=lauren_ai --cov-report=html
+uv run nox -s coverage
 
 # Benchmarks (excluded from default run)
-nox -s benchmark
+uv run nox -s benchmark
 ```
+
+Running `uv run nox` with no `-s` now executes the repository's default PR gate
+session set: `lint`, `tests`, `format`, `build`, `build_check`, and `prek`.
 
 The default `pytest` run excludes `benchmark` and `eval` marked tests.
 Coverage must reach **80%** or the test run fails.
@@ -66,10 +69,10 @@ Coverage must reach **80%** or the test run fails.
 
 ```bash
 # Check lint + format
-nox -s lint
+uv run nox -s lint
 
 # Auto-fix
-nox -s format
+uv run nox -s format
 ```
 
 All code uses **ruff** for linting and formatting. Line length is 100.
@@ -79,7 +82,7 @@ All code uses **ruff** for linting and formatting. Line length is 100.
 ## 5. Type checking
 
 ```bash
-nox -s typecheck
+uv run nox -s typecheck
 ```
 
 All public API surfaces must have complete type annotations. Private helpers
@@ -91,10 +94,10 @@ should have annotations too unless they are trivially obvious.
 
 ```bash
 # Build docs
-nox -s docs
+uv run nox -s docs
 
 # Serve locally with live reload
-nox -s docs_serve
+uv run nox -s docs_serve
 ```
 
 Docs live in `docs/` and are built with **MkDocs Material**. All public API
@@ -153,7 +156,9 @@ test: add coverage for MockTransport streaming
 
 1. Add an `@tool()`-decorated async function to `src/lauren_ai/_skills/__init__.py`
 2. Export it from `__all__`
-3. **Do not** use `from __future__ import annotations` — it breaks schema generation
+3. Keep function-form `@tool()` annotations importable at module import time;
+   `from __future__ import annotations` is supported, but unresolved forward refs
+   and circular imports still break schema generation
 4. Write unit tests mocking any external calls
 
 ---
@@ -172,6 +177,11 @@ The GitHub Actions `release.yml` workflow will:
 2. Build the wheel and sdist
 3. Publish to PyPI via OIDC (no manual token needed)
 
+Development and release workflow details now live in:
+
+- `docs/development/release.md`
+- `docs/development/versioning.md`
+
 Versioning is managed by `setuptools-scm`. Never set `version =` manually in
 `pyproject.toml`.
 
@@ -183,12 +193,12 @@ Versioning is managed by `setuptools-scm`. Never set `version =` manually in
 |---|---|
 | Decorator parentheses | `@tool()`, `@agent()`, `@team()`, `@guardrail()`, `@remember()`, `@traced()` — never bare |
 | Decorator order | `@agent()` outermost, `@use_tools()` below |
-| `from __future__ import annotations` | Forbidden in `@tool()` definition files and Pydantic output schema files |
+| `from __future__ import annotations` | Supported, but tool signature types must resolve when `@tool()` builds the schema |
 | `__all__` | Required in every public module |
 | RST docstrings | Required on all public symbols |
 | Transport protocol | Never import a specific provider at module level |
 | `ToolResult` | Always pass `tool_use_id=` kwarg |
-| `PydanticOutputParser` | Must NOT use `from __future__ import annotations` in schema-definition files |
+| `PydanticOutputParser` | Keep referenced schema types importable in examples and parser wiring |
 | `@guardrail()` | Decorator takes `input=[...]` and `output=[...]` lists of guardrail instances |
 | `GuardrailDecision.action` | Must be `"pass"`, `"block"`, or `"modify"` |
 | `@team()` | Requires `mode="coordinator"` or `mode="collaborate"` |

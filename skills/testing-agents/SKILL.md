@@ -33,7 +33,7 @@ async def test_my_agent():
         )
     )
 
-    client = AgentTestClient(agent=MyAgent, config=cfg, mock_transport=mock)
+    client = AgentTestClient(MyAgent(), mock)
     result = await client.run("What is the answer?")
     assert result.content == "The answer is 42."
     assert result.turns == 1

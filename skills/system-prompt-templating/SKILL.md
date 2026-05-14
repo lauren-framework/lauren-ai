@@ -13,7 +13,7 @@ Lauren-AI ships `PromptTemplate` (single message) and `ChatPromptTemplate`
 (multi-turn) in `lauren_ai._prompts`.  Use them for simple `{variable}` interpolation:
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to tool files.
+# NOTE: future annotations are allowed, but tool signature types must resolve at import time.
 from lauren_ai import PromptTemplate, ChatPromptTemplate
 
 tpl = PromptTemplate(template="You are a {role}. Context: {context}")

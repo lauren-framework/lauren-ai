@@ -8,9 +8,9 @@ description: Shows how to accumulate state across multiple tool calls within a s
 
 # Multi-Turn Tool Execution with State Carryover
 
-## Critical rule — no PEP 563 in tool files
+## Critical rule — tool annotations must resolve
 
-**Never add `from __future__ import annotations` to any file that defines `@tool()`.**
+**`from __future__ import annotations` is supported, but every type used by `@tool()` must resolve when schema generation runs.**
 
 ---
 
@@ -33,7 +33,7 @@ write via `ctx.agent_context.metadata[key] = value`.
 ## Shopping cart example (function-form tool)
 
 ```python
-# tools/shopping_cart.py — NO from __future__ import annotations
+# tools/shopping_cart.py — future annotations are allowed; keep tool types importable
 from lauren_ai import tool, ToolContext
 
 CART_KEY = "shopping_cart"

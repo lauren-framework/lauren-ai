@@ -44,19 +44,16 @@ class MyAgent: ...
 ## ConversationStore
 
 `ConversationStore` persists full message history across multiple `run()` calls
-within a session.  Pass a store to `AgentModule.for_root()`, then supply a
+within a session. Declare the store on the agent itself, then supply a
 `conversation_id` on every `run()` call:
 
 ```python
-from lauren_ai import InMemoryConversationStore, AgentModule
+from lauren_ai import agent, InMemoryConversationStore
 
 store = InMemoryConversationStore()
 
-AIModule = AgentModule.for_root(
-    agents=[MyAgent],
-    conversation_store=store,   # wired to AgentRunner automatically
-    imports=LLMProvider,
-)
+@agent(model="claude-opus-4-6", conversation_store=store)
+class MyAgent: ...
 ```
 
 When `runner.run()` receives a `conversation_id`, the runner automatically:
@@ -77,8 +74,9 @@ each call starts with an empty `ShortTermMemory`.  Different IDs are completely
 isolated from each other.
 
 For production, implement the `ConversationStore` protocol backed by Redis,
-PostgreSQL, or any other store and pass that instance to
-`AgentModule.for_root(conversation_store=...)` instead.
+PostgreSQL, or any other store and attach that instance with
+`@agent(conversation_store=...)`. Per-call overrides via
+`runner.run(agent, ..., conversation_store=other_store)` still win when needed.
 
 ---
 

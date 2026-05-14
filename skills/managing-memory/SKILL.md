@@ -73,18 +73,15 @@ tools, guardrails, or memory configuration.
 ## Tier 2: Conversation history across runs
 
 Use `ConversationStore` to persist full message history across multiple agent
-runs within a session.  Wire it through `AgentModule.for_root()`:
+runs within a session. Declare it on the agent (or override it per call):
 
 ```python
-from lauren_ai import InMemoryConversationStore, AgentModule
+from lauren_ai import agent, InMemoryConversationStore
 
 store = InMemoryConversationStore()
 
-AIModule = AgentModule.for_root(
-    agents=[MyAgent],
-    conversation_store=store,   # wired to AgentRunner automatically
-    imports=LLMProvider,
-)
+@agent(model="claude-opus-4-6", conversation_store=store)
+class MyAgent: ...
 ```
 
 Then pass a `conversation_id` on each `run()` call — the runner loads prior

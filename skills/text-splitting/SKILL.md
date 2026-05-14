@@ -10,7 +10,7 @@ description: Splits long documents into overlapping chunks for RAG pipelines and
 ## Quick start
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to tool files.
+# NOTE: future annotations are allowed, but tool signature types must resolve at import time.
 
 class RecursiveCharacterSplitter:
     def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200,

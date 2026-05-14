@@ -9,23 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Initial release of `lauren-ai`
-- Transport layer: `Transport` protocol, `AnthropicTransport`, `OpenAITransport`, `OllamaTransport`, `LiteLLMTransport`, `MockTransport`
-- Tool system: `@tool()` decorator, `ToolContext`, `ToolResult`, `ToolRegistry`, `ToolSchema` auto-generation
-- Memory system: `ShortTermMemory`, `MemoryStore` protocol, `InMemoryVectorStore`, `ConversationStore`, `InMemoryConversationStore`
-- Agent system: `@agent()` decorator, `use_tools()`, `AgentRunner`, `AgentContext`, `AgentResponse`
-- Extractors: `Agent[T]`, `Completion[T]`, `Embed[T]`, `StreamCompletion[T]`
-- Module factories: `LLMModule.for_root()`, `AgentModule.for_root()`
-- Signals: `ModelCallStarted`, `ModelCallComplete`, `ToolCallStarted`, `ToolCallComplete`, `AgentTurnComplete`, `AgentRunComplete`, `EmbeddingGenerated`
-- Middleware: `conversation_middleware()`, `ai_rate_limit()`
-- Guards: `token_budget_guard()`, `safety_guard()`, `requires_capability()`
-- Interceptors: `AIMetricsInterceptor`, `TokenUsageResponseInterceptor`
-- Pre-built skills: `WebSearchTool`, `CodeExecutionTool`, `HttpFetchTool`
-- Knowledge base: `KnowledgeBase`, `TextLoader`, `PDFLoader`, `URLLoader`, hybrid retrieval
-- Structured workflows: `Workflow`, `Step`, `Parallel`, `Condition`, `Loop`
-- Tool enhancements: HITL confirmation, pre/post hooks, result caching
-- Extended thinking support for Anthropic models
-- Evaluation framework: `AccuracyEval`, `AgentJudge`, `TrajectoryEval`, `PerformanceEval`
-- Full `llms.txt` and `llms-full.txt` AI reference files
-- Comprehensive test suite (unit + integration)
-- MkDocs documentation site
+- Added maintainer-oriented development guides under `docs/development/`, covering setup, testing, versioning, changelog writing, and release workflows.
+
+### Changed
+
+- Simplified `AgentRunnerBase` construction: the runner no longer accepts `config=...`, so direct construction now uses `AgentRunnerBase(transport=..., signals=..., cache_backend=...)`.
+- Moved model fallback into `AgentModule.for_root()`, so agents that omit `model=` now inherit the module's `LLMConfig.model` during wiring.
+- Updated `AgentTestClient` and mock-runner helpers to assign `"mock-model"` when needed instead of building synthetic `LLMConfig` objects for tests.
+- Changed the default `nox` session set to `lint`, `tests`, `format`, `build`, `build_check`, and `prek`; docs, typechecking, and other workflows remain available as explicit sessions.
+- Clarified release automation around the new development docs and current GitHub Actions workflow.
+
+### Removed
+
+- Removed the local `[tool.uv.sources]` path override from `pyproject.toml`, so `lauren` is resolved like a normal dependency instead of via a repository-local source mapping.
+
+### Fixed
+
+- Fixed the failing nox/test helper path by updating runner construction and mock-model fallback logic to match the current `AgentRunnerBase` API.

@@ -171,11 +171,10 @@ Key rules:
   the DI container.  Constructor dependencies (like `BankDatabase`) are
   resolved from the enclosing module graph via `imports=`.
 
-> **Important — `from __future__ import annotations` is banned in tool files.**
-> The `@tool()` decorator calls `inspect.signature()` at import time to build
-> the JSON schema.  PEP 563 lazy evaluation (triggered by the future import)
-> turns annotations into strings and breaks schema generation silently.  Add
-> the comment shown above as a reminder.
+> **Important:** `from __future__ import annotations` is supported in tool files,
+> but every type used in the tool signature must resolve when `@tool()` builds
+> the schema. Avoid unresolved forward references and circular imports in
+> function-form tools.
 
 ---
 
@@ -721,9 +720,9 @@ AppModule
 
 Before shipping an integration like this, verify:
 
-- [ ] All `@tool()` files omit `from __future__ import annotations` — or use
-  the class form exclusively (class-form tools use `typing.get_type_hints()`
-  inside `AgentModule` after startup, which is safe with the future import).
+- [ ] All function-form `@tool()` annotations resolve at import time. Future
+  annotations are fine, but unresolved forward refs and circular imports still
+  break schema generation.
 - [ ] Every privileged tool reads identity from
   `ctx.execution_context.request.state`, not from LLM-supplied arguments.
 - [ ] Circular DI dependencies are broken via `AgentRunner[TargetAgent]`

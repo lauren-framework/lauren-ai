@@ -76,7 +76,7 @@ mock.queue_response(
     )
 )
 
-client = AgentTestClient(agent=MyAgent, config=cfg, mock_transport=mock)
+client = AgentTestClient(MyAgent(), mock)
 result = await client.run("Say hello")
 assert result.content == "Hello!"
 ```
@@ -198,7 +198,7 @@ AIAgentModule = AgentModule.for_root(
 class AppModule: ...
 ```
 
-### `AgentModule.for_root(*, agents, tools=None, imports=None, signals=None, memory=None, conversation_store=None, config=None, tool_cache=None, knowledge=None) -> type`
+### `AgentModule.for_root(*, agents, tools=None, imports=None, signals=None, config=None, tool_cache=None, knowledge=None, runner=None, injects=None, export_tools=None, shared_tools=None) -> type`
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -206,20 +206,21 @@ class AppModule: ...
 | `tools` | `list[Any] \| None` | Shared tools available to all agents (in addition to per-agent `@use_tools()` registrations). |
 | `imports` | `type \| list[type] \| None` | `@module`-decorated class(es) to import. Pass the `LLMModule` result here. |
 | `signals` | `Any \| None` | Optional `SignalBus` wired into the module's runner. |
-| `memory` | `Any \| None` | Long-term memory store instance. |
-| `conversation_store` | `Any \| None` | Conversation history store instance. |
 | `config` | `AgentConfig \| None` | Default `AgentConfig` for all agents in this module. |
 | `tool_cache` | `Any \| None` | Cache backend for tool result caching. |
 | `knowledge` | `list[Any] \| None` | Knowledge base instances to pre-load into long-term memory. |
+| `runner` | `type \| None` | Optional explicit `AgentRunnerBase` subclass to use as this module's runner token. |
+| `injects` | `list[type] \| None` | Additional internal providers available to agents and tools in the module. |
+| `export_tools` | `list[type] \| None` | Tool providers exported for other modules to inject. |
+| `shared_tools` | `list[type] \| None` | Imported tool providers that should not be re-registered in this module. |
 
 The returned `@module` provides and exports:
 - A unique `AgentRunnerBase` subclass as the module's runner token. Inject it via
-  `runner: AgentRunner` (Protocol scan) in single-module scope, or via the explicit
-  named subclass passed to `runner=MyRunner` in multi-module scope.
+  `runner: AgentRunner` in single-module scope, or `runner: AgentRunner[MyAgent]`
+  when you need a specific module's runner across module boundaries.
 - All agent classes registered as injectable singletons.
 
-The `runner` parameter accepts one optional `AgentRunnerBase` subclass. When
-omitted, an anonymous subclass is auto-generated. Pass an explicit subclass when
-a controller or service imports two or more AgentModules and needs to disambiguate.
-The `injects` parameter accepts a list of additional provider classes (e.g. caches,
-domain services) made available to agents and tools in this module.
+Per-agent conversation history and persistent memory now belong on `@agent(...)`
+decorators, not `AgentModule.for_root(...)`. Use `@agent(memory=...)`,
+`@agent(conversation_store=...)`, or per-call overrides such as
+`runner.run(agent, ..., memory=..., conversation_store=...)`.

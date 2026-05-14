@@ -218,8 +218,9 @@ Rules:
 - Schema generated from PEP-3107 annotations + Google-style `Args:` docstring section
 - Any parameter annotated `ToolContext` or `ToolContext | None` is injected at runtime
   and **excluded from the JSON schema** — the parameter may be **named anything**
-- `from __future__ import annotations` is safe in both function-form and class-form
-  `@tool()` files
+- `from __future__ import annotations` is supported, but tool annotations must still
+  resolve when `@tool()` builds the schema. Avoid unresolved forward refs or circular
+  imports in function-form tool files.
 - Optional params (with defaults) are excluded from the `required` array
 - Class-form tools receive `@injectable(scope=SINGLETON)` automatically; override with
   `@tool() @injectable(scope=Scope.REQUEST)` for request-scoped tools
@@ -248,7 +249,8 @@ class DelegateToResearcher:
 Class-form tools:
 - Are registered as DI providers — dependencies are injected by the container
 - Their `run()` method is the entry point (must be defined)
-- `from __future__ import annotations` is safe in class-form tool files
+- May use `from __future__ import annotations`, provided the referenced types resolve
+  when schema generation runs
 
 ### `@tool()` with options
 
@@ -394,11 +396,8 @@ from lauren_ai import AgentRunner, AgentRunnerBase
 # Testing: instantiate the concrete class
 runner = AgentRunnerBase(
     transport=transport,         # Transport instance
-    tools={},                    # dict[str, ToolEntry] — usually {} for tests
-    config=llm_config,           # LLMConfig
     signals=signal_bus,          # Optional SignalBus
     cache_backend=None,          # Optional cache backend for tool results
-    conversation_store=store,    # Optional ConversationStore — enables history persistence
 )
 
 isinstance(runner, AgentRunner)     # True — Protocol is @runtime_checkable
@@ -1676,21 +1675,24 @@ produces silently broken behaviour (missing tools, missing guardrails, etc.).
 
 ---
 
-## Critical invariant — no future annotations in function-form tool files
+## Critical invariant — tool annotations must resolve
 
 ```python
-# WRONG — breaks @tool() schema generation for function-form tools:
+# WRONG — unresolved forward refs still break schema generation:
 from __future__ import annotations
 
 @tool()
-async def my_tool(param: str) -> dict: ...   # param annotation becomes string "str"
+async def my_tool(param: LaterType) -> dict: ...   # LaterType is not defined yet
 
-# CORRECT — no future annotations for function-form tools:
+# CORRECT — future annotations are fine when every type resolves:
+from __future__ import annotations
+
+from my_types import ToolInput
+
 @tool()
-async def my_tool(param: str) -> dict: ...   # param annotation is the live type str
+async def my_tool(param: ToolInput) -> dict: ...
 
-# CORRECT — class-form tools MAY use future annotations:
-# The DI ForwardRef cycle-break relies on it.
+# ALSO CORRECT — class-form tools can use the same pattern:
 from __future__ import annotations
 
 @tool()

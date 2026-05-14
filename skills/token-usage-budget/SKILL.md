@@ -10,7 +10,7 @@ description: Tracks token consumption and USD cost per conversation or user, enf
 ## Quick start
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to tool files.
+# NOTE: future annotations are allowed, but tool signature types must resolve at import time.
 from lauren_ai import CostTracker, default_pricing_table, SignalBus, ModelCallComplete
 
 signal_bus = SignalBus()

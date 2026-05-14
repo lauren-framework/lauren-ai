@@ -12,7 +12,7 @@ description: Adds content safety filters to lauren-ai agents using @use_guardrai
 ## Quick start
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to tool files.
+# NOTE: future annotations are allowed, but tool signature types must resolve at import time.
 from lauren_ai import agent, tool, use_guardrails, use_tools, PromptInjectionFilter, PIIRedactor, LengthFilter
 
 @tool()
@@ -39,7 +39,7 @@ Run it:
 from lauren_ai import AgentRunnerBase, LLMConfig
 
 cfg = LLMConfig(provider="anthropic", model="claude-opus-4-6")
-runner = AgentRunnerBase(transport=..., tools={}, config=cfg)
+runner = AgentRunnerBase(transport=...)
 result = await runner.run(SafeAgent(), "What is the refund policy?")
 print(result.content)
 ```

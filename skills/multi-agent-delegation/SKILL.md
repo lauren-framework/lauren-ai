@@ -24,7 +24,7 @@ User → OrchestratorAgent
 ## Define the handoff tool
 
 ```python
-# tools.py — NO from __future__ import annotations
+# tools.py — future annotations are allowed; keep tool types importable
 
 from lauren_ai import tool, ToolContext
 from lauren_ai._agents._runner import AgentRunnerBase as AgentRunner

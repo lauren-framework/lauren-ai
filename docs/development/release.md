@@ -8,10 +8,10 @@ preparing a release branch, tagging, building, and publishing to PyPI.
 ## Prerequisites
 
 - You have push access to the `main` branch (or can open a PR to it).
-- The `LAUREN_PYPI_TOKEN` secret is configured in the repository
-  settings (used by the GitHub Actions `release` workflow).
 - Your local environment has Python 3.11+ and the dev dependencies
-  installed (`pip install -e ".[dev]"`).
+  installed (`uv sync --extra dev`).
+- The PyPI and TestPyPI repository environments are configured for GitHub OIDC
+  Trusted Publishing. No long-lived upload token is required.
 
 ---
 
@@ -51,9 +51,10 @@ section. Example:
 ### 1.3 Run the Full CI Matrix Locally
 
 ```bash
-nox                       # lint + tests + typecheck (default sessions)
-nox -s docs               # strict MkDocs build
-nox -s llms_check         # every public symbol is in llms-full.txt
+uv run nox                # repo default gate: lint + tests + format + build + build_check + prek
+uv run nox -s typecheck   # strict mypy run
+uv run nox -s docs        # strict MkDocs build
+uv run nox -s llms_check  # every public symbol is in llms-full.txt
 ```
 
 All sessions must be green before you open a PR.
@@ -87,7 +88,7 @@ git push origin v1.2.3
 
 Pushing a `v*` tag triggers `.github/workflows/release.yml`, which:
 
-1. Runs `nox -s build` to produce `dist/`.
+1. Runs `uv run nox -s build` to produce `dist/`.
 2. Publishes to PyPI via OIDC Trusted Publishing (no token required in
    the environment).
 
@@ -123,20 +124,13 @@ Prefer the GitHub Actions workflow. Use the manual path only if CI is
 unavailable:
 
 ```bash
-nox -s build              # produces dist/lauren-X.Y.Z*.whl + .tar.gz
-nox -s build_check        # validates with twine check
-
-# TestPyPI first:
-nox -s release_test
-
-# Real PyPI (destructive — cannot be undone):
-nox -s release -- --yes
+uv run nox -s build       # produces dist/lauren_ai-X.Y.Z*.whl + .tar.gz
+uv run nox -s build_check # validates the artifacts
 ```
 
-!!! danger "Manual releases bypass OIDC"
-    The `release` session uses `twine upload`, which requires
-    `TWINE_USERNAME=__token__` and `TWINE_PASSWORD=<pypi-token>` in
-    your shell environment.
+For ad-hoc publishing outside the tag-triggered workflow, use the
+`workflow_dispatch` input on `.github/workflows/release.yml` and choose
+`testpypi` or `pypi`.
 
 ---
 

@@ -10,7 +10,7 @@ description: Manages multiple named prompt versions with A/B routing by user-id 
 ## Pattern
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to tool files.
+# NOTE: future annotations are allowed, but tool signature types must resolve at import time.
 import hashlib
 from dataclasses import dataclass, field
 

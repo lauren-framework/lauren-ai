@@ -78,7 +78,7 @@ from lauren_ai._transport._mock import MockTransport
 
 mock = MockTransport()
 cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-runner = AgentRunner(transport=mock, tools={}, config=cfg)
+runner = AgentRunner(transport=mock)
 
 @agent(model="claude-sonnet-4-6", system="You are a helpful assistant.")
 class BackgroundAgent: ...

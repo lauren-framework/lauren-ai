@@ -70,13 +70,14 @@ a `CacheBackend` in the executor. |
 ### `ToolContext`
 
 ```python
-class ToolContext(agent_context: Any, tool_use_id: str, turn: int, request: Any | None = None, execution_context: Any | None = None, state: dict[str, Any] = dict())
+class ToolContext(agent_context: Any, tool_use_id: str, turn: int, request: Any | None = None, execution_context: Any | None = None, metadata: dict[str, Any] = dict(), state: dict[str, Any] = dict())
 ```
 
 Context injected into a tool function when a `ctx: ToolContext` param is declared.
 
-Carries the owning agent context, the current turn number, and a mutable
-state bag for per-call data.
+Carries the owning agent context, the current turn number, a mutable
+state bag for per-call data, and the tool's static metadata (populated
+from `@set_metadata` decorators applied to the tool at definition time).
 
 **Parameters:**
 
@@ -90,6 +91,9 @@ specific invocation. |
 | `turn` | `int` | Which agentic-loop iteration (0-based) triggered this call. |
 | `request` | `Any | None` | The originating HTTP `Request`, if the agent was invoked
 from a web handler.  `None` otherwise. |
+| `metadata` | `dict[str, Any]` | Static metadata attached to this tool via
+`@set_metadata(key, value)` at decoration time.  Readable via
+`get_metadata()`. |
 | `state` | `dict[str, Any]` | Mutable per-call state bag for tool-local storage. |
 
 #### `ToolContext.get_metadata`
@@ -98,17 +102,22 @@ from a web handler.  `None` otherwise. |
 def get_metadata(self, key: str, default: Any = None) -> Any
 ```
 
-Get metadata from the agent context.
+Return metadata by *key*, checking tool-level then agent-level.
 
-Delegates to `agent_context.get_metadata(key, default)` when the
-agent context supports that method, otherwise returns *default*.
+Lookup order:
+1. **Tool-level static metadata** — key-value pairs attached at
+   decoration time via `@set_metadata(key, value)` on the tool.
+2. **Agent-level runtime metadata** — the `metadata` dict supplied
+   to `~lauren_ai.AgentRunnerBase.run()` (e.g.
+   `runner.run(agent, prompt, metadata={"scope": "admin"})`),
+   delegated through `agent_context.get_metadata`.
 
 **Parameters:**
 
 | Name | Type | Description |
 |---|---|---|
 | `key` | `str` | Metadata key to look up. |
-| `default` | `Any` | Value to return when key is absent. |
+| `default` | `Any` | Value returned when the key is absent in both layers. |
 
 **Returns:** `Any` — Metadata value or *default*.
 

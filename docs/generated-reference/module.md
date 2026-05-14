@@ -54,7 +54,8 @@ one derived from *config*.  Pass a
 class AgentModule
 ```
 
-Factory that creates a `@module` providing the `AgentRunner`,
+Factory that creates a `@module` providing the
+`AgentRunner`,
 `ToolRegistry`, and all registered agent
 class instances.
 

@@ -29,7 +29,7 @@ Run it:
 from lauren_ai import AgentRunnerBase, LLMConfig
 
 cfg = LLMConfig(provider="anthropic", model="claude-opus-4-6")
-runner = AgentRunnerBase(transport=transport, tools={}, config=cfg)
+runner = AgentRunnerBase(transport=transport)
 result = await runner.run(ShopAgent(), "How much is a Widget?")
 print(result.content)
 ```
@@ -76,7 +76,7 @@ class PersonalAssistant: ...
 | **Always call decorators with parentheses** | `@agent()` not `@agent` — bare form raises `DecoratorUsageError` at decoration time |
 | **Use `@use_guardrails()` to attach guardrails to agents** | `@guardrail()` is for making standalone DI-injectable guardrail classes; `@use_guardrails()` wires them into an agent |
 | **Never trust LLM-supplied identity in tools** | Use `ctx.execution_context.request.state.get("user_id")` — see [security.md](../securing-agents/security.md) |
-| **`from __future__ import annotations` is safe in agent files but forbidden in tool files** | `@tool()` reads `__annotations__` at decoration time; PEP 563 breaks schema generation in tool files |
+| **Tool annotations must resolve when schema generation runs** | Future annotations are supported, but unresolved forward refs and circular imports in function-form tool files still break `@tool()` schema generation |
 
 ---
 

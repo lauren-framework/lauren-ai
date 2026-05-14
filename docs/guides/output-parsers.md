@@ -1,8 +1,7 @@
 # Output Parsers
 
 Output parsers transform the raw text returned by an LLM into typed Python
-values.  Every parser satisfies the
-[`OutputParser`][lauren_ai._output_parsers._base.OutputParser] protocol:
+values. Every parser satisfies the `OutputParser` protocol:
 
 ```python
 class OutputParser(Protocol):
@@ -15,8 +14,8 @@ class OutputParser(Protocol):
 The `format_instructions` property returns a short instruction string you can
 embed in your prompt to tell the model what format to use.
 
-All parsers implement `__or__` so they compose cleanly with
-[`Chain`][lauren_ai._chains.Chain] via the `|` operator.
+All parsers implement `__or__` so they compose cleanly with a `Chain` via the
+`|` operator.
 
 ---
 
@@ -55,8 +54,7 @@ result = parser.parse("```json\n[1, 2, 3]\n```")
 # [1, 2, 3]
 ```
 
-Raises [`OutputParserError`][lauren_ai._output_parsers.OutputParserError] on
-invalid JSON.
+Raises `OutputParserError` on invalid JSON.
 
 **format_instructions:** `"Respond with valid JSON."`
 
@@ -74,8 +72,7 @@ result = parser.parse("Score: 8/10, Verdict: Excellent")
 # {"score": "8", "verdict": "Excellent"}
 ```
 
-Raises [`OutputParserError`][lauren_ai._output_parsers.OutputParserError]
-when the pattern does not match.
+Raises `OutputParserError` when the pattern does not match.
 
 **format_instructions:** Shows the required pattern string.
 
@@ -114,9 +111,8 @@ code = parser.parse(
 # "print('Hello!')"
 ```
 
-When no `language` is given, the parser matches any fenced block.  Raises
-[`OutputParserError`][lauren_ai._output_parsers.OutputParserError] when no
-fenced block is found.
+When no `language` is given, the parser matches any fenced block. Raises
+`OutputParserError` when no fenced block is found.
 
 **format_instructions:** `"Wrap your response in a ```python``` fenced code block."`
 
@@ -141,8 +137,7 @@ assert isinstance(user, UserInfo)
 assert user.name == "Alice"
 ```
 
-Raises [`OutputParserError`][lauren_ai._output_parsers.OutputParserError] for
-invalid JSON or Pydantic validation failures.
+Raises `OutputParserError` for invalid JSON or Pydantic validation failures.
 
 **format_instructions:** Returns a JSON Schema description of the model, e.g.:
 
@@ -195,8 +190,8 @@ result = await parser.parse_with_retry(
 `parse_with_retry` is the async entry point.  The synchronous `parse(text)`
 method delegates directly to the wrapped parser without retry.
 
-Raises [`MaxRetryError`][lauren_ai._output_parsers.MaxRetryError] after all
-attempts are exhausted.  The `attempts` attribute on the exception records
+Raises `MaxRetryError` after all attempts are exhausted. The `attempts`
+attribute on the exception records
 how many total attempts were made:
 
 ```python
@@ -212,8 +207,7 @@ except MaxRetryError as e:
 
 ## Integration with Chain
 
-Parsers work seamlessly as the last step in a
-[`Chain`][lauren_ai._chains.Chain]:
+Parsers work seamlessly as the last step in a `Chain`:
 
 ```python
 from lauren_ai._prompts import PromptTemplate

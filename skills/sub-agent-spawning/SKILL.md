@@ -72,7 +72,7 @@ def _make_runner(mock=None):
     if mock is None:
         mock = MockTransport()
     cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    runner = AgentRunner(transport=mock, tools={}, config=cfg)
+    runner = AgentRunner(transport=mock)
     return runner, mock
 
 def _completion(content="OK", *, n=1):

@@ -91,7 +91,9 @@ Rules:
 - Schema is generated from type annotations + Google-style `Args:` docstring section
 - Any parameter annotated as `ToolContext` (or `ToolContext | None`) is injected by
   the runner and excluded from the JSON schema — the parameter may have **any name**
-- `from __future__ import annotations` is safe in tool/agent files
+- `from __future__ import annotations` is supported, but tool annotations still
+  need to resolve when `@tool()` builds the schema. Avoid unresolved forward
+  refs or circular imports in function-form tool files.
 - Class-form tools get `@injectable(scope=SINGLETON)` applied automatically; use
   `@tool() @injectable(scope=Scope.REQUEST)` to override the scope
 - Subclasses of `@tool()`-decorated classes must re-apply `@tool()` themselves;
@@ -102,7 +104,7 @@ Rules:
 ```python
 from lauren_ai import agent, use_tools
 
-@agent(model="claude-opus-4-6", system="You are a helpful assistant.")
+@agent(system="You are a helpful assistant.")
 @use_tools(get_weather)
 class WeatherAgent: ...
 ```
@@ -120,7 +122,7 @@ For testing, instantiate `AgentRunnerBase` directly:
 ```python
 from lauren_ai import AgentRunner, AgentRunnerBase
 
-runner = AgentRunnerBase(transport=transport, tools={}, config=llm_config)
+runner = AgentRunnerBase(transport=transport)
 isinstance(runner, AgentRunner)  # True
 
 response = await runner.run(
@@ -162,6 +164,9 @@ class BankingController:
 Both `@agent(memory=ShortTermMemory(...))` and `@agent(conversation_store=InMemoryConversationStore())`
 declare per-agent state.  `AgentModule.for_root()` **no longer accepts** `memory=` or
 `conversation_store=` at the module level.
+
+If an agent omits `model=...`, `AgentModule.for_root()` fills in the model from the
+imported `LLMConfig` during module wiring.
 
 ### @use_guardrails() — attach guardrail instances to an agent
 
@@ -464,15 +469,12 @@ msg = Message.from_multimodal("user", [
 class Agent: ...
 ```
 
-## Critical rule — no future annotations in function-form tool files
+## Critical rule — tool annotations must resolve
 
-Never add `from __future__ import annotations` to files containing **function-form**
-`@tool()` definitions. PEP 563 makes annotations lazy strings at decoration time,
-which breaks JSON schema generation.
-
-**Class-form** `@tool()` files may (and often should) include
-`from __future__ import annotations` — the runner evaluates the `run()` method
-annotations at runtime, not at decoration time.
+`from __future__ import annotations` is supported in both agent and tool files, but
+`@tool()` still resolves parameter types when the module is imported. Keep tool
+annotations importable and avoid unresolved forward references or circular imports,
+especially in function-form tools.
 
 ## Links
 

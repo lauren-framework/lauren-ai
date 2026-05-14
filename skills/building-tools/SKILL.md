@@ -9,20 +9,20 @@ description: Creates tools for lauren-ai agents using @tool() on async functions
 
 # Building Tools with lauren-ai
 
-## Critical rule — no PEP 563 in tool files
+## Critical rule — tool annotations must resolve
 
-**Never add `from __future__ import annotations` to any file that defines `@tool()`.**
+**`from __future__ import annotations` is supported, but every type used by `@tool()` must resolve when schema generation runs.**
 
-The `@tool()` decorator calls `inspect.signature()` at decoration time to build
-the JSON schema sent to the LLM.  PEP 563 lazy evaluation converts all
-annotations to plain strings, silently breaking schema generation.
+`@tool()` resolves annotations when it builds the JSON schema. Future
+annotations are supported, but unresolved forward references and circular
+imports in function-form tool files still break schema generation.
 
-Add this comment at the top of every tool file:
+A safe reminder comment is:
 
 ```python
 
-# The @tool() decorator uses inspect.signature() at decoration time to build
-# the JSON schema, and PEP 563 lazy evaluation breaks that introspection.
+# @tool() resolves parameter annotations when this module is imported.
+# Keep tool signature types importable and avoid unresolved forward refs.
 ```
 
 ---
@@ -148,7 +148,7 @@ docstring.  Always document every parameter.
 | Rule | Why |
 |------|-----|
 | **`run()` not `__call__()`** | `@tool()` looks for `run`; a `__call__` method is silently ignored |
-| **No `from __future__ import annotations`** | PEP 563 breaks `inspect.signature()` used by `@tool()` |
+| **Resolvable tool annotations** | Future annotations are supported, but `@tool()` still needs every referenced type to resolve when it builds the schema |
 | **Decorate with `@tool()` (parentheses required)** | Bare `@tool` raises `DecoratorUsageError` |
 | **Never use LLM-supplied identity** | Read from `ctx.execution_context.request.state` — see [security.md](../securing-agents/security.md) |
 | **Always return a `dict`** | LLM receives the JSON-serialised return value as the tool result |

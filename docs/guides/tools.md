@@ -5,13 +5,14 @@ during the agentic loop.  The `@tool()` decorator inspects the function
 signature at decoration time to generate the JSON schema that is sent to the
 LLM.
 
-> **Important:** Do not add `from __future__ import annotations` to any file
-> that defines `@tool()`-decorated functions.  PEP 563 lazy evaluation turns
-> all annotations into strings, which breaks schema generation silently.  Add
-> this comment to the top of tool files as a reminder:
+> **Important:** `from __future__ import annotations` is supported in tool
+> files, but every type used in the tool signature must resolve when
+> `@tool()` builds the schema. Avoid unresolved forward references and
+> circular imports in function-form tool files. A safe reminder is:
 >
 > ```python
->
+> # @tool() resolves parameter annotations when this module is imported.
+> # Keep tool signature types importable and avoid unresolved forward refs.
 > ```
 
 ---

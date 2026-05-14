@@ -90,7 +90,7 @@ from lauren_ai._config import LLMConfig
 
 def make_runner(mock: MockTransport) -> AgentRunner:
     cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-    return AgentRunner(transport=mock, tools={}, config=cfg)
+    return AgentRunner(transport=mock)
 ```
 
 The `FallbackChain` is provider-agnostic — it accepts any `async (str) -> str`

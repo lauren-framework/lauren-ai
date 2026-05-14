@@ -22,16 +22,18 @@ tool.
 
 ## Critical rule
 
-**Never add `from __future__ import annotations` to a file that defines `@tool()`.**
+**`from __future__ import annotations` is supported, but every type used by
+`@tool()` must resolve when schema generation runs.**
 
-The `@tool()` decorator calls `inspect.signature()` at class-decoration time.
-PEP 563 lazy evaluation converts all annotations to strings, breaking schema
-generation silently.  Add this comment at the top of every tool file:
+`@tool()` resolves annotations when it builds the JSON schema. Future
+annotations are supported, but unresolved forward references and circular
+imports in function-form tool files still break schema generation. A safe
+reminder comment is:
 
 ```python
 
-# The @tool() decorator uses inspect.signature() at decoration time to build
-# the JSON schema, and PEP 563 lazy evaluation breaks that introspection.
+# @tool() resolves parameter annotations when this module is imported.
+# Keep tool signature types importable and avoid unresolved forward refs.
 ```
 
 ---

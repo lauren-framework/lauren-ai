@@ -13,7 +13,7 @@ Lauren-AI ships `RateLimiter` in `lauren_ai._cost._rate`.  Attach it to
 `LLMConfig` and the transport automatically respects the limits:
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to tool files.
+# NOTE: future annotations are allowed, but tool signature types must resolve at import time.
 from lauren_ai import RateLimiter, LLMConfig
 
 config = LLMConfig(

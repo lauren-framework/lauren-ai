@@ -92,7 +92,7 @@ bus = SignalBus()
 telemetry = AgentTelemetry(bus)
 
 cfg = LLMConfig(provider="anthropic", model="claude-opus-4-6", api_key="...")
-runner = AgentRunner(transport=transport, tools={}, config=cfg, signals=bus)
+runner = AgentRunner(transport=transport, signals=bus)
 ```
 
 ---

@@ -13,7 +13,7 @@ Lauren-AI ships `FewShotPromptTemplate` and `FewShotExample` in `lauren_ai._prom
 Use them for static example sets baked into the prompt:
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to tool files.
+# NOTE: future annotations are allowed, but tool signature types must resolve at import time.
 from lauren_ai import FewShotPromptTemplate, FewShotExample
 
 tpl = FewShotPromptTemplate(

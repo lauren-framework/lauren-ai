@@ -8,9 +8,9 @@ description: Implements an agent tool for dispatching email notifications with a
 
 # Email / Notification Dispatch Tool
 
-## Critical rule — no PEP 563 in tool files
+## Critical rule — tool annotations must resolve
 
-**Never add `from __future__ import annotations` to any file that defines `@tool()`.**
+**`from __future__ import annotations` is supported, but every type used by `@tool()` must resolve when schema generation runs.**
 
 ---
 
@@ -25,7 +25,7 @@ an SMTP or transactional-email-API implementation.
 ## Implementation
 
 ```python
-# tools/email_tool.py — NO from __future__ import annotations
+# tools/email_tool.py — future annotations are allowed; keep tool types importable
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from lauren_ai import tool, ToolContext

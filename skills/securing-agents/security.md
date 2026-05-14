@@ -152,8 +152,8 @@ Extract a helper in the tool file so the pattern is written once:
 
 ```python
 
-# The @tool() decorator uses inspect.signature() at decoration time to build
-# the JSON schema, and PEP 563 lazy evaluation breaks that introspection.
+# @tool() resolves parameter annotations when this module is imported.
+# Keep tool signature types importable and avoid unresolved forward refs.
 from lauren_ai import ToolContext, tool
 
 def _auth_uid(ctx: ToolContext) -> str:

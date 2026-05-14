@@ -15,7 +15,7 @@ from lauren_ai._transport._mock import MockTransport
 @pytest.fixture
 def mock_setup():
     cfg, mock = LLMConfig.for_testing()
-    runner = AgentRunnerBase(transport=mock, tools={}, config=cfg)
+    runner = AgentRunnerBase(transport=mock)
     return runner, mock
 
 async def test_agent_basic(mock_setup):
@@ -132,7 +132,7 @@ async def test_full_agent_run():
         usage=TokenUsage(input_tokens=5, output_tokens=3),
     ))
 
-    client = AgentTestClient(agent=MyAgent, config=cfg, mock_transport=mock)
+    client = AgentTestClient(MyAgent(), mock)
     result = await client.run("Hello")
     assert result.content == "Hello!"
 ```
@@ -144,7 +144,7 @@ async def test_full_agent_run():
 ```python
 async def test_conversation_memory():
     cfg, mock = LLMConfig.for_testing()
-    runner = AgentRunnerBase(transport=mock, tools={}, config=cfg)
+    runner = AgentRunnerBase(transport=mock)
 
     # Turn 1
     mock.queue_response(Completion(

@@ -8,9 +8,9 @@ description: Implements an in-memory calendar management tool for agents using @
 
 # Calendar / Scheduling Tool
 
-## Critical rule — no PEP 563 in tool files
+## Critical rule — tool annotations must resolve
 
-**Never add `from __future__ import annotations` to any file that defines `@tool()`.**
+**`from __future__ import annotations` is supported, but every type used by `@tool()` must resolve when schema generation runs.**
 
 ---
 
@@ -28,7 +28,7 @@ for agent routing and documentation.
 ## Implementation
 
 ```python
-# tools/calendar_tool.py — NO from __future__ import annotations
+# tools/calendar_tool.py — future annotations are allowed; keep tool types importable
 from dataclasses import dataclass, field
 from uuid import uuid4
 from lauren_ai import tool, ToolContext

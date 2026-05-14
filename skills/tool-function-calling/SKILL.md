@@ -8,20 +8,20 @@ description: Defines and registers tools for lauren-ai agents using @tool() on a
 
 # Tool / Function Calling Definition & Registration
 
-## Critical rule — no PEP 563 in tool files
+## Critical rule — tool annotations must resolve
 
-**Never add `from __future__ import annotations` to any file that defines `@tool()`.**
+**`from __future__ import annotations` is supported, but every type used by `@tool()` must resolve when schema generation runs.**
 
-`@tool()` calls `inspect.signature()` at decoration time to build the JSON
-schema. PEP 563 lazy evaluation converts all annotations to strings, silently
-breaking schema generation.
+`@tool()` resolves annotations when it builds the JSON schema. Future
+annotations are supported, but unresolved forward references and circular
+imports in function-form tool files still break schema generation.
 
 ---
 
 ## Function-form tool (most common)
 
 ```python
-# tools.py — NO from __future__ import annotations
+# tools.py — future annotations are allowed; keep tool types importable
 
 from lauren_ai import tool
 
@@ -41,7 +41,7 @@ async def get_weather(city: str, units: str = "celsius") -> dict:
 ## Class-form tool (for DI injection)
 
 ```python
-# tools.py — NO from __future__ import annotations
+# tools.py — future annotations are allowed; keep tool types importable
 
 from lauren_ai import tool, ToolContext
 from lauren import injectable, Scope
@@ -106,7 +106,7 @@ mock.queue_response(Completion(
 tools = {}
 _add_to_tool_map(tools, get_weather)
 cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-runner = AgentRunner(transport=mock, tools=tools, config=cfg)
+runner = AgentRunner(transport=mock)
 
 resp = await runner.run(MyAgent(), "What's the weather in London?")
 assert "18°C" in resp.content

@@ -130,6 +130,10 @@ Raised when a decorator is used incorrectly, e.g. bare `@tool` without parenthes
 
 ### `OutputParserError`
 
+```python
+class OutputParserError(message: str, raw_output: str | None = None, cause: BaseException | None = None)
+```
+
 Raised when an output parser fails to parse LLM text.
 
 **Parameters:**

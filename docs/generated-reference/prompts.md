@@ -31,7 +31,8 @@ Defaults to `"user"`. |
 
 ### `ChatPromptTemplate`
 
-Multi-turn prompt template producing a list of `Message` objects.
+Multi-turn prompt template producing a list of
+`Message` objects.
 
 Supports `("role", "template {var}")` tuples and bare
 `Message` instances in the *messages* list.

@@ -13,7 +13,7 @@ Lauren-AI ships `PromptInjectionFilter` in `lauren_ai._guardrails._builtin`.
 It detects the most common injection patterns with compiled regexes:
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to tool files.
+# NOTE: future annotations are allowed, but tool signature types must resolve at import time.
 from lauren_ai import agent, use_guardrails, PromptInjectionFilter
 
 @agent(model="claude-opus-4-6", system="You are a helpful assistant.")

@@ -84,20 +84,19 @@ src/lauren_ai/
 
 ## Critical invariants
 
-### 1. No `from __future__ import annotations` in tool files
+### 1. Tool annotations must resolve at schema-build time
 
-The `@tool()` decorator calls `inspect.signature()` and reads `__annotations__`
-**at decoration time** to build the JSON schema.  PEP 563 lazy evaluation (enabled
-by `from __future__ import annotations`) causes all annotations to become strings
-instead of live types, which breaks schema generation silently.
+`@tool()` inspects the callable signature and resolves annotations with
+`typing.get_type_hints()` when it builds the JSON schema.
 
-**Rule:** Never add `from __future__ import annotations` to any file that defines
-`@tool()`-decorated functions.  Add the comment at the top of every such file:
+**Rule:** `from __future__ import annotations` is supported, but every type used
+in a tool signature must be importable when `@tool()` runs. Avoid unresolved
+forward references and circular imports in function-form tool files. A safe
+top-of-file reminder is:
 
 ```python
-
-# The @tool() decorator uses inspect.signature() at decoration time to build
-# the JSON schema, and PEP 563 lazy evaluation breaks that introspection.
+# @tool() resolves annotations when the module is imported.
+# Keep tool parameter types importable and avoid unresolved forward refs.
 ```
 
 ### 2. Decorator ordering
@@ -215,7 +214,10 @@ class BankingChatController:
         ...
 ```
 
-`AgentModule.for_root()` automatically registers `use_factory(provide=AgentRunner[agent_cls], ...)` for every agent in `agents=`.  Named `AgentRunnerBase` subclasses are no longer needed for cross-module DI.
+`AgentModule.for_root()` automatically registers `AgentRunner[agent_cls]` for
+every agent in `agents=`. Named `AgentRunnerBase` subclasses are now optional
+and only needed when you want a stable explicit token for a specific advanced
+wiring pattern.
 
 Single-module scope still works as before: `runner: AgentRunner` in a tool or service inside the same module resolves via the structural Protocol fallback.
 
@@ -358,7 +360,7 @@ Available signals:
 ## Testing patterns
 
 Use `LLMConfig.for_testing()` to get a `MockTransport` that makes zero network
-calls.  Queue responses before running code under test:
+calls. Queue responses before running code under test:
 
 ```python
 from lauren_ai import LLMConfig
@@ -367,7 +369,7 @@ from lauren_ai.testing import AgentTestClient
 cfg, mock = LLMConfig.for_testing()
 mock.queue_response(Completion(id="1", model="mock", content="42", ...))
 
-client = AgentTestClient(agent=MyAgent, config=cfg, mock_transport=mock)
+client = AgentTestClient(MyAgent(), mock)
 result = await client.run("What is 6 * 7?")
 assert result.content == "42"
 ```
@@ -420,6 +422,13 @@ codemap find "on_finish" --type method
 ```
 
 ## Production security invariants (from the banking chatbot)
+
+## Maintainer workflow
+
+- Prefer `uv run nox ...` over invoking `nox` directly in contributor docs and examples.
+- Treat `nox` defaults as `lint`, `tests`, `format`, `build`, `build_check`, and `prek`.
+- Point release/versioning guidance to `docs/development/`.
+- Do not document a repo-local `[tool.uv.sources]` override for `lauren`; `pyproject.toml` now uses the normal dependency declaration.
 
 The following invariants are derived from `lauren-examples/lauren-ai-chatbot/backend/`
 and must be preserved in any production agent that handles privileged operations.

@@ -12,7 +12,7 @@ description: Validates agent responses against rules or schemas and retries with
 Lauren-AI ships `RetryOutputParser` in `lauren_ai._output_parsers`:
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to tool files.
+# NOTE: future annotations are allowed, but tool signature types must resolve at import time.
 from lauren_ai import RetryOutputParser, JSONOutputParser, PydanticOutputParser
 ```
 
@@ -96,7 +96,7 @@ from lauren_ai._transport._mock import MockTransport
 class JSONAgent: ...
 
 cfg = LLMConfig(provider="anthropic", model="claude-haiku-4-5", api_key="...")
-runner = AgentRunnerBase(transport=transport, tools={}, config=cfg)
+runner = AgentRunnerBase(transport=transport)
 
 validator = ResponseValidator(
     validators=[is_non_empty, is_valid_json, contains_required_keys("result", "confidence")],

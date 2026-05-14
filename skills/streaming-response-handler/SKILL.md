@@ -19,7 +19,7 @@ from lauren_ai._config import LLMConfig
 from lauren_ai._transport._mock import MockTransport
 
 cfg = LLMConfig(provider="anthropic", model="claude-opus-4-6", api_key="sk-ant-...")
-runner = AgentRunner(transport=transport, tools={}, config=cfg)
+runner = AgentRunner(transport=transport)
 
 async for chunk in await runner.run_stream(my_agent_instance, "Tell me a joke"):
     if chunk.delta:

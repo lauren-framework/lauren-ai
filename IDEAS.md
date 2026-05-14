@@ -6,6 +6,14 @@ the existing `lauren-ai` architecture, and first-principles thinking about produ
 Each idea notes the Pydantic AI concept (if any) that inspired it and how it would
 fit the decorator-first, DI-driven, module-scoped model that `lauren-ai` already uses.
 
+Recent shipped maintenance work is now documented elsewhere:
+- `AgentRunnerBase` no longer takes `config=...`
+- `AgentModule.for_root()` now supplies the default model fallback from `LLMConfig`
+- contributor workflows live under `docs/development/`
+
+This file remains a forward-looking roadmap for ideas that are not already part of
+the current implementation.
+
 ---
 
 ## 1. Typed agent dependencies — `@agent(deps_type=T)`

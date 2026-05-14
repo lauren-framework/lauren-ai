@@ -75,18 +75,15 @@ In-process implementation of `ConversationStore`. Suitable for development and t
 
 #### Wiring to `AgentRunner`
 
-Pass the store to `AgentModule.for_root()` — it is captured and injected into
-`AgentRunner` automatically:
+Declare the store on the agent, or pass it per call as an override:
 
 ```python
-from lauren_ai import InMemoryConversationStore, AgentModule
+from lauren_ai import agent, InMemoryConversationStore
 
 store = InMemoryConversationStore()
-AIModule = AgentModule.for_root(
-    agents=[MyAgent],
-    conversation_store=store,
-    imports=LLMProvider,
-)
+
+@agent(model="claude-opus-4-6", conversation_store=store)
+class MyAgent: ...
 ```
 
 Then pass `conversation_id` to `runner.run()` to activate history persistence:
@@ -98,8 +95,9 @@ await runner.run(agent, "My name is Alice.", conversation_id="sess-1")
 resp = await runner.run(agent, "What is my name?", conversation_id="sess-1")
 ```
 
-Without `conversation_store` configured, `conversation_id` is accepted but has
-no effect — each run starts with an empty `ShortTermMemory`.
+Without `conversation_store` configured on the agent or passed to `runner.run()`,
+`conversation_id` is accepted but has no effect — each run starts with an empty
+`ShortTermMemory`.
 
 #### Additional methods
 

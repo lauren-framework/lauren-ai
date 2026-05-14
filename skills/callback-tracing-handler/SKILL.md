@@ -67,7 +67,7 @@ tracer = SimpleTracer(bus)
 
 mock = MockTransport()
 cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
-runner = AgentRunner(transport=mock, tools={}, config=cfg, signals=bus)
+runner = AgentRunner(transport=mock, signals=bus)
 ```
 
 ## Tool tracing

@@ -272,11 +272,7 @@ mock.queue_response(
     )
 )
 
-client = AgentTestClient(
-    agent=ThinkingAgent,
-    config=cfg,
-    mock_transport=mock,
-)
+client = AgentTestClient(ThinkingAgent(), mock)
 
 response = await client.run("What is the meaning of life?")
 assert response.content == "The answer is 42."

@@ -8,13 +8,13 @@ description: Implements a sandboxed file system tool for agents using @tool() cl
 
 # File System Operation Tool with Path Restrictions
 
-## Critical rule — no PEP 563 in tool files
+## Critical rule — tool annotations must resolve
 
-**Never add `from __future__ import annotations` to any file that defines `@tool()`.**
+**`from __future__ import annotations` is supported, but every type used by `@tool()` must resolve when schema generation runs.**
 
-`@tool()` calls `inspect.signature()` at decoration time to build the JSON
-schema. PEP 563 lazy evaluation converts all annotations to strings, silently
-breaking schema generation.
+`@tool()` resolves annotations when it builds the JSON schema. Future
+annotations are supported, but unresolved forward references and circular
+imports in function-form tool files still break schema generation.
 
 ---
 
@@ -30,7 +30,7 @@ files within a configurable base directory. It resolves all paths via
 ## Implementation
 
 ```python
-# tools/filesystem_tool.py — NO from __future__ import annotations
+# tools/filesystem_tool.py — future annotations are allowed; keep tool types importable
 from pathlib import Path
 from lauren_ai import tool, ToolContext
 

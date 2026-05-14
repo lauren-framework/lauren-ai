@@ -12,7 +12,7 @@ description: Elicits step-by-step reasoning from models to improve accuracy on c
 Append a simple instruction to trigger step-by-step reasoning:
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to tool files.
+# NOTE: future annotations are allowed, but tool signature types must resolve at import time.
 
 COT_SUFFIX = "\n\nThink through this step by step before answering."
 
@@ -113,7 +113,7 @@ from lauren_ai import AgentRunnerBase, LLMConfig
 from lauren_ai._transport._mock import MockTransport  # replace with real transport
 
 async def run_with_cot(problem: str) -> tuple[str, str]:
-    runner = AgentRunnerBase(transport=transport, tools={}, config=cfg)
+    runner = AgentRunnerBase(transport=transport)
     response = await runner.run(ReasoningAgent(), problem)
     reasoning, answer = extract_cot_answer(response.content)
     return reasoning, answer

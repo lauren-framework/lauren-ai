@@ -63,7 +63,7 @@ class LimitedAgent: ...
 
 cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
 mock = MockTransport()
-runner = AgentRunner(transport=mock, tools={}, config=cfg)
+runner = AgentRunner(transport=mock)
 
 # Queue 5 tool-use completions — runner stops at max_turns
 # AgentMaxTurnsError is raised once the cap is hit

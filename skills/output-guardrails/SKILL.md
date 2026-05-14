@@ -10,7 +10,7 @@ description: Attaches post-generation content filters to agents to redact PII, e
 ## Quick start
 
 ```python
-# NOTE: Do NOT add `from __future__ import annotations` to tool files.
+# NOTE: future annotations are allowed, but tool signature types must resolve at import time.
 from lauren_ai import agent, use_guardrails
 from lauren_ai import PIIRedactor, LengthFilter, PromptInjectionFilter
 

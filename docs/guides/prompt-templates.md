@@ -2,9 +2,8 @@
 
 Prompt templates give you a structured, reusable way to build LLM messages.
 Instead of assembling strings by hand in every handler, you define a template
-once and call `.render(**kwargs)` to get a typed
-[`Message`][lauren_ai._transport.Message] (or a list of messages) ready to
-send to [`LLMService`][lauren_ai._module.LLMService].
+once and call `.render(**kwargs)` to get a typed `Message` (or a list of
+messages) ready to send to `LLMService`.
 
 Three template types are available:
 
@@ -43,8 +42,7 @@ tpl = PromptTemplate(template="Hello {name}, you are {age} years old.")
 msg = tpl.render(name="Alice", age=30)
 ```
 
-Missing variables raise [`PromptRenderError`][lauren_ai._prompts.PromptRenderError]
-at render time, not at request time.
+Missing variables raise `PromptRenderError` at render time, not at request time.
 
 ### Role
 
@@ -178,7 +176,7 @@ tpl = FewShotPromptTemplate(
 ## Chain composition with the `|` operator
 
 All three template classes implement `__or__` so they can be composed into a
-[`Chain`][lauren_ai._chains.Chain] pipeline using the `|` operator:
+`Chain` pipeline using the `|` operator:
 
 ```python
 from lauren_ai._prompts import PromptTemplate
@@ -238,9 +236,9 @@ The same technique works with `FewShotPromptTemplate` by including
 
 ## Error handling
 
-All templates raise [`PromptRenderError`][lauren_ai._prompts.PromptRenderError]
-when required variables are missing.  The error message lists both the missing
-and the provided variable names to make debugging straightforward:
+All templates raise `PromptRenderError` when required variables are missing.
+The error message lists both the missing and the provided variable names to
+make debugging straightforward:
 
 ```python
 from lauren_ai._prompts import PromptTemplate, PromptRenderError

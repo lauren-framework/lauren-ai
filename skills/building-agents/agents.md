@@ -36,7 +36,7 @@ Run it with `AgentRunnerBase` (for scripting/testing) or via `AgentModule.for_ro
 from lauren_ai import AgentRunnerBase, LLMConfig
 
 cfg = LLMConfig(provider="anthropic", model="claude-opus-4-6")
-runner = AgentRunnerBase(transport=transport, tools={}, config=cfg)
+runner = AgentRunnerBase(transport=transport)
 result = await runner.run(MyAgent(), "What can you help me with?")
 print(result.content)
 print(f"turns={result.turns}, cost=${result.total_usage.total_tokens}")
