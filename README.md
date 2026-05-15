@@ -51,7 +51,7 @@
 
 ---
 
-**Documentation**: <a href="https://ai.lauren-py.dev" target="_blank">https://github.com/lauren-framework/lauren-ai/tree/main/docs</a>
+**Documentation**: <a href="https://ai.lauren-py.dev" target="_blank">https://ai.lauren-py.dev</a>
 
 **Source Code**: <a href="https://github.com/lauren-framework/lauren-ai" target="_blank">https://github.com/lauren-framework/lauren-ai</a>
 
