@@ -76,8 +76,8 @@ nox.options.sessions = [
     "build",
     "build_check",
     "typecheck",
-    "prek",
     "docs",
+    "prek",
 ]
 nox.options.reuse_existing_virtualenvs = True
 # ``error_on_missing_interpreters = False`` lets contributors run only the
