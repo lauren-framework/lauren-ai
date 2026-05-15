@@ -39,7 +39,7 @@ __all__ = [
 
 import logging
 from collections.abc import AsyncIterator
-from typing import Any, TypeVar
+from typing import Any, ClassVar, TypeVar
 
 from lauren import Scope, injectable
 from lauren.extractors import ExtractionMarker
@@ -76,7 +76,7 @@ class Agent(ExtractionMarker):
     :type container: Any
     """
 
-    source: str = "lauren_ai.agent"
+    source: ClassVar[str] = "lauren_ai.agent"  # type: ignore[misc]
 
     def __init__(self, runner: Any, container: Any) -> None:
         self._runner = runner
@@ -149,7 +149,7 @@ class Completion(ExtractionMarker):
     :type config: LLMConfig
     """
 
-    source: str = "lauren_ai.completion"
+    source: ClassVar[str] = "lauren_ai.completion"  # type: ignore[misc]
 
     def __init__(self, transport: Any, config: Any) -> None:
         self._transport = transport
@@ -312,7 +312,7 @@ class Embed(ExtractionMarker):
     :type config: LLMConfig
     """
 
-    source: str = "lauren_ai.embed"
+    source: ClassVar[str] = "lauren_ai.embed"  # type: ignore[misc]
 
     def __init__(self, transport: Any, config: Any) -> None:
         self._transport = transport
@@ -415,7 +415,7 @@ class StreamCompletion(ExtractionMarker):
     :type config: LLMConfig
     """
 
-    source: str = "lauren_ai.stream_completion"
+    source: ClassVar[str] = "lauren_ai.stream_completion"  # type: ignore[misc]
 
     def __init__(self, transport: Any, config: Any) -> None:
         self._transport = transport

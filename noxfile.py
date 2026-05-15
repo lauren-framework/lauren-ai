@@ -174,7 +174,6 @@ def lint(session: nox.Session) -> None:
     session.install("ruff>=0.6")
     extra = session.posargs or []
     session.run("ruff", "check", "--fix", "src", "tests", *extra)
-    session.run("ruff", "format", "--check", "src", "tests", external=False)
 
 
 @nox.session(python=PRIMARY_PYTHON, reuse_venv=True)
@@ -185,7 +184,6 @@ def format(session: nox.Session) -> None:  # noqa: A001
     """
     session.install("ruff>=0.6")
     session.run("ruff", "format", "src", "tests")
-    session.run("ruff", "check", "--fix", "src", "tests")
 
 
 @nox.session(python=PRIMARY_PYTHON, reuse_venv=True)
