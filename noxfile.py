@@ -76,7 +76,6 @@ nox.options.sessions = [
     "build",
     "build_check",
     "typecheck",
-    "docs",
     "prek",
 ]
 nox.options.reuse_existing_virtualenvs = True
