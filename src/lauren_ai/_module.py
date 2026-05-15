@@ -46,7 +46,7 @@ __all__ = [
 
 import logging
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any, TypeVar, get_origin
+from typing import TYPE_CHECKING, Any, TypeVar, cast, get_origin
 
 if TYPE_CHECKING:
     from lauren_ai._transport._structured import StructuredLLM
@@ -409,7 +409,7 @@ class LLMModule:
         except ImportError:
             pass
 
-        @module(providers=providers, exports=exports)
+        @module(providers=providers, exports=exports)  # type: ignore[arg-type]
         class _LLMModule:
             """Auto-generated LLM provider module."""
 
@@ -485,7 +485,7 @@ def _attach_agent_tools(
         meta = getattr(agent_cls, AGENT_META)
         allowed_kb: set[str] = set()
         if meta.knowledge_source_filter is not None:
-            allowed_kb = kb_names & set(meta.knowledge_source_filter)
+            allowed_kb = set(kb_names & set(meta.knowledge_source_filter))
         import inspect as _std_inspect  # noqa: PLC0415
 
         agent_tools: dict[str, type] = {}
@@ -978,7 +978,7 @@ class AgentModule:
             # rows up alongside the real runner — that would raise
             # ``ProtocolAmbiguityError`` for ``runner: AgentRunner``.
             for _agent_cls in agents:
-                _parameterized = AgentRunner[_agent_cls]
+                _parameterized = cast(Any, AgentRunner)[_agent_cls]
                 providers.append(
                     use_factory(
                         provide=_parameterized,

@@ -118,6 +118,8 @@ class ModelCallComplete(LifecycleEvent):  # type: ignore[misc]
     duration_ms: float = 0.0
     stop_reason: str = "unknown"
     cost_usd: float = 0.0
+    total_tokens: int = 0
+    turns: int = 1
 
 
 # ---------------------------------------------------------------------------

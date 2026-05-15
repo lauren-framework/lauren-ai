@@ -222,7 +222,8 @@ def token_budget_guard(
         try:
             from lauren import Scope, injectable
 
-            _TokenBudgetGuard = injectable(scope=Scope.SINGLETON)(_TokenBudgetGuard)
+            decorated_guard = injectable(scope=Scope.SINGLETON)(_TokenBudgetGuard)
+            return decorated_guard
         except Exception:
             pass
 

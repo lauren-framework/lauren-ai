@@ -9,6 +9,8 @@ from dataclasses import dataclass
 class TeamEvent:
     """Base class for team stream events."""
 
+    ...
+
 
 @dataclass
 class TeamWorkerStarted(TeamEvent):
@@ -43,3 +45,12 @@ class TeamFinalAnswer(TeamEvent):
 
     content: str = ""
     rounds: int = 0
+
+
+__all__ = [
+    "TeamEvent",
+    "TeamWorkerStarted",
+    "TeamWorkerFinished",
+    "TeamCoordinatorDecision",
+    "TeamFinalAnswer",
+]

@@ -169,7 +169,7 @@ class TraceStore:
         """
         return [t for t in self._traces if t.run_id == run_id]
 
-    async def last(self, n: int = 10) -> list[Trace]:
+    async def last(self, n: int = 10) -> list[Trace]:  # type:ignore[valid-type]
         """Return the *n* most recently added traces.
 
         :param n: Number of traces to return.

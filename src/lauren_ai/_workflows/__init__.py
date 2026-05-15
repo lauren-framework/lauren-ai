@@ -30,7 +30,7 @@ import asyncio
 import inspect
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 __all__ = [
     "Workflow",
@@ -193,9 +193,12 @@ class Parallel:
         step_results: list[StepResult] = []
         for s, r in zip(self._steps, results, strict=False):
             if isinstance(r, BaseException):
-                step_results.append(StepResult(name=getattr(s, "name", "?"), output=None, error=r))
+                error = r if isinstance(r, Exception) else RuntimeError(str(r))
+                step_results.append(
+                    StepResult(name=getattr(s, "name", "?"), output=None, error=error)
+                )
             else:
-                step_results.append(r)
+                step_results.append(cast(StepResult, r))
         return StepResult(
             name=self.name,
             output=step_results,

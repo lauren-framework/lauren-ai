@@ -689,13 +689,13 @@ class OpenAITransport:
                     if finish_reason is not None:
                         stop_reason = _parse_stop_reason(finish_reason)
                         # Include usage if present in the same chunk.
-                        usage = None
+                        chunk_usage: TokenUsage | None = None
                         if usage_obj is not None:
-                            usage = TokenUsage(
+                            chunk_usage = TokenUsage(
                                 input_tokens=getattr(usage_obj, "prompt_tokens", 0),
                                 output_tokens=getattr(usage_obj, "completion_tokens", 0),
                             )
-                        yield CompletionChunk(stop_reason=stop_reason, usage=usage)
+                        yield CompletionChunk(stop_reason=stop_reason, usage=chunk_usage)
 
         except Exception as exc:  # noqa: BLE001
             classified = self._classify_exception(exc)

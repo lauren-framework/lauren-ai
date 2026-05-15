@@ -210,7 +210,7 @@ class SemanticRouter:
         )
         from lauren_ai._transport import Completion
 
-        result = await self._llm.complete([Message(role="user", content=prompt)])  # type: ignore[arg-type]
+        result = await self._llm.complete([Message(role="user", content=prompt)])  # type: ignore[arg-type,union-attr]
         if isinstance(result, Completion):
             name = result.content.strip().lower()
         else:

@@ -77,11 +77,11 @@ class TeamRunner:
 
         :return: List of worker parameter names (excludes 'return').
         """
-        try:
-            hints = self._team_cls.__init__.__annotations__
-            return [k for k in hints if k != "return"]
-        except AttributeError:
+        init_method = getattr(self._team_cls, "__init__", None)
+        hints = getattr(init_method, "__annotations__", None)
+        if hints is None:
             return []
+        return [k for k in hints if k != "return"]
 
     async def run(
         self,

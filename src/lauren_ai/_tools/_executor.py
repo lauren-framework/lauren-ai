@@ -400,13 +400,13 @@ class ToolExecutor:
         elif hasattr(callable_or_instance, "run") and not callable(callable_or_instance):
             # Shouldn't happen but guard against it
             fn = callable_or_instance.run
-        elif inspect.ismethod(callable_or_instance) or (
-            hasattr(callable_or_instance, "run") and not inspect.isfunction(callable_or_instance)
-        ):
-            # Instance from DI — use its run() method
-            fn = callable_or_instance.run
         else:
-            fn = callable_or_instance
+            run_method = getattr(callable_or_instance, "run", None)
+            if callable(run_method) and not inspect.isfunction(callable_or_instance):
+                # Instance from DI — use its run() method
+                fn = run_method
+            else:
+                fn = callable_or_instance
 
         # Build kwargs from tool_input
         kwargs = dict(tool_input)

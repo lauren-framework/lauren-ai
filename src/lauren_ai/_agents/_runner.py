@@ -37,6 +37,7 @@ from lauren_ai._exceptions import (
 from lauren_ai._memory import ShortTermMemory
 from lauren_ai._tools import TOOL_METADATA, ToolContext, ToolResult
 from lauren_ai._tools._executor import CacheBackend, ToolExecutor
+from lauren_ai._tools._executor import ToolCall as ExecutorToolCall
 from lauren_ai._transport import Completion, CompletionChunk, Message, TokenUsage, ToolCall
 
 logger = logging.getLogger(__name__)
@@ -501,6 +502,10 @@ class AgentRunnerBase(AgentRunner):
 
         # Determine model to use
         model = meta.model
+        if model is None:
+            raise AgentConfigError(
+                f"Agent '{ctx.agent_name}' has no configured model. Set one via @agent(...)."
+            )
         system_prompt = _build_system_prompt(meta.system or effective_config.system_prompt, memory)
 
         # Gather tool schemas for attached tools
@@ -836,6 +841,10 @@ class AgentRunnerBase(AgentRunner):
         )
 
         model = meta.model
+        if model is None:
+            raise AgentConfigError(
+                f"Agent '{ctx.agent_name}' has no configured model. Set one via @agent(...)."
+            )
         system_prompt = meta.system or effective_config.system_prompt
         tool_schemas = self._get_tool_schemas(meta)
 
@@ -1312,7 +1321,15 @@ class AgentRunnerBase(AgentRunner):
 
         t0 = time.monotonic()
         try:
-            result = await self._executor.execute(tool_call, tool_context, tool_map=_tool_map)
+            result = await self._executor.execute(
+                ExecutorToolCall(
+                    tool_use_id=tool_call.tool_use_id,
+                    name=tool_call.name,
+                    input=tool_call.input,
+                ),
+                tool_context,
+                tool_map=_tool_map,
+            )
             duration_ms = (time.monotonic() - t0) * 1000
             await self._emit(
                 "ToolCallComplete",
