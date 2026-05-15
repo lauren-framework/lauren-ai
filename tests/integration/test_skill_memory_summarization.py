@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from lauren_ai import AgentConfig, LLMConfig, agent
+from lauren_ai import AgentConfig, agent
 from lauren_ai._agents._runner import AgentRunnerBase, _should_summarize, _summarize_memory
 from lauren_ai._memory import ShortTermMemory
 from lauren_ai._memory._stores import InMemoryConversationStore
@@ -45,7 +45,6 @@ class SimpleAgent:
 
 
 def _make_runner(mock: MockTransport) -> AgentRunnerBase:
-    cfg = LLMConfig(provider="anthropic", model="mock-model", api_key="mock")
     return AgentRunnerBase(transport=mock)
 
 
@@ -192,7 +191,7 @@ class TestSummarizationInRunLoop:
 
         # Pre-fill memory past the threshold (50% of 50 = 25 tokens = 100 chars)
         mem = ShortTermMemory(max_tokens=50)
-        for i in range(4):
+        for _ in range(4):
             mem.add_user("x" * 30)  # ~7 tokens each
             mem.add_assistant(_compl("ok"))
         TinyAgent.__lauren_ai_agent__.model = "mock-model"
@@ -204,7 +203,7 @@ class TestSummarizationInRunLoop:
         )
 
         assert response.content == "I remember everything!"
-        # The summarisation call was made (first call with system="You are a conversation summariser.")
+        # Summarisation call was made first (system="You are a conversation summariser.")
         assert len(mock._calls) >= 2
         summary_call = mock._calls[0]
         assert "summariser" in (summary_call.system or "")
@@ -230,7 +229,7 @@ class TestSummarizationInRunLoop:
         runner = AgentRunnerBase(transport=mock)
 
         mem = ShortTermMemory(max_tokens=50)
-        for i in range(4):
+        for _ in range(4):
             mem.add_user("word " * 20)  # forces threshold
             mem.add_assistant(_compl("ok"))
 
@@ -258,7 +257,7 @@ class TestSummarizationInRunLoop:
 
         # Overfill memory way past the window
         mem = ShortTermMemory(max_tokens=20)
-        for i in range(10):
+        for _ in range(10):
             mem.add_user("x" * 100)
             mem.add_assistant(_compl("ok"))
 
@@ -289,7 +288,7 @@ class TestSummarizationInRunLoop:
         runner = AgentRunnerBase(transport=mock)
 
         mem = ShortTermMemory(max_tokens=50)
-        for i in range(4):
+        for _ in range(4):
             mem.add_user("x" * 30)
             mem.add_assistant(_compl("ok"))
 
@@ -387,7 +386,7 @@ class TestSummarizationPersistence:
         ResumingAgent.__lauren_ai_agent__.model = "mock-model"
         runner = AgentRunnerBase(transport=mock)
 
-        response = await runner.run(
+        await runner.run(
             ResumingAgent(),
             "New question",
             conversation_id="sess1",
