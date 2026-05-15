@@ -192,7 +192,7 @@ def format(session: nox.Session) -> None:  # noqa: A001
 def typecheck(session: nox.Session) -> None:
     """Run mypy over the lauren_ai package."""
     _install_dev(session)
-    session.run("uv", "pip", "install", "mypy>=1.10", external=True)
+    session.run("uv", "pip", "install", "mypy==2.1.0", external=True)
     args = session.posargs or ["src"]
     session.run("mypy", *args)
 
