@@ -458,7 +458,7 @@ class TestRunInputGuardrails:
         mock.queue_response(_completion("OK"))
         await runner.run(StoreAgent(), "original", conversation_id="s1")
         history = await store.load("s1")
-        user_msgs = [m for m in history if m.get("role") == "user"]
+        user_msgs = [m for m in history["messages"] if m.get("role") == "user"]
         assert user_msgs[0]["content"] == "[MOD]"
 
     @pytest.mark.asyncio
@@ -697,7 +697,7 @@ class TestRunOutputGuardrails:
         mock.queue_response(_completion("bad content"))
         await runner.run(StoreAgent(), "hi", conversation_id="c1")
         history = await store.load("c1")
-        assistant_msgs = [m for m in history if m.get("role") == "assistant"]
+        assistant_msgs = [m for m in history["messages"] if m.get("role") == "assistant"]
         assert assistant_msgs[0]["content"] == "[SAFE]"
 
     @pytest.mark.asyncio
@@ -713,7 +713,7 @@ class TestRunOutputGuardrails:
         mock.queue_response(_completion("oops"))
         await runner.run(ConvAgent(), "question", conversation_id="s1")
         history = await store.load("s1")
-        assert any(m.get("content") == "[REDIRECT]" for m in history)
+        assert any(m.get("content") == "[REDIRECT]" for m in history["messages"])
 
     @pytest.mark.asyncio
     async def test_output_guard_empty_content_not_checked(self):
@@ -1371,7 +1371,7 @@ class TestRunStreamOutputGuardrails:
             pass
 
         history = await store.load("s1")
-        contents = [m.get("content", "") for m in history]
+        contents = [m.get("content", "") for m in history["messages"]]
         assert "[SAFE]" in contents
         assert "hallucination" not in contents
 
@@ -1533,7 +1533,7 @@ class TestRunStreamOutputGuardrails:
             pass
 
         history = await store.load("s")
-        texts = [m.get("content", "") for m in history]
+        texts = [m.get("content", "") for m in history["messages"]]
         assert "[REDIRECT]" in texts
 
     @pytest.mark.asyncio
@@ -1666,8 +1666,8 @@ class TestRunMemoryAndStore:
 
         history = await store.load("sess1")
         assert len(history) == 2
-        assert history[0]["role"] == "user"
-        assert history[1]["role"] == "assistant"
+        assert history["messages"][0]["role"] == "user"
+        assert history["messages"][1]["role"] == "assistant"
 
     @pytest.mark.asyncio
     async def test_conversation_store_loads_prior_history(self):
@@ -1706,8 +1706,8 @@ class TestRunMemoryAndStore:
             conversation_store=override_store,
         )
 
-        assert len(await override_store.load("s")) == 2
-        assert len(await meta_store.load("s")) == 0
+        assert len((await override_store.load("s"))["messages"]) == 2
+        assert (await meta_store.load("s")) == []
 
     @pytest.mark.asyncio
     async def test_no_conversation_id_store_not_touched(self):

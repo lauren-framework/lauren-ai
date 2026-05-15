@@ -277,6 +277,20 @@ class AgentConfig:
     :param include_reasoning_in_response: When ``True`` thinking blocks are
         included in the :class:`~lauren_ai._transport.Completion` response.
     :type include_reasoning_in_response: bool
+    :param summarize_at: Fraction of ``memory_window_tokens`` at which the
+        runner triggers an automatic context-window summarisation.  For
+        example, ``0.8`` means "summarise when 80 % of the token budget is
+        consumed".  Older turns are compressed into a single block that is
+        prepended to the system prompt so it is always preserved.  ``None``
+        (the default) disables summarisation — older messages are silently
+        dropped as before.
+    :type summarize_at: float | None
+    :param summary_model: Model identifier to use for the summarisation LLM
+        call.  Set this to a cheaper / faster model (e.g.
+        ``"claude-haiku-4-5"``) to reduce cost while keeping the agent's
+        main model for reasoning.  ``None`` (the default) reuses the same
+        model as the agent.
+    :type summary_model: str | None
     """
 
     system_prompt: str = field(default="You are a helpful assistant.")
@@ -293,3 +307,6 @@ class AgentConfig:
     # OpenAI reasoning models
     reasoning_effort: Literal["low", "medium", "high"] | None = field(default=None)
     include_reasoning_in_response: bool = field(default=False)
+    # Context-window summarisation (opt-in)
+    summarize_at: float | None = field(default=None)
+    summary_model: str | None = field(default=None)

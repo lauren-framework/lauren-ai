@@ -64,8 +64,8 @@ class TestInMemoryConversationStore:
         messages = [{"role": "user", "content": "Hi"}]
         await store.save("conv-1", messages)
         loaded = await store.load("conv-1")
-        assert len(loaded) == 1
-        assert loaded[0]["content"] == "Hi"
+        assert len(loaded["messages"]) == 1
+        assert loaded["messages"][0]["content"] == "Hi"
 
     @pytest.mark.asyncio
     async def test_load_missing_returns_empty(self):
@@ -80,7 +80,7 @@ class TestInMemoryConversationStore:
         await store.save("conv-1", messages)
         messages.append({"role": "assistant", "content": "Extra"})
         loaded = await store.load("conv-1")
-        assert len(loaded) == 1  # Copy was made, mutation didn't affect store
+        assert len(loaded["messages"]) == 1  # Copy was made, mutation didn't affect store
 
     @pytest.mark.asyncio
     async def test_delete(self):

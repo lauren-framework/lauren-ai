@@ -191,7 +191,7 @@ class TestInMemoryConversationStore:
         messages = [{"role": "user", "content": "Hello"}]
         await store.save("conv1", messages)
         loaded = await store.load("conv1")
-        assert loaded[0]["content"] == "Hello"
+        assert loaded["messages"][0]["content"] == "Hello"
 
     async def test_different_conversation_ids_are_isolated(self):
         store = InMemoryConversationStore()
@@ -199,8 +199,8 @@ class TestInMemoryConversationStore:
         await store.save("conv2", [{"role": "user", "content": "Msg2"}])
         loaded1 = await store.load("conv1")
         loaded2 = await store.load("conv2")
-        assert loaded1[0]["content"] == "Msg1"
-        assert loaded2[0]["content"] == "Msg2"
+        assert loaded1["messages"][0]["content"] == "Msg1"
+        assert loaded2["messages"][0]["content"] == "Msg2"
 
 
 class TestTenantIsolatedRunnerDirect:

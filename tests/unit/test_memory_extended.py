@@ -275,7 +275,7 @@ class TestShortTermMemoryExtended:
         mem.add_user({"nested": "object"})
         snap = mem.snapshot()
         # Modifying snapshot shouldn't affect internal buffer
-        snap[0]["content"]["extra"] = "added"
+        snap["messages"][0]["content"]["extra"] = "added"
         msgs = mem.messages()
         assert "extra" not in msgs[0]["content"]
 

@@ -127,14 +127,14 @@ class TestInMemoryConversationStore:
         messages = [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}]
         asyncio.run(store.save("sess-1", messages))
         loaded = asyncio.run(store.load("sess-1"))
-        assert loaded == messages
+        assert loaded["messages"] == messages
 
     def test_save_overwrites_existing(self):
         store = InMemoryConversationStore()
         asyncio.run(store.save("s", [{"role": "user", "content": "old"}]))
         asyncio.run(store.save("s", [{"role": "user", "content": "new"}]))
         loaded = asyncio.run(store.load("s"))
-        assert loaded[0]["content"] == "new"
+        assert loaded["messages"][0]["content"] == "new"
 
     def test_delete_removes_history(self):
         store = InMemoryConversationStore()
@@ -186,8 +186,8 @@ class TestAgentConversationMemory:
         asyncio.run(runner.run(StoreAgent(), "question", conversation_id="sess1"))
         history = asyncio.run(store.load("sess1"))
         assert len(history) == 2
-        assert history[0]["role"] == "user"
-        assert history[1]["role"] == "assistant"
+        assert history["messages"][0]["role"] == "user"
+        assert history["messages"][1]["role"] == "assistant"
 
     def test_second_run_with_same_id_sees_prior_history(self):
         store = InMemoryConversationStore()
@@ -236,7 +236,11 @@ class TestAgentConversationMemory:
                 conversation_store=override_store,
             )
         )
-        override_length = len(asyncio.run(override_store.load("s")))
-        meta_length = len(asyncio.run(meta_store.load("s")))
+        override_length = len(
+            (asyncio.run(override_store.load("s")) or {"messages": []}).get("messages", [])
+        )
+        meta_length = len(
+            (asyncio.run(meta_store.load("s")) or {"messages": []}).get("messages", [])
+        )
         assert override_length == 2
         assert meta_length == 0

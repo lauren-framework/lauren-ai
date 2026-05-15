@@ -288,6 +288,7 @@ class ShortTermMemory:
     def __init__(self, max_tokens: int = 40_000) -> None:
         self._max_tokens = max_tokens
         self._messages: list[Any] = []
+        self._summary: str | None = None
 
     # ------------------------------------------------------------------
     # Mutation helpers
@@ -372,6 +373,65 @@ class ShortTermMemory:
         )
 
     # ------------------------------------------------------------------
+    # Summary / compression helpers
+    # ------------------------------------------------------------------
+
+    @property
+    def summary(self) -> str | None:
+        """The compressed summary of older conversation turns, or ``None``
+        when no summarisation has been performed yet.
+
+        :return: Summary text, or ``None``.
+        :rtype: str | None
+        """
+        return self._summary
+
+    def set_summary(self, text: str) -> None:
+        """Store *text* as the conversation summary.
+
+        Called by the runner after a summarisation LLM call completes.
+        The summary is persisted via ``snapshot()`` / ``restore()`` so
+        resumed sessions carry it forward.
+
+        :param text: Compressed summary of older conversation turns.
+        :type text: str
+        """
+        self._summary = text
+
+    def messages_to_summarize(self, keep_recent: int = 6) -> list[Any]:
+        """Return the slice of messages that should be compressed.
+
+        Returns the oldest ``(total - keep_recent)`` non-system messages.
+        System messages are excluded because they are already managed
+        separately (they are never dropped by ``messages()`` either).
+
+        :param keep_recent: Number of most-recent non-system messages to
+            preserve verbatim.  Defaults to 6 (≈ 3 user/assistant pairs).
+        :type keep_recent: int
+        :return: List of messages to feed to the summarisation LLM call.
+        :rtype: list[Any]
+        """
+        non_system = [m for m in self._messages if _get_role(m) != "system"]
+        to_compress = non_system[:-keep_recent] if len(non_system) > keep_recent else []
+        return list(to_compress)
+
+    def trim_to_recent(self, keep_recent: int = 6) -> None:
+        """Drop all but the most-recent *keep_recent* non-system messages.
+
+        Called by the runner after the summarisation call so the buffer
+        only holds recent turns while the older context lives in
+        ``self._summary``.
+
+        :param keep_recent: Number of most-recent non-system messages to
+            keep.  Defaults to 6.
+        :type keep_recent: int
+        """
+        system_msgs = [m for m in self._messages if _get_role(m) == "system"]
+        non_system = [m for m in self._messages if _get_role(m) != "system"]
+        kept = non_system[-keep_recent:] if non_system else []
+        self._messages = system_msgs + kept
+
+    # ------------------------------------------------------------------
     # Retrieval
     # ------------------------------------------------------------------
 
@@ -441,25 +501,44 @@ class ShortTermMemory:
         """
         self._messages.clear()
 
-    def snapshot(self) -> list[Any]:
-        """Return a deep copy of the current message list.
+    def snapshot(self) -> Any:
+        """Return a deep copy of the current memory state.
 
-        The returned list is independent of the internal buffer; mutations to
-        it do not affect the memory.
+        The returned object includes both the message list and the
+        conversation summary (if any).  It is independent of the internal
+        buffer — mutations do not affect the memory.
 
-        :return: Immutable snapshot of the conversation history.
-        :rtype: list[Message]
+        The format is a ``dict`` with ``"messages"`` and ``"summary"`` keys
+        so that resumed sessions carry the summary forward.  Old snapshots
+        that are plain ``list`` objects are still accepted by ``restore()``
+        for backward compatibility.
+
+        :return: Snapshot dict ``{"messages": [...], "summary": str | None}``.
+        :rtype: dict[str, Any]
         """
-        return copy.deepcopy(self._messages)
+        return {
+            "messages": copy.deepcopy(self._messages),
+            "summary": self._summary,
+        }
 
-    def restore(self, messages: list[Any]) -> None:
-        """Restore the message buffer from a snapshot.
+    def restore(self, data: Any) -> None:
+        """Restore the memory buffer from a snapshot.
 
-        :param messages: Ordered list of ``Message`` objects (typically
-            produced by ``snapshot()``).
-        :type messages: list[Message]
+        Accepts both the new ``dict`` snapshot format (``{"messages": [...],
+        "summary": ...}``) and the legacy plain ``list`` format produced by
+        older versions of ``snapshot()``.
+
+        :param data: Snapshot produced by ``snapshot()``, or a plain list of
+            message objects for backward compatibility.
+        :type data: dict[str, Any] | list[Any]
         """
-        self._messages = list(messages)
+        if isinstance(data, list):
+            # Legacy format — plain list with no summary
+            self._messages = list(data)
+            self._summary = None
+        else:
+            self._messages = list(data.get("messages", []))
+            self._summary = data.get("summary")
 
     # ------------------------------------------------------------------
     # Dunder helpers
@@ -474,10 +553,11 @@ class ShortTermMemory:
         return len(self._messages)
 
     def __repr__(self) -> str:  # pragma: no cover
+        summary_tag = f", summary={len(self._summary)}ch" if self._summary else ""
         return (
             f"ShortTermMemory(messages={len(self._messages)}, "
             f"token_estimate={self.token_estimate}, "
-            f"max_tokens={self._max_tokens})"
+            f"max_tokens={self._max_tokens}{summary_tag})"
         )
 
 

@@ -37,9 +37,107 @@ from lauren_ai._exceptions import (
 from lauren_ai._memory import ShortTermMemory
 from lauren_ai._tools import TOOL_METADATA, ToolContext, ToolResult
 from lauren_ai._tools._executor import CacheBackend, ToolExecutor
-from lauren_ai._transport import Completion, CompletionChunk, TokenUsage, ToolCall
+from lauren_ai._transport import Completion, CompletionChunk, Message, TokenUsage, ToolCall
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Context-window summarisation helpers
+# ---------------------------------------------------------------------------
+
+_SUMMARISATION_PROMPT_TEMPLATE = (
+    "The following is a portion of an ongoing conversation. "
+    "Please write a concise summary that captures all important facts, "
+    "decisions, and context needed to continue the conversation. "
+    "Focus on information the assistant will need to answer future questions.\n\n"
+    "Conversation to summarise:\n\n{turns}"
+)
+
+
+def _build_system_prompt(base: str, memory: ShortTermMemory) -> str:
+    """Return *base* with the memory summary appended when one exists."""
+    summary = memory.summary
+    if not summary:
+        return base
+    return f"{base}\n\n[Earlier conversation summary]\n{summary}"
+
+
+def _should_summarize(
+    memory: ShortTermMemory,
+    config: AgentConfig,
+) -> bool:
+    """Return ``True`` when a summarisation call should be triggered."""
+    if config.summarize_at is None:
+        return False
+    threshold = config.memory_window_tokens * config.summarize_at
+    return memory.token_estimate >= threshold
+
+
+async def _summarize_memory(
+    memory: ShortTermMemory,
+    transport: Any,
+    *,
+    model: str,
+    keep_recent: int = 6,
+) -> None:
+    """Compress older conversation turns into a summary stored on *memory*.
+
+    The ``keep_recent`` most-recent non-system messages are preserved verbatim;
+    everything older is distilled into a single text block via a cheap LLM call.
+    The summary is injected into the system prompt by ``_build_system_prompt``
+    so it is always visible to the model and cannot be dropped by the sliding
+    window.
+
+    :param memory: The short-term memory buffer to compress.
+    :param transport: The LLM transport used to generate the summary.
+    :param model: Model identifier for the summarisation call.
+    :param keep_recent: Number of most-recent non-system messages to keep
+        verbatim.  Defaults to 6 (≈ 3 user/assistant pairs).
+    """
+    to_compress = memory.messages_to_summarize(keep_recent)
+    if not to_compress:
+        return
+
+    # Format the turns into a readable transcript for the summarisation prompt.
+    transcript_parts: list[str] = []
+    for msg in to_compress:
+        role = (
+            msg.get("role", "unknown") if isinstance(msg, dict) else getattr(msg, "role", "unknown")
+        )
+        content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+        if isinstance(content, list):
+            # Extract text portions from structured content blocks
+            texts = []
+            for block in content:
+                if isinstance(block, dict):
+                    texts.append(block.get("text") or block.get("content") or "")
+                else:
+                    texts.append(str(block))
+            content = " ".join(t for t in texts if t)
+        transcript_parts.append(f"{role.upper()}: {content}")
+
+    transcript = "\n\n".join(transcript_parts)
+    summary_prompt = _SUMMARISATION_PROMPT_TEMPLATE.format(turns=transcript)
+
+    try:
+        result = await transport.complete(
+            [Message.user(summary_prompt)],
+            model=model,
+            system="You are a conversation summariser. Be concise and factual.",
+            max_tokens=512,
+            temperature=0.0,
+            stream=False,
+        )
+        summary_text = result.content or ""
+    except Exception as exc:  # noqa: BLE001
+        # Summarisation failing must never break the agent run — log and skip.
+        logger.warning("lauren_ai: context-window summarisation failed: %s", exc)
+        return
+
+    if summary_text:
+        memory.trim_to_recent(keep_recent)
+        memory.set_summary(summary_text)
 
 
 # Module-level cache for ``AgentRunner[X]`` parameterizations.  Hoisted out
@@ -403,7 +501,7 @@ class AgentRunnerBase(AgentRunner):
 
         # Determine model to use
         model = meta.model
-        system_prompt = meta.system or effective_config.system_prompt
+        system_prompt = _build_system_prompt(meta.system or effective_config.system_prompt, memory)
 
         # Gather tool schemas for attached tools
         tool_schemas = self._get_tool_schemas(meta)
@@ -431,6 +529,19 @@ class AgentRunnerBase(AgentRunner):
 
             for _turn in range(effective_config.max_turns):
                 ctx.turn = _turn
+
+                # ── Context-window summarisation (opt-in) ─────────────────
+                if _should_summarize(memory, effective_config):
+                    await _summarize_memory(
+                        memory=memory,
+                        transport=self._transport,
+                        model=effective_config.summary_model or model,
+                    )
+                    # Rebuild system prompt with new summary
+                    system_prompt = _build_system_prompt(
+                        meta.system or effective_config.system_prompt, memory
+                    )
+
                 messages = memory.messages()
 
                 t0 = time.monotonic()
@@ -844,9 +955,29 @@ class AgentRunnerBase(AgentRunner):
         last_thinking_text = ""
         final_stop_reason: str = "max_turns"
 
+        # Resolve the base system prompt for the stream loop (the caller
+        # already built it once; rebuild here in case memory was loaded from
+        # a prior conversation store).
+        meta_for_stream = self._get_meta(agent)
+        system_prompt = _build_system_prompt(
+            meta_for_stream.system or effective_config.system_prompt, memory
+        )
+
         try:
             for _turn in range(effective_config.max_turns):
                 ctx.turn = _turn
+
+                # ── Context-window summarisation (opt-in) ─────────────────
+                if _should_summarize(memory, effective_config):
+                    await _summarize_memory(
+                        memory=memory,
+                        transport=self._transport,
+                        model=effective_config.summary_model or model,
+                    )
+                    system_prompt = _build_system_prompt(
+                        meta_for_stream.system or effective_config.system_prompt, memory
+                    )
+
                 messages = memory.messages()
 
                 t0 = time.monotonic()

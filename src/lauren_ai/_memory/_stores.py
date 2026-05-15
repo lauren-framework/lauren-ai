@@ -44,40 +44,52 @@ class InMemoryConversationStore:
     # ConversationStore protocol
     # ------------------------------------------------------------------
 
-    async def load(self, conversation_id: str) -> list[Any]:
-        """Load the message history for *conversation_id*.
+    async def load(self, conversation_id: str) -> Any:
+        """Load the conversation snapshot for *conversation_id*.
 
-        Returns an empty list when the conversation does not exist.
+        Returns an empty list when the conversation does not exist (backward
+        compat — callers that check ``if prior:`` still work on empty lists).
 
         :param conversation_id: Unique conversation identifier.
         :type conversation_id: str
-        :return: A deep copy of the stored message list (empty list when not
-            found).
-        :rtype: list[Message]
+        :return: A deep copy of the stored snapshot.  When the snapshot was
+            created by ``ShortTermMemory.snapshot()`` this is a
+            ``{"messages": [...], "summary": ...}`` dict; for legacy plain
+            lists the raw list is returned.
+        :rtype: dict[str, Any] | list[Any]
         """
         history = self._histories.get(conversation_id)
         if history is None:
             return []
         return copy.deepcopy(history)
 
-    async def save(self, conversation_id: str, messages: list[Any]) -> None:
-        """Persist the message history for *conversation_id*.
+    async def save(self, conversation_id: str, snapshot: Any) -> None:
+        """Persist the conversation snapshot for *conversation_id*.
 
-        Overwrites any existing history for that identifier.  A deep copy of
-        *messages* is stored to prevent the caller from mutating the stored
-        data.
+        Overwrites any existing entry for that identifier.  A deep copy is
+        stored to prevent the caller from mutating the stored data.
+
+        Accepts both the new dict snapshot format
+        (``{"messages": [...], "summary": ...}``) produced by
+        ``ShortTermMemory.snapshot()`` and the legacy plain ``list[Message]``
+        format so that code written against the old API continues to work.
+        Plain lists are automatically normalised to the dict format so that
+        ``load()`` always returns a consistent shape.
 
         :param conversation_id: Unique conversation identifier.
         :type conversation_id: str
-        :param messages: Ordered list of ``Message`` objects to persist.
-        :type messages: list[Message]
+        :param snapshot: Snapshot dict or message list to persist.
+        :type snapshot: dict[str, Any] | list[Any]
         """
         if not conversation_id:
             logger.warning(
                 "lauren_ai.InMemoryConversationStore: save called with empty "
                 "conversation_id — storing under empty key"
             )
-        self._histories[conversation_id] = copy.deepcopy(messages)
+        # Normalise legacy plain-list format to dict so load() is consistent.
+        if isinstance(snapshot, list):
+            snapshot = {"messages": snapshot, "summary": None}
+        self._histories[conversation_id] = copy.deepcopy(snapshot)
 
     async def delete(self, conversation_id: str) -> None:
         """Delete the history for *conversation_id*.

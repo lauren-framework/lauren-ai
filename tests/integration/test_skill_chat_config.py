@@ -145,5 +145,5 @@ class TestConversationStore:
 
         history = await store.load("sess1")
         assert len(history) == 2
-        assert history[0]["role"] == "user"
-        assert history[1]["role"] == "assistant"
+        assert history["messages"][0]["role"] == "user"
+        assert history["messages"][1]["role"] == "assistant"

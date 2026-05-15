@@ -187,7 +187,7 @@ class TestShortTermMemory:
         mem = ShortTermMemory(max_tokens=4000)
         mem.add_user("Hello")
         snap = mem.snapshot()
-        snap[0]["content"] = "mutated"
+        snap["messages"][0]["content"] = "mutated"
         assert mem.messages()[0]["content"] == "Hello"
 
     def test_restore_loads_messages(self):

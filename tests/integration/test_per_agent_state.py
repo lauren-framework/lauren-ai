@@ -163,7 +163,7 @@ class TestRunnerConsultsAgentMeta:
 
         saved = await store.load("s1")
         assert len(saved) == 2
-        assert saved[0]["content"] == "Hello"
+        assert saved["messages"][0]["content"] == "Hello"
 
     @pytest.mark.asyncio
     async def test_per_request_store_override_wins(self):
@@ -184,9 +184,9 @@ class TestRunnerConsultsAgentMeta:
             conversation_store=override_store,
         )
 
-        assert len(await override_store.load("conv")) == 2
+        assert len((await override_store.load("conv"))["messages"]) == 2
         # Meta store untouched
-        assert len(await meta_store.load("conv")) == 0
+        assert (await meta_store.load("conv")) == []
 
 
 # ---------------------------------------------------------------------------

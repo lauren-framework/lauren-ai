@@ -210,8 +210,8 @@ class TestAgentWithSQLiteStore:
         client.run("hello", conversation_id="db-sess-1")
         history = asyncio.run(store.load("db-sess-1"))
         assert len(history) == 2
-        assert history[0]["role"] == "user"
-        assert history[1]["role"] == "assistant"
+        assert history["messages"][0]["role"] == "user"
+        assert history["messages"][1]["role"] == "assistant"
 
     def test_agent_loads_prior_history_from_sqlite(self):
         store = SQLiteConversationStore()

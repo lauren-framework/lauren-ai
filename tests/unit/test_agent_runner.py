@@ -245,10 +245,10 @@ class TestAgentRunnerConversationMemory:
         await runner.run(_MemAgent(), "Hi", conversation_id="s1")
 
         saved = await store.load("s1")
-        assert len(saved) == 2
-        assert saved[0] == {"role": "user", "content": "Hi"}
-        assert saved[1]["role"] == "assistant"
-        assert saved[1]["content"] == "Hello there!"
+        assert len(saved["messages"]) == 2
+        assert saved["messages"][0] == {"role": "user", "content": "Hi"}
+        assert saved["messages"][1]["role"] == "assistant"
+        assert saved["messages"][1]["content"] == "Hello there!"
 
     @pytest.mark.asyncio
     async def test_second_run_sees_prior_messages(self, mock):
@@ -333,8 +333,8 @@ class TestAgentRunnerConversationMemory:
             await runner.run(inst, f"Msg {i}", conversation_id=conv_id)
 
         history = await store.load(conv_id)
-        assert len(history) == 8  # 4 user + 4 assistant
-        user_contents = [m["content"] for m in history if m["role"] == "user"]
+        assert len(history["messages"]) == 8  # 4 user + 4 assistant
+        user_contents = [m["content"] for m in history["messages"] if m["role"] == "user"]
         assert user_contents == ["Msg 0", "Msg 1", "Msg 2", "Msg 3"]
 
 
@@ -412,10 +412,10 @@ class TestRunStreamParity:
             pass
 
         saved = await store.load("sess")
-        assert len(saved) == 2
-        assert saved[0] == {"role": "user", "content": "Hi"}
-        assert saved[1]["role"] == "assistant"
-        assert saved[1]["content"] == "First reply"
+        assert len(saved["messages"]) == 2
+        assert saved["messages"][0] == {"role": "user", "content": "Hi"}
+        assert saved["messages"][1]["role"] == "assistant"
+        assert saved["messages"][1]["content"] == "First reply"
 
         # Second run should see the prior exchange
         captured_messages: list = []
@@ -429,5 +429,5 @@ class TestRunStreamParity:
             pass
 
         history = await store.load("sess")
-        assert len(history) == 4  # 2 prior + 2 new
-        assert history[2] == {"role": "user", "content": "Follow up"}
+        assert len(history["messages"]) == 4  # 2 prior + 2 new
+        assert history["messages"][2] == {"role": "user", "content": "Follow up"}
