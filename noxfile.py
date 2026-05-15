@@ -69,7 +69,16 @@ PRIMARY_PYTHON = os.environ.get("LAUREN_AI_PRIMARY_PYTHON", "3.12")
 SUPPORTED_PYTHONS = ["3.11", "3.12", "3.13", "3.14"]
 
 # Default sessions when running ``nox`` with no -s argument.
-nox.options.sessions = ["lint", "tests", "format", "build", "build_check", "typecheck", "prek"]
+nox.options.sessions = [
+    "lint",
+    "tests",
+    "format",
+    "build",
+    "build_check",
+    "typecheck",
+    "prek",
+    "docs",
+]
 nox.options.reuse_existing_virtualenvs = True
 # ``error_on_missing_interpreters = False`` lets contributors run only the
 # Python versions they have installed locally; CI explicitly installs all.

@@ -145,7 +145,7 @@ the call originates outside an agent context. |
 ### `ModelCallComplete`
 
 ```python
-class ModelCallComplete(model: str = '', agent_id: str | None = None, agent_class: type | None = None, agent_name: str = '', usage: Any = None, duration_ms: float = 0.0, stop_reason: str = 'unknown', cost_usd: float = 0.0)
+class ModelCallComplete(model: str = '', agent_id: str | None = None, agent_class: type | None = None, agent_name: str = '', usage: Any = None, duration_ms: float = 0.0, stop_reason: str = 'unknown', cost_usd: float = 0.0, total_tokens: int = 0, turns: int = 1)
 ```
 
 Emitted after a successful LLM completion.

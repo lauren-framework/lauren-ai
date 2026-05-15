@@ -80,6 +80,64 @@ Accepts a `ToolResult` dataclass or a plain dict.
 |---|---|---|
 | `result` | `Any` | A `ToolResult` object or dict. |
 
+#### `ShortTermMemory.set_summary`
+
+```python
+def set_summary(self, text: str) -> None
+```
+
+Store *text* as the conversation summary.
+
+Called by the runner after a summarisation LLM call completes.
+The summary is persisted via `snapshot()` / `restore()` so
+resumed sessions carry it forward.
+
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `text` | `str` | Compressed summary of older conversation turns. |
+
+#### `ShortTermMemory.messages_to_summarize`
+
+```python
+def messages_to_summarize(self, keep_recent: int = 6) -> list[Any]
+```
+
+Return the slice of messages that should be compressed.
+
+Returns the oldest `(total - keep_recent)` non-system messages.
+System messages are excluded because they are already managed
+separately (they are never dropped by `messages()` either).
+
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `keep_recent` | `int` | Number of most-recent non-system messages to
+preserve verbatim.  Defaults to 6 (≈ 3 user/assistant pairs). |
+
+**Returns:** `list[Any]` — List of messages to feed to the summarisation LLM call.
+
+#### `ShortTermMemory.trim_to_recent`
+
+```python
+def trim_to_recent(self, keep_recent: int = 6) -> None
+```
+
+Drop all but the most-recent *keep_recent* non-system messages.
+
+Called by the runner after the summarisation call so the buffer
+only holds recent turns while the older context lives in
+`self._summary`.
+
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `keep_recent` | `int` | Number of most-recent non-system messages to
+keep.  Defaults to 6. |
+
 #### `ShortTermMemory.messages`
 
 ```python
@@ -122,30 +180,40 @@ Clear all messages from the buffer.
 #### `ShortTermMemory.snapshot`
 
 ```python
-def snapshot(self) -> list[Any]
+def snapshot(self) -> Any
 ```
 
-Return a deep copy of the current message list.
+Return a deep copy of the current memory state.
 
-The returned list is independent of the internal buffer; mutations to
-it do not affect the memory.
+The returned object includes both the message list and the
+conversation summary (if any).  It is independent of the internal
+buffer — mutations do not affect the memory.
 
-**Returns:** `list[Message]` — Immutable snapshot of the conversation history.
+The format is a `dict` with `"messages"` and `"summary"` keys
+so that resumed sessions carry the summary forward.  Old snapshots
+that are plain `list` objects are still accepted by `restore()`
+for backward compatibility.
+
+**Returns:** `dict[str, Any]` — Snapshot dict `{"messages": [...], "summary": str | None}`.
 
 #### `ShortTermMemory.restore`
 
 ```python
-def restore(self, messages: list[Any]) -> None
+def restore(self, data: Any) -> None
 ```
 
-Restore the message buffer from a snapshot.
+Restore the memory buffer from a snapshot.
+
+Accepts both the new `dict` snapshot format (`{"messages": [...],
+"summary": ...}`) and the legacy plain `list` format produced by
+older versions of `snapshot()`.
 
 **Parameters:**
 
 | Name | Type | Description |
 |---|---|---|
-| `messages` | `list[Any]` | Ordered list of `Message` objects (typically
-produced by `snapshot()`). |
+| `data` | `Any` | Snapshot produced by `snapshot()`, or a plain list of
+message objects for backward compatibility. |
 
 ## Conversation store
 
@@ -232,12 +300,13 @@ cannot inadvertently mutate stored data.
 #### `InMemoryConversationStore.load`
 
 ```python
-def load(self, conversation_id: str) -> list[Any]
+def load(self, conversation_id: str) -> Any
 ```
 
-Load the message history for *conversation_id*.
+Load the conversation snapshot for *conversation_id*.
 
-Returns an empty list when the conversation does not exist.
+Returns an empty list when the conversation does not exist (backward
+compat — callers that check `if prior:` still work on empty lists).
 
 **Parameters:**
 
@@ -245,27 +314,35 @@ Returns an empty list when the conversation does not exist.
 |---|---|---|
 | `conversation_id` | `str` | Unique conversation identifier. |
 
-**Returns:** `list[Message]` — A deep copy of the stored message list (empty list when not
-found).
+**Returns:** `dict[str, Any] | list[Any]` — A deep copy of the stored snapshot.  When the snapshot was
+created by `ShortTermMemory.snapshot()` this is a
+`{"messages": [...], "summary": ...}` dict; for legacy plain
+lists the raw list is returned.
 
 #### `InMemoryConversationStore.save`
 
 ```python
-def save(self, conversation_id: str, messages: list[Any]) -> None
+def save(self, conversation_id: str, snapshot: Any) -> None
 ```
 
-Persist the message history for *conversation_id*.
+Persist the conversation snapshot for *conversation_id*.
 
-Overwrites any existing history for that identifier.  A deep copy of
-*messages* is stored to prevent the caller from mutating the stored
-data.
+Overwrites any existing entry for that identifier.  A deep copy is
+stored to prevent the caller from mutating the stored data.
+
+Accepts both the new dict snapshot format
+(`{"messages": [...], "summary": ...}`) produced by
+`ShortTermMemory.snapshot()` and the legacy plain `list[Message]`
+format so that code written against the old API continues to work.
+Plain lists are automatically normalised to the dict format so that
+`load()` always returns a consistent shape.
 
 **Parameters:**
 
 | Name | Type | Description |
 |---|---|---|
 | `conversation_id` | `str` | Unique conversation identifier. |
-| `messages` | `list[Any]` | Ordered list of `Message` objects to persist. |
+| `snapshot` | `Any` | Snapshot dict or message list to persist. |
 
 #### `InMemoryConversationStore.delete`
 

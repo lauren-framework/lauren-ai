@@ -138,7 +138,7 @@ Example::
 ### `AgentConfig`
 
 ```python
-class AgentConfig(system_prompt: str = 'You are a helpful assistant.', max_turns: int = 10, max_tokens_per_turn: int = 4096, temperature: float = 1.0, memory_window_tokens: int = 40000, max_cost_usd: float | None = None, parallel_tool_calls: bool = False, tool_error_policy: Literal['raise', 'return_error', 'skip'] = 'return_error', thinking: bool = False, thinking_budget_tokens: int = 8000, reasoning_effort: Literal['low', 'medium', 'high'] | None = None, include_reasoning_in_response: bool = False)
+class AgentConfig(system_prompt: str = 'You are a helpful assistant.', max_turns: int = 10, max_tokens_per_turn: int = 4096, temperature: float = 1.0, memory_window_tokens: int = 40000, max_cost_usd: float | None = None, parallel_tool_calls: bool = False, tool_error_policy: Literal['raise', 'return_error', 'skip'] = 'return_error', thinking: bool = False, thinking_budget_tokens: int = 8000, reasoning_effort: Literal['low', 'medium', 'high'] | None = None, include_reasoning_in_response: bool = False, summarize_at: float | None = None, summary_model: str | None = None)
 ```
 
 Immutable configuration for an agent's runtime behaviour.
@@ -177,3 +177,15 @@ preserve deterministic ordering guarantees. |
 provider default. |
 | `include_reasoning_in_response` | `bool` | When `True` thinking blocks are
 included in the `Completion` response. |
+| `summarize_at` | `float | None` | Fraction of `memory_window_tokens` at which the
+runner triggers an automatic context-window summarisation.  For
+example, `0.8` means "summarise when 80 % of the token budget is
+consumed".  Older turns are compressed into a single block that is
+prepended to the system prompt so it is always preserved.  `None`
+(the default) disables summarisation — older messages are silently
+dropped as before. |
+| `summary_model` | `str | None` | Model identifier to use for the summarisation LLM
+call.  Set this to a cheaper / faster model (e.g.
+`"claude-haiku-4-5"`) to reduce cost while keeping the agent's
+main model for reasoning.  `None` (the default) reuses the same
+model as the agent. |
