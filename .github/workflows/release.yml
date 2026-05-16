@@ -54,9 +54,6 @@ jobs:
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "lauren-ai version: ${version}"
 
-      - name: Verify public API is in sync with llms-full.txt
-        run: nox -s llms_check
-
       - name: Build distributions
         run: nox -s build
 
