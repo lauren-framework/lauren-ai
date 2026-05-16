@@ -6,6 +6,7 @@ repo_name: lauren-framework/lauren-ai
 
 theme:
   name: material
+  logo: assets/lauren-logo.png
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
