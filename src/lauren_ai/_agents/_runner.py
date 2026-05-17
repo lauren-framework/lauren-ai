@@ -972,12 +972,20 @@ class AgentRunnerBase(AgentRunner):
             meta_for_stream.system or effective_config.system_prompt, memory
         )
 
+        # Pre-resolve static loop flags — these are determined before the first
+        # turn and never change mid-run, so there is no point re-evaluating
+        # them on every iteration.
+        _may_summarize: bool = effective_config.summarize_at is not None
+        _has_guardrails: bool = bool(output_guards)
+        _has_budget_cap: bool = effective_config.max_cost_usd is not None
+        _tool_schemas_arg = tool_schemas or None
+
         try:
             for _turn in range(effective_config.max_turns):
                 ctx.turn = _turn
 
                 # ── Context-window summarisation (opt-in) ─────────────────
-                if _should_summarize(memory, effective_config):
+                if _may_summarize and _should_summarize(memory, effective_config):
                     await _summarize_memory(
                         memory=memory,
                         transport=self._transport,
@@ -994,7 +1002,7 @@ class AgentRunnerBase(AgentRunner):
                     messages,
                     model=model,
                     system=system_prompt,
-                    tools=tool_schemas if tool_schemas else None,
+                    tools=_tool_schemas_arg,
                     max_tokens=effective_config.max_tokens_per_turn,
                     temperature=effective_config.temperature,
                     stream=True,
@@ -1039,10 +1047,12 @@ class AgentRunnerBase(AgentRunner):
                 # now judges the fully-assembled text.  If it fires, emit a
                 # sentinel CompletionChunk(guardrail_override=...) that tells
                 # the controller / frontend to replace the displayed content.
-                if output_guards and accumulated_text:
+                if _has_guardrails and accumulated_text:
                     try:
                         _out_decision = await _run_output_guardrails(
-                            output_guards, accumulated_text, ctx.agent_name
+                            output_guards,  # type: ignore[arg-type]
+                            accumulated_text,
+                            ctx.agent_name,
                         )
                     except Exception as _exc:  # noqa: BLE001
                         logger.warning(
@@ -1124,14 +1134,14 @@ class AgentRunnerBase(AgentRunner):
                 )
 
                 # Budget check (mirrors run() 289–300)
-                if effective_config.max_cost_usd is not None:
+                if _has_budget_cap:
                     cumulative_cost = total_usage.cost_usd(model)
-                    if cumulative_cost > effective_config.max_cost_usd:
+                    if cumulative_cost > effective_config.max_cost_usd:  # type: ignore[operator]
                         raise AgentBudgetExceededError(
                             f"Agent exceeded cost budget of ${effective_config.max_cost_usd:.4f} "
                             f"(used ${cumulative_cost:.4f})",
                             budget_type="cost_usd",
-                            limit=effective_config.max_cost_usd,
+                            limit=effective_config.max_cost_usd or 0.0,
                             used=cumulative_cost,
                             agent_class=ctx.agent_class,
                         )
