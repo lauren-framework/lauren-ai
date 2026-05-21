@@ -83,9 +83,15 @@ __all__ = [
     "AgentResponse",
     # Tool types
     "ToolContext",
+    "ToolCallContext",
     "ToolResult",
+    "ToolHook",
+    "BeforeToolHookDecision",
+    "AfterToolHookDecision",
+    "ErrorToolHookDecision",
     "get_tool_context_from_func_args",
     "set_metadata",
+    "use_hooks",
     # Memory
     "ShortTermMemory",
     "MemoryStore",
@@ -423,6 +429,14 @@ from lauren_ai._tools import (
     get_tool_context_from_func_args,
     set_metadata,
     tool,
+    use_hooks,
+)
+from lauren_ai._tools._hooks import (
+    AfterToolHookDecision,
+    BeforeToolHookDecision,
+    ErrorToolHookDecision,
+    ToolCallContext,
+    ToolHook,
 )
 
 # ---------------------------------------------------------------------------

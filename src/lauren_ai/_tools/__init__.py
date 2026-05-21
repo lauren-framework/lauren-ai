@@ -30,6 +30,7 @@ from typing import Any, TypedDict, TypeVar
 __all__ = [
     "TOOL_META",
     "TOOL_METADATA",
+    "USE_HOOKS_META",
     "ToolContext",
     "ToolMeta",
     "ToolResult",
@@ -37,12 +38,16 @@ __all__ = [
     "get_tool_context_from_func_args",
     "set_metadata",
     "tool",
+    "use_hooks",
 ]
 
 # Sentinel attribute used by @set_metadata to attach static key-value pairs to
 # @tool()-decorated functions and classes — same pattern as lauren.set_metadata
 # on route handlers.
 TOOL_METADATA = "__lauren_ai_tool_metadata__"
+
+#: Attribute name set by ``@use_hooks()`` to store hook classes on a tool.
+USE_HOOKS_META: str = "__lauren_ai_tool_hook_classes__"
 
 _T = TypeVar("_T")
 
@@ -367,6 +372,11 @@ class ToolMeta:
     error_hook: Callable[..., Any] | None = None
     cache_ttl: int | None = None
     cache_key_fn: Callable[[dict[str, Any]], str] | None = None
+    #: Hook classes attached via ``@use_hooks()`` at decoration time.
+    hook_classes: tuple[type, ...] = field(default_factory=tuple)
+    #: Resolved ``ToolHook`` instances — populated by ``AgentModule.for_root()``
+    #: after DI resolution.  Empty tuple until the module is built.
+    resolved_hooks: tuple[Any, ...] = field(default_factory=tuple)
 
 
 # ---------------------------------------------------------------------------
@@ -529,6 +539,8 @@ def _build_meta(
     except (ValueError, TypeError):
         pass
 
+    hook_classes = tuple(getattr(fn_or_cls, USE_HOOKS_META, ()))
+
     return ToolMeta(
         name=tool_name,
         description=tool_description,
@@ -542,6 +554,7 @@ def _build_meta(
         error_hook=error_hook,
         cache_ttl=cache_ttl,
         cache_key_fn=cache_key_fn,
+        hook_classes=hook_classes,
     )
 
 
@@ -652,6 +665,98 @@ def tool(
         # Set TOOL_META after the injectable block so it lands on the final object.
         setattr(fn_or_cls, TOOL_META, meta)
 
+        return fn_or_cls
+
+    return decorator
+
+
+# ---------------------------------------------------------------------------
+# @use_hooks() decorator
+# ---------------------------------------------------------------------------
+
+
+def use_hooks(*hook_classes: type) -> Callable[[_T], _T]:
+    """Attach injectable :class:`~lauren_ai.ToolHook` classes to a ``@tool()``.
+
+    Must be stacked **above** ``@tool()``::
+
+        @use_hooks(AuditHook, RateLimitHook)
+        @tool()
+        async def my_tool(query: str) -> list[dict]:
+            ...
+
+        @use_hooks(AuditHook)
+        @tool()
+        class MyTool:
+            def __init__(self, db: Database) -> None: ...
+            async def run(self, query: str) -> dict: ...
+
+    Each hook class must be a subclass of :class:`~lauren_ai.ToolHook`.
+    Hooks are resolved as ``SINGLETON`` injectables; they are auto-decorated
+    with ``@injectable(scope=Scope.SINGLETON)`` if not already marked.
+
+    Hook execution order for each tool call:
+
+    * **before** — global hooks first, then per-tool hooks (leftmost first).
+    * **after** — per-tool hooks first (leftmost first), then global hooks.
+    * **error** — same order as after.
+
+    :param hook_classes: Subclasses of :class:`~lauren_ai.ToolHook`.
+    :type hook_classes: type
+    :raises DecoratorUsageError: When a hook class is not a
+        :class:`~lauren_ai.ToolHook` subclass, or when called without
+        parentheses.
+    """
+    # Bare-usage guard: @use_hooks without parentheses passes the decorated
+    # object as the first positional arg.
+    if hook_classes and callable(hook_classes[0]) and not inspect.isclass(hook_classes[0]):
+        from lauren_ai._exceptions import DecoratorUsageError  # noqa: PLC0415
+
+        raise DecoratorUsageError(
+            "@use_hooks must be called with parentheses and hook classes: @use_hooks(MyHook, ...)"
+        )
+
+    from lauren_ai._exceptions import DecoratorUsageError  # noqa: PLC0415
+
+    for hcls in hook_classes:
+        if not (inspect.isclass(hcls)):
+            raise DecoratorUsageError(
+                f"@use_hooks: {hcls!r} is not a class. Pass ToolHook subclasses, not instances."
+            )
+
+    def decorator(fn_or_cls: _T) -> _T:
+        # Validate hook classes are ToolHook subclasses (imported lazily to
+        # avoid circular import at module-definition time).
+        try:
+            from lauren_ai._tools._hooks import ToolHook as _ToolHook  # noqa: PLC0415
+
+            for hcls in hook_classes:
+                if not issubclass(hcls, _ToolHook):
+                    raise DecoratorUsageError(
+                        f"@use_hooks: {hcls.__name__!r} must be a subclass of ToolHook."
+                    )
+        except ImportError:
+            pass
+
+        # Auto-apply @injectable(scope=SINGLETON) to each hook class.
+        try:
+            from lauren import Scope, injectable  # noqa: PLC0415
+
+            for hcls in hook_classes:
+                if inspect.isclass(hcls) and "__lauren_injectable__" not in hcls.__dict__:
+                    injectable(scope=Scope.SINGLETON)(hcls)
+        except ImportError:
+            pass
+
+        # Merge with any hooks already set (stacking multiple @use_hooks allowed).
+        existing: tuple[type, ...] = getattr(fn_or_cls, USE_HOOKS_META, ())
+        merged = existing + tuple(hook_classes)
+        setattr(fn_or_cls, USE_HOOKS_META, merged)
+        # Sync ToolMeta.hook_classes when @use_hooks is stacked above @tool()
+        # (i.e. @tool() already ran and set TOOL_META on fn_or_cls).
+        _tool_meta = getattr(fn_or_cls, TOOL_META, None)
+        if _tool_meta is not None:
+            _tool_meta.hook_classes = merged
         return fn_or_cls
 
     return decorator

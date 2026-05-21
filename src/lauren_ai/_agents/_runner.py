@@ -360,6 +360,7 @@ class AgentRunnerBase(AgentRunner):
         transport: Any,
         signals: Any | None = None,
         cache_backend: CacheBackend | None = None,
+        global_hooks: list[Any] | None = None,
     ) -> None:
         self._transport = transport
         self._signals = signals
@@ -367,6 +368,7 @@ class AgentRunnerBase(AgentRunner):
             tools={},
             cache_backend=cache_backend,
             signals=signals,
+            global_hooks=global_hooks,
         )
         # Pending HITL approvals: agent_run_id -> tool_use_id -> Future
         self._pending_approvals: dict[str, dict[str, asyncio.Future[bool]]] = {}

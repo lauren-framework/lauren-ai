@@ -559,6 +559,7 @@ class AgentModule:
         injects: list[type] | None = None,
         export_tools: list[type] | None = None,
         shared_tools: list[type] | None = None,
+        global_tool_hooks: list[type] | None = None,
     ) -> type:
         """Create a ``@module`` providing the agent runner and all agent instances.
 
@@ -649,7 +650,7 @@ class AgentModule:
         )
         from lauren_ai._agents._runner import AgentRunner, AgentRunnerBase  # noqa: PLC0415
         from lauren_ai._memory._stores import InMemoryConversationStore  # noqa: PLC0415
-        from lauren_ai._tools import TOOL_META, _add_to_tool_map  # noqa: PLC0415
+        from lauren_ai._tools import TOOL_META, USE_HOOKS_META, _add_to_tool_map  # noqa: PLC0415
 
         if runner is not None:
             # Advanced path: caller supplied an explicit named runner subclass.
@@ -787,6 +788,36 @@ class AgentModule:
                     )
                 )
 
+        # ── Collect all unique hook classes ──────────────────────────────────
+        # Order: global hooks first (position in _all_hook_classes determines
+        # the positional inject slot), then per-tool-only hooks (deduped).
+
+        _global_hook_classes: list[type] = []
+        _all_hook_classes: list[type] = []
+        _hook_id_seen: set[int] = set()
+
+        for _hcls in global_tool_hooks or []:
+            _hid = id(_hcls)
+            if _hid not in _hook_id_seen:
+                _hook_id_seen.add(_hid)
+                _global_hook_classes.append(_hcls)
+                _all_hook_classes.append(_hcls)
+
+        for _htool in _fn_tools + _class_tools:
+            _horigin = get_origin(_htool)
+            _hlookup = _horigin if (_horigin is not None and _inspect.isclass(_horigin)) else _htool
+            for _hcls in getattr(_hlookup, USE_HOOKS_META, ()):
+                _hid = id(_hcls)
+                if _hid not in _hook_id_seen:
+                    _hook_id_seen.add(_hid)
+                    _all_hook_classes.append(_hcls)
+
+        # Auto-mark global hook classes as injectable SINGLETON if not yet marked.
+        # Per-tool hooks are already auto-marked by the @use_hooks decorator itself.
+        for _hcls in _global_hook_classes:
+            if _inspect.isclass(_hcls) and "__lauren_injectable__" not in _hcls.__dict__:
+                injectable(scope=Scope.SINGLETON)(_hcls)
+
         # ── Initialise eager-tools sentinel and effective scope ───────────────
 
         _eager_tools: dict | None = None
@@ -837,6 +868,11 @@ class AgentModule:
             else:
                 providers.append(cls_tool)
 
+        # Register hook classes as DI providers (internal; not exported).
+        for _hcls in _all_hook_classes:
+            if _hcls not in providers:
+                providers.append(_hcls)
+
         # Register all agent classes as providers and exports so parent modules
         # can inject the resolved agent singleton (e.g. for runner.run(agent, …)).
         for agent_cls in agents:
@@ -854,10 +890,10 @@ class AgentModule:
         try:
             from lauren_ai._transport import Transport as _Transport  # noqa: PLC0415
 
-            if _class_tools or shared_tools:
-                # Class-form tools and/or shared tools need DI resolution.
+            if _class_tools or shared_tools or _all_hook_classes:
+                # Class-form tools, shared tools, or injectable hooks need DI resolution.
                 # The runner factory receives DI-resolved instances positionally:
-                #   args = (transport, *class_instances, *shared_instances, config)
+                #   args = (transport, *class_instances, *shared_instances, *hook_instances, config)
                 _num_class_tools = len(_class_tools)
                 _captured_fn_tools = list(_fn_tools)
                 _captured_shared_tools = list(shared_tools or [])
@@ -865,6 +901,9 @@ class AgentModule:
                 _captured_signals_ref = _captured_signals
                 _captured_tool_cache_ref = _captured_tool_cache
                 _captured_kb_tool_names = frozenset(_kb_tool_names)
+                _num_all_hooks = len(_all_hook_classes)
+                _captured_all_hook_classes = list(_all_hook_classes)
+                _captured_global_hook_classes = list(_global_hook_classes)
 
                 def _build_runner_with_classes(*args: Any) -> AgentRunner:
                     transport = args[0]
@@ -872,7 +911,13 @@ class AgentModule:
                     shared_instances = args[
                         1 + _num_class_tools : 1 + _num_class_tools + _num_shared_tools
                     ]
-                    cfg = args[1 + _num_class_tools + _num_shared_tools]
+                    hook_instances = args[
+                        1 + _num_class_tools + _num_shared_tools : 1
+                        + _num_class_tools
+                        + _num_shared_tools
+                        + _num_all_hooks
+                    ]
+                    cfg = args[1 + _num_class_tools + _num_shared_tools + _num_all_hooks]
                     tools: dict = {}
                     for fn_tool in _captured_fn_tools:
                         try:
@@ -901,6 +946,14 @@ class AgentModule:
                                 instance,
                                 exc,
                             )
+                    # Wire per-tool resolved hooks from the DI-resolved instances.
+                    _hook_by_cls: dict[type, Any] = dict(
+                        zip(_captured_all_hook_classes, hook_instances, strict=True)
+                    )
+                    for _tn, (_fc, _tm) in tools.items():
+                        _tm.resolved_hooks = tuple(
+                            _hook_by_cls[_hc] for _hc in _tm.hook_classes if _hc in _hook_by_cls
+                        )
                     # Attach per-agent tool maps and resolve model fallback
                     # (runs once; runner is SINGLETON).
                     _attach_agent_tools(list(agents), tools, _captured_kb_tool_names)
@@ -908,16 +961,28 @@ class AgentModule:
                         _am = getattr(_a, AGENT_META)
                         if _am.model is None:
                             _am.model = cfg.model
+                    _global_hook_instances = [
+                        _hook_by_cls[_hc]
+                        for _hc in _captured_global_hook_classes
+                        if _hc in _hook_by_cls
+                    ]
                     return _runner_cls(
                         transport=transport,
                         signals=_captured_signals_ref,
                         cache_backend=_captured_tool_cache_ref,
+                        global_hooks=_global_hook_instances,
                     )
 
                 _runner_provider = use_factory(
                     provide=_runner_cls,
                     factory=_build_runner_with_classes,
-                    injects=[_Transport, *_class_tools, *_captured_shared_tools, LLMConfig],
+                    injects=[
+                        _Transport,
+                        *_class_tools,
+                        *_captured_shared_tools,
+                        *_all_hook_classes,
+                        LLMConfig,
+                    ],
                     scope=_effective_scope,
                 )
             else:

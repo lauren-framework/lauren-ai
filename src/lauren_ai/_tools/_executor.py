@@ -30,6 +30,13 @@ from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from . import ToolContext, ToolMeta, ToolResult
+from ._hooks import (
+    AfterToolHookDecision,
+    BeforeToolHookDecision,
+    ErrorToolHookDecision,
+    ToolCallContext,
+    ToolHook,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -259,10 +266,12 @@ class ToolExecutor:
         tools: dict[str, tuple[Any, ToolMeta]],
         cache_backend: CacheBackend | None = None,
         signals: Any | None = None,
+        global_hooks: list[ToolHook] | None = None,
     ) -> None:
         self._tools = tools
         self._cache = cache_backend
         self._signals = signals
+        self._global_hooks: list[ToolHook] = list(global_hooks or [])
 
     # ------------------------------------------------------------------
     # Public API
@@ -291,7 +300,7 @@ class ToolExecutor:
         """
         name = tool_call.name
         tool_use_id = tool_call.tool_use_id
-        tool_input = tool_call.input or {}
+        tool_input = dict(tool_call.input or {})
 
         entry = (tool_map if tool_map is not None else self._tools).get(name)
         if entry is None:
@@ -319,22 +328,62 @@ class ToolExecutor:
                 tool_input=tool_input,
             )
 
-        # Cache read
+        # Cache read (before hooks, consistent with legacy behaviour)
         cached = await self._try_get_cache(meta, tool_input)
         if cached is not None:
             logger.debug("lauren_ai.ToolExecutor: cache hit for tool '%s'", name)
             return ToolResult.ok(cached, tool_use_id=tool_use_id)
 
-        # Pre-hook
+        # Build ToolCallContext for injectable hooks.
+        hook_ctx = ToolCallContext(
+            agent_context=tool_context.agent_context,
+            tool_use_id=tool_use_id,
+            turn=tool_context.turn,
+            request=tool_context.request,
+            execution_context=tool_context.execution_context,
+            metadata=tool_context.metadata,
+            state=tool_context.state,
+            tool_name=name,
+            tool_input=tool_input,
+        )
+
+        # Hook lists — global wraps per-tool (outermost = global).
+        # before: global first, then per-tool.
+        # after/error: per-tool first, then global (reverse wrap).
+        per_tool_hooks: list[ToolHook] = list(meta.resolved_hooks)
+        before_hooks = self._global_hooks + per_tool_hooks
+        after_hooks = per_tool_hooks + self._global_hooks
+        error_hooks = per_tool_hooks + self._global_hooks
+
+        # Legacy pre-hook (plain callable)
         if meta.pre_hook is not None:
             await self._call_hook(meta.pre_hook, tool_call, tool_context)
 
-        # Dispatch
+        # --- Before hooks -------------------------------------------------
+        current_input = tool_input
+        for hook in before_hooks:
+            try:
+                decision: BeforeToolHookDecision = await hook.before_tool_call(hook_ctx)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "lauren_ai.ToolExecutor: before_tool_call on %r raised %s — ignoring",
+                    hook,
+                    type(exc).__name__,
+                )
+                continue
+            if decision._aborted:
+                logger.debug("lauren_ai.ToolExecutor: hook %r aborted tool '%s'", hook, name)
+                return ToolResult.ok(decision._abort_result, tool_use_id=tool_use_id)
+            if decision._modified_input is not None:
+                current_input = decision._modified_input
+                hook_ctx.tool_input = current_input
+
+        # --- Dispatch -----------------------------------------------------
         try:
             raw_result = await self._dispatch(
                 callable_or_instance,
                 meta,
-                tool_input,
+                current_input,
                 tool_context,
             )
         except Exception as exc:  # noqa: BLE001
@@ -344,21 +393,55 @@ class ToolExecutor:
                 type(exc).__name__,
                 exc,
             )
-            # Error hook
+            # Injectable error hooks
+            for hook in error_hooks:
+                try:
+                    edc: ErrorToolHookDecision = await hook.on_tool_error(exc, hook_ctx)
+                except Exception as hook_exc:  # noqa: BLE001
+                    logger.warning(
+                        "lauren_ai.ToolExecutor: on_tool_error on %r raised %s — ignoring",
+                        hook,
+                        type(hook_exc).__name__,
+                    )
+                    continue
+                if edc._suppressed:
+                    logger.debug(
+                        "lauren_ai.ToolExecutor: hook %r suppressed error for tool '%s'",
+                        hook,
+                        name,
+                    )
+                    return ToolResult.ok(edc._fallback, tool_use_id=tool_use_id)
+            # Legacy error hook (plain callable)
             if meta.error_hook is not None:
                 with contextlib.suppress(Exception):
                     await self._call_hook(meta.error_hook, exc, tool_context)
             raise ToolExecutionError(name, exc) from exc
 
-        # Build ToolResult
-        result = ToolResult.ok(raw_result, tool_use_id=tool_use_id)
+        # --- After hooks --------------------------------------------------
+        current_result: Any = raw_result
+        for hook in after_hooks:
+            try:
+                adc: AfterToolHookDecision = await hook.after_tool_call(current_result, hook_ctx)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "lauren_ai.ToolExecutor: after_tool_call on %r raised %s — ignoring",
+                    hook,
+                    type(exc).__name__,
+                )
+                continue
+            from ._hooks import _NO_REPLACE  # noqa: PLC0415
 
-        # Post-hook — receives the ToolResult and ToolContext
+            if adc._replacement is not _NO_REPLACE:
+                current_result = adc._replacement
+
+        result = ToolResult.ok(current_result, tool_use_id=tool_use_id)
+
+        # Legacy post-hook (plain callable) — receives the ToolResult
         if meta.post_hook is not None:
             await self._call_hook(meta.post_hook, result, tool_context)
 
-        # Cache write
-        await self._try_set_cache(meta, tool_input, raw_result)
+        # Cache write (uses the final result after after-hooks)
+        await self._try_set_cache(meta, current_input, current_result)
 
         return result
 
