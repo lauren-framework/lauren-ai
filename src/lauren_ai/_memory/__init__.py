@@ -25,6 +25,11 @@ __all__ = [
     "MemoryFact",
     "UserMemoryStore",
     "InMemoryUserMemoryStore",
+    "SQLiteConversationStore",
+    "SQLiteStoreBackend",
+    "SQLiteStoreConfig",
+    "SQLiteUserMemoryStore",
+    "SQLiteVectorStore",
     "remember",
     "RememberMeta",
     "MemoryConfigError",
@@ -571,5 +576,12 @@ from lauren_ai._memory._remember import (  # noqa: E402
     MemoryConfigError,
     RememberMeta,
     remember,
+)
+from lauren_ai._memory._sqlite import (  # noqa: E402
+    SQLiteConversationStore,
+    SQLiteStoreBackend,
+    SQLiteStoreConfig,
+    SQLiteUserMemoryStore,
+    SQLiteVectorStore,
 )
 from lauren_ai._memory._user import MemoryFact, UserMemoryStore  # noqa: E402

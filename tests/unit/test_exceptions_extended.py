@@ -14,6 +14,8 @@ from lauren_ai._exceptions import (
     EvalError,
     KnowledgeLoadError,
     LaurenAIError,
+    StorageDependencyError,
+    StorageError,
     ToolConfigError,
     ToolConfirmationRejectedError,
     ToolExecutionError,
@@ -123,6 +125,32 @@ class TestToolExecutionErrorStr:
         exc = ToolExecutionError("x", tool_name="t", tool_use_id="u")
         assert exc.tool_name == "t"
         assert exc.tool_use_id == "u"
+
+
+class TestStorageErrorStr:
+    def test_str_with_backend_location_and_cause(self):
+        exc = StorageError(
+            "storage failed",
+            backend="sqlite",
+            location="/tmp/test.sqlite3",
+            cause=RuntimeError("boom"),
+        )
+        s = str(exc)
+        assert "storage failed" in s
+        assert "backend='sqlite'" in s
+        assert "location='/tmp/test.sqlite3'" in s
+        assert "caused by" in s
+
+    def test_dependency_error_reuses_storage_format(self):
+        exc = StorageDependencyError(
+            "missing optional dependency",
+            backend="sqlite",
+            location=":memory:",
+        )
+        s = str(exc)
+        assert "missing optional dependency" in s
+        assert "backend='sqlite'" in s
+        assert "location=':memory:'" in s
 
 
 class TestToolSchemaErrorStr:

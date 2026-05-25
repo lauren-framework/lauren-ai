@@ -48,6 +48,8 @@ __all__ = [
     "MessageBusError",
     "MessageBusTimeoutError",
     "MessageValidationError",
+    "StorageError",
+    "StorageDependencyError",
 ]
 
 
@@ -227,6 +229,49 @@ class ToolExecutionError(LaurenAIError):
         if self.cause is not None:
             base += f" (caused by: {self.cause!r})"
         return base
+
+
+class StorageError(LaurenAIError):
+    """Raised when a persistent storage backend fails.
+
+    :param message: Human-readable storage failure description.
+    :type message: str
+    :param backend: Storage backend name such as ``"sqlite"``.
+    :type backend: str | None
+    :param location: Backend location such as a database path or DSN.
+    :type location: str | None
+    :param cause: Underlying exception.
+    :type cause: BaseException | None
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        backend: str | None = None,
+        location: str | None = None,
+        cause: BaseException | None = None,
+    ) -> None:
+        super().__init__(message, cause=cause)
+        self.backend = backend
+        self.location = location
+
+    def __str__(self) -> str:
+        parts = [self.message]
+        if self.backend is not None:
+            parts.append(f"backend={self.backend!r}")
+        if self.location is not None:
+            parts.append(f"location={self.location!r}")
+        if self.cause is not None:
+            parts.append(f"caused by: {self.cause!r}")
+        return " | ".join(parts)
+
+
+class StorageDependencyError(StorageError):
+    """Raised when an optional storage dependency is not installed."""
+
+    def __str__(self) -> str:
+        return super().__str__()
 
 
 class ToolSchemaError(LaurenAIError):

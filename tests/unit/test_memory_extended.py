@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import pytest
+
+from lauren_ai._exceptions import StorageError
 from lauren_ai._memory import (
     ShortTermMemory,
     _estimate_content_length,
     _get_role,
     _message_char_length,
 )
+from lauren_ai._memory._sqlite import _normalise_snapshot
 from lauren_ai._transport import Completion, TokenUsage
 
 # ---------------------------------------------------------------------------
@@ -63,6 +67,29 @@ class TestEstimateContentLength:
         blocks = [{"content": ["a", "b"]}]
         result = _estimate_content_length(blocks)
         assert result > 0
+
+
+class TestSQLiteSnapshotNormalisation:
+    def test_list_snapshot_is_normalised(self):
+        snapshot = _normalise_snapshot([{"role": "user", "content": "hello"}])
+        assert snapshot == {
+            "messages": [{"role": "user", "content": "hello"}],
+            "summary": None,
+        }
+
+    def test_dict_snapshot_preserves_messages_and_summary(self):
+        snapshot = _normalise_snapshot(
+            {
+                "messages": [{"role": "assistant", "content": "hi"}],
+                "summary": "existing summary",
+            }
+        )
+        assert snapshot["messages"][0]["content"] == "hi"
+        assert snapshot["summary"] == "existing summary"
+
+    def test_invalid_snapshot_raises(self):
+        with pytest.raises(StorageError, match="Conversation snapshots must be"):
+            _normalise_snapshot("bad-snapshot")
 
 
 # ---------------------------------------------------------------------------
