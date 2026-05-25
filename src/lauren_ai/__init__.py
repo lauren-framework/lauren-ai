@@ -110,6 +110,15 @@ __all__ = [
     "JSONAgentMessageSerializer",
     "MessageRetryPolicy",
     "MessageSubscription",
+    # Subagents
+    "BriefCompiler",
+    "LlmCompiler",
+    "PassThroughCompiler",
+    "ReturnMode",
+    "SubagentConfig",
+    "SubagentPool",
+    "SubagentTool",
+    "TemplateCompiler",
     # Memory
     "ShortTermMemory",
     "MemoryStore",
@@ -128,6 +137,8 @@ __all__ = [
     "SignalBus",
     "AgentMessageSent",
     "AgentMessageRequestCompleted",
+    "SubagentStarted",
+    "SubagentCompleted",
     "ModelCallStarted",
     "ModelCallComplete",
     "ToolCallStarted",
@@ -447,8 +458,20 @@ from lauren_ai._signals import (
     ModelCallComplete,
     ModelCallStarted,
     SignalBus,
+    SubagentCompleted,
+    SubagentStarted,
     ToolCallComplete,
     ToolCallStarted,
+)
+from lauren_ai._subagent import (
+    BriefCompiler,
+    LlmCompiler,
+    PassThroughCompiler,
+    ReturnMode,
+    SubagentConfig,
+    SubagentPool,
+    SubagentTool,
+    TemplateCompiler,
 )
 
 # ---------------------------------------------------------------------------

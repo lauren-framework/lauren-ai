@@ -252,6 +252,8 @@ class AgentRunner(Protocol):
         request: Any | None = None,
         execution_context: Any | None = None,
         run_id: str | None = None,
+        config_override: AgentConfig | None = None,
+        model_override: str | None = None,
     ) -> AgentResponse: ...
 
     async def run_stream(
@@ -264,6 +266,8 @@ class AgentRunner(Protocol):
         request: Any | None = None,
         execution_context: Any | None = None,
         run_id: str | None = None,
+        config_override: AgentConfig | None = None,
+        model_override: str | None = None,
     ) -> AsyncIterator[CompletionChunk]: ...
 
     async def approve_tool(self, agent_run_id: str, tool_use_id: str) -> None: ...
@@ -388,6 +392,8 @@ class AgentRunnerBase(AgentRunner):
         run_id: str | None = None,
         conversation_store: Any | None = None,
         memory: Any | None = None,
+        config_override: AgentConfig | None = None,
+        model_override: str | None = None,
     ) -> AgentResponse:
         """Run an ``@agent()``-decorated instance through the agentic loop.
 
@@ -424,6 +430,13 @@ class AgentRunnerBase(AgentRunner):
             :class:`~lauren_ai._memory.ShortTermMemory` is constructed for
             this turn.
         :type memory: Any | None
+        :param config_override: Optional effective config for this specific
+            run. When provided, it replaces the agent's default runtime
+            config without mutating the decorated class metadata.
+        :type config_override: AgentConfig | None
+        :param model_override: Optional model override for this specific run.
+            When provided, it replaces the model configured on ``@agent()``.
+        :type model_override: str | None
         :return: The aggregated result of the agentic run.
         :rtype: AgentResponse
         :raises AgentConfigError: When *agent* is not decorated with
@@ -434,7 +447,7 @@ class AgentRunnerBase(AgentRunner):
             crossed mid-run.
         """
         meta = self._get_meta(agent)
-        effective_config = self._merge_config(meta)
+        effective_config = self._merge_config(meta, config_override)
         agent_run_id = run_id or uuid.uuid4().hex
         agent_id = uuid.uuid4().hex
 
@@ -498,6 +511,7 @@ class AgentRunnerBase(AgentRunner):
             execution_context=execution_context,
             conversation_id=conversation_id,
             signals=self._signals,
+            runner=self,
             message_bus=self._message_bus,
         )
         if self._message_bus is not None:
@@ -507,7 +521,7 @@ class AgentRunnerBase(AgentRunner):
             )
 
         # Determine model to use
-        model = meta.model
+        model = model_override or meta.model
         if model is None:
             raise AgentConfigError(f"Agent '{ctx.agent_name}' has no configured model. Set one via @agent(...).")
         system_prompt = _build_system_prompt(meta.system or effective_config.system_prompt, memory)
@@ -725,6 +739,8 @@ class AgentRunnerBase(AgentRunner):
         run_id: str | None = None,
         conversation_store: Any | None = None,
         memory: Any | None = None,
+        config_override: AgentConfig | None = None,
+        model_override: str | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         """Run an agent with streaming output.
 
@@ -767,11 +783,17 @@ class AgentRunnerBase(AgentRunner):
         :param memory: Per-request override of the agent's memory instance.
             Wins over ``meta.memory``.
         :type memory: Any | None
+        :param config_override: Optional effective config for this specific
+            run. When provided, it replaces the agent's default runtime
+            config without mutating the decorated class metadata.
+        :type config_override: AgentConfig | None
+        :param model_override: Optional model override for this specific run.
+        :type model_override: str | None
         :return: An async iterator of completion chunks.
         :rtype: AsyncIterator[CompletionChunk]
         """
         meta = self._get_meta(agent)
-        effective_config = self._merge_config(meta)
+        effective_config = self._merge_config(meta, config_override)
         agent_run_id = run_id or uuid.uuid4().hex
         agent_id = uuid.uuid4().hex
 
@@ -830,6 +852,7 @@ class AgentRunnerBase(AgentRunner):
             execution_context=execution_context,
             conversation_id=conversation_id,
             signals=self._signals,
+            runner=self,
             message_bus=self._message_bus,
         )
         if self._message_bus is not None:
@@ -838,7 +861,7 @@ class AgentRunnerBase(AgentRunner):
                 session_id=conversation_id,
             )
 
-        model = meta.model
+        model = model_override or meta.model
         if model is None:
             raise AgentConfigError(f"Agent '{ctx.agent_name}' has no configured model. Set one via @agent(...).")
         system_prompt = meta.system or effective_config.system_prompt
@@ -1215,20 +1238,21 @@ class AgentRunnerBase(AgentRunner):
             )
         return meta
 
-    def _merge_config(self, meta: AgentMeta) -> AgentConfig:
-        """Merge agent-specific config with the application-level LLM config.
+    def _merge_config(self, meta: AgentMeta, override: AgentConfig | None = None) -> AgentConfig:
+        """Return the effective config for this run.
 
-        Agent config fields take precedence.  Currently the merge is trivial —
-        the per-agent config is used as-is.  Future versions may allow
-        module-level config to supply defaults that per-agent config can
-        override on a per-field basis.
+        ``@agent()`` stores the default config on :class:`AgentMeta`. Callers
+        may supply a per-run override to enforce tighter budgets, lower token
+        caps, or other runtime constraints without mutating the agent class.
 
         :param meta: The agent's ``AgentMeta``.
         :type meta: AgentMeta
+        :param override: Optional per-run config override.
+        :type override: AgentConfig | None
         :return: The effective ``AgentConfig`` for this run.
         :rtype: AgentConfig
         """
-        return meta.config
+        return override if override is not None else meta.config
 
     def _get_tool_schemas(self, meta: AgentMeta) -> list[Any]:
         """Build the list of tool schemas for the agent's attached tools.

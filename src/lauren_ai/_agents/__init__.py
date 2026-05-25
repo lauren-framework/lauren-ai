@@ -172,6 +172,8 @@ class AgentContext:
     :param signals: Signal bus for emitting lifecycle events.  ``None`` in
         environments where no :class:`SignalBus` is registered.
     :type signals: Any | None
+    :param runner: The active runner driving this agent invocation.
+    :type runner: Any | None
     :param message_bus: Optional inter-agent message bus wired by
         :class:`~lauren_ai._module.AgentModule`.
     :type message_bus: AgentMessageBus | None
@@ -188,6 +190,7 @@ class AgentContext:
     execution_context: Any | None = None  # lauren ExecutionContext, or None
     conversation_id: str | None = None
     signals: Any | None = None
+    runner: Any | None = None
     message_bus: AgentMessageBus | None = None
 
     @property

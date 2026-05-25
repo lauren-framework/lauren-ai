@@ -144,6 +144,13 @@ class ToolContext:
             return None
         return getattr(self.agent_context, "message_bus", None)
 
+    @property
+    def runner(self) -> Any | None:
+        """Return the active runner driving the current agent turn, if any."""
+        if self.agent_context is None:
+            return None
+        return getattr(self.agent_context, "runner", None)
+
 
 # ---------------------------------------------------------------------------
 # Context extraction helper

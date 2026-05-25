@@ -42,6 +42,8 @@ __all__ = [
     "EmbeddingGenerated",
     "AgentMessageSent",
     "AgentMessageRequestCompleted",
+    "SubagentStarted",
+    "SubagentCompleted",
     # Bus
     "SignalBus",
 ]
@@ -268,6 +270,30 @@ class AgentRunComplete(LifecycleEvent):  # type: ignore[misc]
     total_usage: Any = None  # TokenUsage
     total_cost_usd: float = 0.0
     stop_reason: str = "unknown"
+
+
+@dataclass
+class SubagentStarted(LifecycleEvent):  # type: ignore[misc]
+    """Emitted when a subagent tool starts an isolated child-agent run."""
+
+    parent_agent_name: str = ""
+    subagent_name: str = ""
+    parent_run_id: str = ""
+    conversation_id: str | None = None
+    brief_length_chars: int = 0
+
+
+@dataclass
+class SubagentCompleted(LifecycleEvent):  # type: ignore[misc]
+    """Emitted when a subagent tool completes, whether successful or not."""
+
+    parent_agent_name: str = ""
+    subagent_name: str = ""
+    parent_run_id: str = ""
+    conversation_id: str | None = None
+    elapsed_ms: float = 0.0
+    success: bool = True
+    error: str | None = None
 
 
 # ---------------------------------------------------------------------------
