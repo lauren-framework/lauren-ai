@@ -87,9 +87,7 @@ class _SpyGuardrail:
         if self._raise:
             raise RuntimeError("spy guardrail error (test)")
         if self._action == "block":
-            return GuardrailDecision(
-                action="block", violation="blocked!", guardrail_name="SpyGuardrail"
-            )
+            return GuardrailDecision(action="block", violation="blocked!", guardrail_name="SpyGuardrail")
         if self._action == "modify":
             return GuardrailDecision(
                 action="modify",
@@ -852,9 +850,7 @@ class TestRunStreamNoGuardrails:
         # Use proper ToolCallDelta chunks so the streaming runner can see the tool call
         mock.queue_stream(
             [
-                CompletionChunk(
-                    tool_call_delta=ToolCallDelta(tool_use_id="t1", name="ping", input_delta="{}")
-                ),
+                CompletionChunk(tool_call_delta=ToolCallDelta(tool_use_id="t1", name="ping", input_delta="{}")),
                 CompletionChunk(
                     stop_reason="tool_use",
                     usage=TokenUsage(input_tokens=5, output_tokens=5),
@@ -910,9 +906,7 @@ class TestRunStreamNoGuardrails:
         chunks_with_thinking = [
             CompletionChunk(thinking_delta="Let me think..."),
             CompletionChunk(delta="Answer"),
-            CompletionChunk(
-                stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=5)
-            ),
+            CompletionChunk(stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=5)),
         ]
         mock.queue_stream(chunks_with_thinking)
 
@@ -1339,9 +1333,7 @@ class TestRunStreamOutputGuardrails:
             [
                 CompletionChunk(delta="some text"),
                 CompletionChunk(
-                    tool_call_delta=ToolCallDelta(
-                        tool_use_id="t1", name="should_not_run", input_delta='{"msg":"test"}'
-                    )
+                    tool_call_delta=ToolCallDelta(tool_use_id="t1", name="should_not_run", input_delta='{"msg":"test"}')
                 ),
                 CompletionChunk(
                     stop_reason="tool_use",

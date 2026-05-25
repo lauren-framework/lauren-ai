@@ -23,9 +23,7 @@ from lauren_ai.testing import TestClient
 # ---------------------------------------------------------------------------
 
 
-def _c(
-    text, *, n=1, stop="end_turn", model="claude-sonnet-4-6", input_tokens=100, output_tokens=50
-):
+def _c(text, *, n=1, stop="end_turn", model="claude-sonnet-4-6", input_tokens=100, output_tokens=50):
     return Completion(
         id=f"c{n}",
         model=model,

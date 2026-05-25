@@ -140,9 +140,7 @@ class Step:
             if inspect.iscoroutinefunction(self._fn):
                 output = await self._fn(context, **self._kwargs)
             else:
-                output = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: self._fn(context, **self._kwargs)
-                )
+                output = await asyncio.get_event_loop().run_in_executor(None, lambda: self._fn(context, **self._kwargs))
             return StepResult(
                 name=self.name,
                 output=output,
@@ -194,9 +192,7 @@ class Parallel:
         for s, r in zip(self._steps, results, strict=False):
             if isinstance(r, BaseException):
                 error = r if isinstance(r, Exception) else RuntimeError(str(r))
-                step_results.append(
-                    StepResult(name=getattr(s, "name", "?"), output=None, error=error)
-                )
+                step_results.append(StepResult(name=getattr(s, "name", "?"), output=None, error=error))
             else:
                 step_results.append(cast(StepResult, r))
         return StepResult(

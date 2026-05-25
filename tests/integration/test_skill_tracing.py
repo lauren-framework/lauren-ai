@@ -89,9 +89,7 @@ def _completion_custom_tokens(input_t: int, output_t: int) -> Completion:
     )
 
 
-def _make_client(
-    *responses: str, bus: SignalBus | None = None
-) -> tuple[AgentTestClient, SignalBus]:
+def _make_client(*responses: str, bus: SignalBus | None = None) -> tuple[AgentTestClient, SignalBus]:
     """Return (TestClient, SignalBus) with queued responses."""
     if bus is None:
         bus = SignalBus()

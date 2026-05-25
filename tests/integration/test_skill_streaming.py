@@ -87,9 +87,7 @@ class TestStreamBasic:
                 CompletionChunk(delta=""),
                 CompletionChunk(delta="real"),
                 CompletionChunk(delta=""),
-                CompletionChunk(
-                    stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=1)
-                ),
+                CompletionChunk(stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=1)),
             ]
         )
         accumulated = ""
@@ -152,11 +150,7 @@ class TestStreamAccumulation:
     async def test_stream_large_content_accumulates_fully(self):
         words = [f"word{i}" for i in range(20)]
         chunks_list = [CompletionChunk(delta=w + " ") for w in words]
-        chunks_list.append(
-            CompletionChunk(
-                stop_reason="end_turn", usage=TokenUsage(input_tokens=10, output_tokens=20)
-            )
-        )
+        chunks_list.append(CompletionChunk(stop_reason="end_turn", usage=TokenUsage(input_tokens=10, output_tokens=20)))
         client = TestClient(StreamAgent())
         client.mock.queue_stream(chunks_list)
         full_text = ""
@@ -172,9 +166,7 @@ class TestStreamAccumulation:
             [
                 CompletionChunk(thinking_delta="Let me think..."),
                 CompletionChunk(delta="Answer"),
-                CompletionChunk(
-                    stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=5)
-                ),
+                CompletionChunk(stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=5)),
             ]
         )
         thinking_deltas = []

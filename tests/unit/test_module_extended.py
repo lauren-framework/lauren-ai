@@ -629,8 +629,7 @@ class TestAgentModule:
         exported = cls.__lauren_module__.exports
         assert AgentRunner not in exported
         assert any(
-            isinstance(e, type) and issubclass(e, AgentRunnerBase) and e is not AgentRunnerBase
-            for e in exported
+            isinstance(e, type) and issubclass(e, AgentRunnerBase) and e is not AgentRunnerBase for e in exported
         )
 
     def test_runner_param_exported_under_subclass_token(self):
@@ -662,8 +661,7 @@ class TestAgentModule:
         exported = cls.__lauren_module__.exports
         assert AgentRunner not in exported
         assert any(
-            isinstance(e, type) and issubclass(e, AgentRunnerBase) and e is not AgentRunnerBase
-            for e in exported
+            isinstance(e, type) and issubclass(e, AgentRunnerBase) and e is not AgentRunnerBase for e in exported
         )
 
     def test_injects_adds_extra_providers(self):
@@ -680,8 +678,7 @@ class TestAgentModule:
         cls = AgentModule.for_root(agents=[D], injects=[ExtraService])
         # injects= classes are providers, not exports
         provider_tokens = [
-            getattr(p, "provide", p) if hasattr(p, "provide") else p
-            for p in cls.__lauren_module__.providers
+            getattr(p, "provide", p) if hasattr(p, "provide") else p for p in cls.__lauren_module__.providers
         ]
         assert ExtraService in provider_tokens or ExtraService in cls.__lauren_module__.providers
         assert ExtraService not in cls.__lauren_module__.exports
@@ -773,9 +770,7 @@ class TestAgentModuleGenericAliasTools:
         mod_b = AgentModule.for_root(agents=[_AgentB], tools=[FlexTool[MarkerB]])
 
         def _alias_tokens(mod):
-            return {
-                p.provide for p in mod.__lauren_module__.providers if isinstance(p, CustomProvider)
-            }
+            return {p.provide for p in mod.__lauren_module__.providers if isinstance(p, CustomProvider)}
 
         tokens_a = _alias_tokens(mod_a)
         tokens_b = _alias_tokens(mod_b)

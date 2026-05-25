@@ -12,9 +12,7 @@ and edge cases.
 
 
 class RecursiveCharacterSplitter:
-    def __init__(
-        self, chunk_size: int = 1000, chunk_overlap: int = 200, separators: list[str] | None = None
-    ):
+    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200, separators: list[str] | None = None):
         self._chunk_size = chunk_size
         self._chunk_overlap = chunk_overlap
         self._separators = separators or ["\n\n", "\n", ". ", " ", ""]

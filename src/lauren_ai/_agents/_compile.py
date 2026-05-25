@@ -111,8 +111,7 @@ def _validate_agent_hooks(cls: type) -> None:
 
         if not callable(hook):
             raise AgentConfigError(
-                f"Agent {cls.__name__!r}: lifecycle hook '{hook_name}' must be "
-                f"a callable, got {type(hook)!r}.",
+                f"Agent {cls.__name__!r}: lifecycle hook '{hook_name}' must be a callable, got {type(hook)!r}.",
                 agent_class=cls,
             )
 
@@ -143,9 +142,7 @@ def _validate_agent_hooks(cls: type) -> None:
                 f"Agent {cls.__name__!r}: lifecycle hook '{hook_name}' must "
                 f"accept between {min_params} and {max_params} positional "
                 f"parameter(s) (excluding 'self'); got {n}.  "
-                f"Expected signature: {hook_name}(self, "
-                + _expected_hook_signature(hook_name)
-                + ")",
+                f"Expected signature: {hook_name}(self, " + _expected_hook_signature(hook_name) + ")",
                 agent_class=cls,
             )
 
@@ -205,14 +202,12 @@ def validate_tool(tool_func_or_cls: Any) -> ToolMeta:
         run_method = getattr(tool_func_or_cls, "run", None)
         if run_method is None:
             raise ToolConfigError(
-                f"Class-form tool {tool_func_or_cls.__name__!r} must define "
-                "a 'run()' method as its entry point.",
+                f"Class-form tool {tool_func_or_cls.__name__!r} must define a 'run()' method as its entry point.",
                 tool_name=tool_name,
             )
         if not callable(run_method):
             raise ToolConfigError(
-                f"Class-form tool {tool_func_or_cls.__name__!r}: 'run' must be "
-                f"callable, got {type(run_method)!r}.",
+                f"Class-form tool {tool_func_or_cls.__name__!r}: 'run' must be callable, got {type(run_method)!r}.",
                 tool_name=tool_name,
             )
         entry = run_method

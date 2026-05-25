@@ -35,6 +35,7 @@ from lauren_ai._exceptions import (
     AgentConfigError,
 )
 from lauren_ai._memory import ShortTermMemory
+from lauren_ai._messaging import AgentMessageBus
 from lauren_ai._tools import TOOL_METADATA, ToolContext, ToolResult
 from lauren_ai._tools._executor import CacheBackend, ToolExecutor
 from lauren_ai._tools._executor import ToolCall as ExecutorToolCall
@@ -103,9 +104,7 @@ async def _summarize_memory(
     # Format the turns into a readable transcript for the summarisation prompt.
     transcript_parts: list[str] = []
     for msg in to_compress:
-        role = (
-            msg.get("role", "unknown") if isinstance(msg, dict) else getattr(msg, "role", "unknown")
-        )
+        role = msg.get("role", "unknown") if isinstance(msg, dict) else getattr(msg, "role", "unknown")
         content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
         if isinstance(content, list):
             # Extract text portions from structured content blocks
@@ -269,9 +268,7 @@ class AgentRunner(Protocol):
 
     async def approve_tool(self, agent_run_id: str, tool_use_id: str) -> None: ...
 
-    async def reject_tool(
-        self, agent_run_id: str, tool_use_id: str, *, reason: str = ""
-    ) -> None: ...
+    async def reject_tool(self, agent_run_id: str, tool_use_id: str, *, reason: str = "") -> None: ...
 
 
 # Attach ``__class_getitem__`` after the Protocol body so it doesn't appear in
@@ -361,9 +358,11 @@ class AgentRunnerBase(AgentRunner):
         signals: Any | None = None,
         cache_backend: CacheBackend | None = None,
         global_hooks: list[Any] | None = None,
+        message_bus: AgentMessageBus | None = None,
     ) -> None:
         self._transport = transport
         self._signals = signals
+        self._message_bus = message_bus
         self._executor = ToolExecutor(
             tools={},
             cache_backend=cache_backend,
@@ -444,9 +443,7 @@ class AgentRunnerBase(AgentRunner):
         # so two agents in the same module never share state by default.
         # Use explicit ``is None`` checks — ShortTermMemory has ``__len__``
         # so an empty memory is falsy under ``or``.
-        effective_store = (
-            conversation_store if conversation_store is not None else meta.conversation_store
-        )
+        effective_store = conversation_store if conversation_store is not None else meta.conversation_store
         if memory is None:
             memory = (
                 meta.memory
@@ -499,15 +496,20 @@ class AgentRunnerBase(AgentRunner):
             metadata=dict(metadata or {}),
             request=request,
             execution_context=execution_context,
+            conversation_id=conversation_id,
             signals=self._signals,
+            message_bus=self._message_bus,
         )
+        if self._message_bus is not None:
+            await self._message_bus.register_agent(
+                ctx.agent_name,
+                session_id=conversation_id,
+            )
 
         # Determine model to use
         model = meta.model
         if model is None:
-            raise AgentConfigError(
-                f"Agent '{ctx.agent_name}' has no configured model. Set one via @agent(...)."
-            )
+            raise AgentConfigError(f"Agent '{ctx.agent_name}' has no configured model. Set one via @agent(...).")
         system_prompt = _build_system_prompt(meta.system or effective_config.system_prompt, memory)
 
         # Gather tool schemas for attached tools
@@ -545,9 +547,7 @@ class AgentRunnerBase(AgentRunner):
                         model=effective_config.summary_model or model,
                     )
                     # Rebuild system prompt with new summary
-                    system_prompt = _build_system_prompt(
-                        meta.system or effective_config.system_prompt, memory
-                    )
+                    system_prompt = _build_system_prompt(meta.system or effective_config.system_prompt, memory)
 
                 messages = memory.messages()
 
@@ -587,13 +587,9 @@ class AgentRunnerBase(AgentRunner):
                 # ── Output guardrails ─────────────────────────────────────
                 if _output_guards and completion.content:
                     try:
-                        _out_decision = await _run_output_guardrails(
-                            _output_guards, completion.content, meta.name
-                        )
+                        _out_decision = await _run_output_guardrails(_output_guards, completion.content, meta.name)
                     except Exception as _exc:  # noqa: BLE001
-                        logger.warning(
-                            "lauren_ai: output guardrail check failed — failing open: %s", _exc
-                        )
+                        logger.warning("lauren_ai: output guardrail check failed — failing open: %s", _exc)
                         _out_decision = None
                     if _out_decision is not None and _out_decision.action != "pass":
                         _override = (
@@ -644,10 +640,7 @@ class AgentRunnerBase(AgentRunner):
                             agent_class=ctx.agent_class,
                         )
 
-                if (
-                    completion.stop_reason == "end_turn"
-                    or completion.stop_reason == "stop_sequence"
-                ):
+                if completion.stop_reason == "end_turn" or completion.stop_reason == "stop_sequence":
                     stop_reason = "end_turn"
                     break
 
@@ -785,9 +778,7 @@ class AgentRunnerBase(AgentRunner):
         # Resolve per-run state from AgentMeta with per-request overrides.
         # Use explicit ``is None`` checks — ShortTermMemory has ``__len__``
         # so an empty memory is falsy under ``or``.
-        effective_store = (
-            conversation_store if conversation_store is not None else meta.conversation_store
-        )
+        effective_store = conversation_store if conversation_store is not None else meta.conversation_store
         if memory is None:
             memory = (
                 meta.memory
@@ -803,9 +794,7 @@ class AgentRunnerBase(AgentRunner):
         _stream_input_guards = _get_input_guardrails(agent)
         if _stream_input_guards:
             try:
-                _inp_decision = await _run_input_guardrails(
-                    _stream_input_guards, message, meta.name
-                )
+                _inp_decision = await _run_input_guardrails(_stream_input_guards, message, meta.name)
             except Exception as _exc:  # noqa: BLE001
                 logger.warning("lauren_ai: input guardrail check failed — failing open: %s", _exc)
                 _inp_decision = None
@@ -839,14 +828,19 @@ class AgentRunnerBase(AgentRunner):
             metadata=dict(metadata or {}),
             request=request,
             execution_context=execution_context,
+            conversation_id=conversation_id,
             signals=self._signals,
+            message_bus=self._message_bus,
         )
+        if self._message_bus is not None:
+            await self._message_bus.register_agent(
+                ctx.agent_name,
+                session_id=conversation_id,
+            )
 
         model = meta.model
         if model is None:
-            raise AgentConfigError(
-                f"Agent '{ctx.agent_name}' has no configured model. Set one via @agent(...)."
-            )
+            raise AgentConfigError(f"Agent '{ctx.agent_name}' has no configured model. Set one via @agent(...).")
         system_prompt = meta.system or effective_config.system_prompt
         tool_schemas = self._get_tool_schemas(meta)
 
@@ -970,9 +964,7 @@ class AgentRunnerBase(AgentRunner):
         # already built it once; rebuild here in case memory was loaded from
         # a prior conversation store).
         meta_for_stream = self._get_meta(agent)
-        system_prompt = _build_system_prompt(
-            meta_for_stream.system or effective_config.system_prompt, memory
-        )
+        system_prompt = _build_system_prompt(meta_for_stream.system or effective_config.system_prompt, memory)
 
         # Pre-resolve static loop flags — these are determined before the first
         # turn and never change mid-run, so there is no point re-evaluating
@@ -1057,9 +1049,7 @@ class AgentRunnerBase(AgentRunner):
                             ctx.agent_name,
                         )
                     except Exception as _exc:  # noqa: BLE001
-                        logger.warning(
-                            "lauren_ai: output guardrail check failed — failing open: %s", _exc
-                        )
+                        logger.warning("lauren_ai: output guardrail check failed — failing open: %s", _exc)
                         _out_decision = None
                     if _out_decision is not None and _out_decision.action != "pass":
                         _override = (

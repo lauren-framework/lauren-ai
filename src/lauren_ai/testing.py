@@ -176,6 +176,7 @@ def _build_runner_for_agent(
     signals: Any = None,
     cache_backend: Any = None,
     knowledge_tool_names: set[str] | None = None,
+    message_bus: Any = None,
 ) -> Any:
     """Build an :class:`~lauren_ai._agents._runner.AgentRunnerBase` for *agent_instance*.
 
@@ -206,6 +207,7 @@ def _build_runner_for_agent(
         transport=mock_transport,
         signals=signals,
         cache_backend=cache_backend,
+        message_bus=message_bus,
     )
 
 
@@ -275,6 +277,7 @@ class TestClient:
         runner: Any = None,
         cache_backend: Any = None,
         knowledge_tool_names: set[str] | None = None,
+        message_bus: Any = None,
     ) -> None:
         from lauren_ai._transport._mock import MockTransport  # noqa: PLC0415
 
@@ -286,6 +289,7 @@ class TestClient:
             signals=signals,
             cache_backend=cache_backend,
             knowledge_tool_names=knowledge_tool_names,
+            message_bus=message_bus,
         )
 
     # ------------------------------------------------------------------

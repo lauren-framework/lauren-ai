@@ -91,9 +91,7 @@ class PydanticOutputParser(Generic[T]):
             schema = self._model.model_json_schema()  # type: ignore[attr-defined]
             import json as _json
 
-            return (
-                f"Respond with a JSON object matching this schema:\n{_json.dumps(schema, indent=2)}"
-            )
+            return f"Respond with a JSON object matching this schema:\n{_json.dumps(schema, indent=2)}"
         except Exception:
             return f"Respond with a JSON object that can be parsed as {self._model.__name__}."
 

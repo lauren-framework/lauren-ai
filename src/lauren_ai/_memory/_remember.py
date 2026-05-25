@@ -130,8 +130,6 @@ def build_memory_context(facts: list[Any]) -> str:
         return ""
     lines = ["## What I remember about you:"]
     for f in facts:
-        confidence_label = (
-            "high" if f.confidence >= 0.8 else "medium" if f.confidence >= 0.5 else "low"
-        )
+        confidence_label = "high" if f.confidence >= 0.8 else "medium" if f.confidence >= 0.5 else "low"
         lines.append(f"- {f.content} (confidence: {confidence_label})")
     return "\n".join(lines)

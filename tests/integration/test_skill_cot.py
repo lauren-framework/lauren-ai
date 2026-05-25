@@ -81,8 +81,7 @@ class TestCotSuffix:
 class TestExtractCotAnswer:
     def test_extracts_reasoning_and_answer(self):
         response = (
-            "<reasoning>\nStep 1: Consider the problem.\nStep 2: Apply logic.\n</reasoning>\n"
-            "<answer>\n42\n</answer>"
+            "<reasoning>\nStep 1: Consider the problem.\nStep 2: Apply logic.\n</reasoning>\n<answer>\n42\n</answer>"
         )
         reasoning, answer = extract_cot_answer(response)
         assert "Step 1" in reasoning
@@ -110,9 +109,7 @@ class TestExtractCotAnswer:
         assert answer == "Final"
 
     def test_missing_answer_tag_returns_full_response(self):
-        reasoning, answer = extract_cot_answer(
-            "<reasoning>Thought about it.</reasoning>\nJust the answer text."
-        )
+        reasoning, answer = extract_cot_answer("<reasoning>Thought about it.</reasoning>\nJust the answer text.")
         assert "Thought about it." in reasoning
         assert "Just the answer text." in answer
 

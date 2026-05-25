@@ -137,6 +137,13 @@ class ToolContext:
             return self.agent_context.get_metadata(key, default)
         return default
 
+    @property
+    def message_bus(self) -> Any | None:
+        """Return the current run's message bus, if one is wired."""
+        if self.agent_context is None:
+            return None
+        return getattr(self.agent_context, "message_bus", None)
+
 
 # ---------------------------------------------------------------------------
 # Context extraction helper
@@ -416,11 +423,7 @@ def _add_to_tool_map(
     :raises ValueError: When the object has no ``TOOL_META`` or a name
         collision is detected.
     """
-    _cls = (
-        tool_or_cls
-        if inspect.isclass(tool_or_cls)
-        else (type(instance) if instance is not None else None)
-    )
+    _cls = tool_or_cls if inspect.isclass(tool_or_cls) else (type(instance) if instance is not None else None)
     if _cls is not None and TOOL_META not in _cls.__dict__:
         _base = next((b for b in _cls.__mro__[1:] if TOOL_META in b.__dict__), None)
         if _base is not None:
@@ -720,9 +723,7 @@ def use_hooks(*hook_classes: type) -> Callable[[_T], _T]:
 
     for hcls in hook_classes:
         if not (inspect.isclass(hcls)):
-            raise DecoratorUsageError(
-                f"@use_hooks: {hcls!r} is not a class. Pass ToolHook subclasses, not instances."
-            )
+            raise DecoratorUsageError(f"@use_hooks: {hcls!r} is not a class. Pass ToolHook subclasses, not instances.")
 
     def decorator(fn_or_cls: _T) -> _T:
         # Validate hook classes are ToolHook subclasses (imported lazily to
@@ -732,9 +733,7 @@ def use_hooks(*hook_classes: type) -> Callable[[_T], _T]:
 
             for hcls in hook_classes:
                 if not issubclass(hcls, _ToolHook):
-                    raise DecoratorUsageError(
-                        f"@use_hooks: {hcls.__name__!r} must be a subclass of ToolHook."
-                    )
+                    raise DecoratorUsageError(f"@use_hooks: {hcls.__name__!r} must be a subclass of ToolHook.")
         except ImportError:
             pass
 

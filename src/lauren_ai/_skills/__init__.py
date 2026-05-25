@@ -106,9 +106,7 @@ async def CodeExecutionTool(  # noqa: N802
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout_b, stderr_b = await asyncio.wait_for(
-                proc.communicate(), timeout=effective_timeout
-            )
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=effective_timeout)
         except TimeoutError:
             proc.kill()
             return {

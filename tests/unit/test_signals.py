@@ -145,9 +145,7 @@ class TestSignalBus:
         assert model_calls == []  # cleared
 
         usage = TokenUsage(input_tokens=0, output_tokens=0)
-        await bus.emit(
-            AgentRunComplete(turns=1, total_usage=usage, total_cost_usd=0.0, stop_reason="end_turn")
-        )
+        await bus.emit(AgentRunComplete(turns=1, total_usage=usage, total_cost_usd=0.0, stop_reason="end_turn"))
         assert len(run_calls) == 1  # untouched
 
     @pytest.mark.asyncio

@@ -214,8 +214,7 @@ class Completion(ExtractionMarker):
 
         except Exception as exc:  # noqa: BLE001
             logger.debug(
-                "lauren_ai.Completion.extract: structured output failed, "
-                "falling back to raw content: %s",
+                "lauren_ai.Completion.extract: structured output failed, falling back to raw content: %s",
                 exc,
             )
             # Last resort: return raw completion content

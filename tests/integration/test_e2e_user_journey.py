@@ -280,15 +280,11 @@ class TestFunctionFormTools:
         """Agent calls two tools in separate turns then finishes."""
         _, mock = LLMConfig.for_testing()
         mock.queue_tool_use("get_weather", {"city": "New York"})
-        mock.queue_tool_use(
-            "convert_currency", {"amount": 100.0, "from_ccy": "USD", "to_ccy": "EUR"}
-        )
+        mock.queue_tool_use("convert_currency", {"amount": 100.0, "from_ccy": "USD", "to_ccy": "EUR"})
         mock.queue_response(_completion("NYC sunny; €92 for $100.", id="c3"))
 
         app = self._make_app(mock)
-        r = TestClient(app).post(
-            "/travel/chat", json={"message": "NYC weather and 100 USD to EUR?"}
-        )
+        r = TestClient(app).post("/travel/chat", json={"message": "NYC weather and 100 USD to EUR?"})
 
         assert r.status_code == 200
         data = r.json()
@@ -860,9 +856,7 @@ class TestSSEStreaming:
         mock.queue_stream(
             [
                 CompletionChunk(
-                    tool_call_delta=ToolCallDelta(
-                        tool_use_id="tc1", name="lookup_tool", input_delta='{"q":"x"}'
-                    )
+                    tool_call_delta=ToolCallDelta(tool_use_id="tc1", name="lookup_tool", input_delta='{"q":"x"}')
                 ),
                 CompletionChunk(
                     delta="",
@@ -927,9 +921,7 @@ class TestSSEStreaming:
         mock.queue_stream(
             [
                 CompletionChunk(
-                    tool_call_delta=ToolCallDelta(
-                        tool_use_id="tc1", name="identity_tool", input_delta="{}"
-                    )
+                    tool_call_delta=ToolCallDelta(tool_use_id="tc1", name="identity_tool", input_delta="{}")
                 ),
                 CompletionChunk(
                     delta="",
@@ -973,9 +965,7 @@ class TestSSEStreaming:
             agent_inst = loop.run_until_complete(app.container.resolve(IdentityAgent))
 
             async def drain():
-                async for _ in await runner.run_stream(
-                    agent_inst, "Who am I?", execution_context=fake_ctx
-                ):
+                async for _ in await runner.run_stream(agent_inst, "Who am I?", execution_context=fake_ctx):
                     pass
 
             loop.run_until_complete(drain())

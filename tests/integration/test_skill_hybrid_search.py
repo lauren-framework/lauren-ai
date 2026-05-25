@@ -44,11 +44,7 @@ class HybridSearch:
         score = 0.0
         for term in query_terms:
             tf = term_freq.get(term, 0)
-            idf = math.log(
-                (len(self._docs) + 1)
-                / (sum(1 for d in self._docs.values() if term in d.lower()) + 1)
-                + 1
-            )
+            idf = math.log((len(self._docs) + 1) / (sum(1 for d in self._docs.values() if term in d.lower()) + 1) + 1)
             score += idf * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * doc_len / avg_len))
         return score
 
@@ -150,9 +146,7 @@ class TestCosineSimilarity:
 class TestBM25Scoring:
     def test_exact_keyword_match_has_positive_score(self):
         hs = HybridSearch()
-        hs.index(
-            "d1", "Python is a programming language", _embed("Python is a programming language")
-        )
+        hs.index("d1", "Python is a programming language", _embed("Python is a programming language"))
         hs.index("d2", "cats are fluffy animals", _embed("cats are fluffy animals"))
         match_score = hs._bm25_score("python", "Python is a programming language")
         nomatch_score = hs._bm25_score("python", "cats are fluffy animals")
@@ -201,9 +195,7 @@ class TestHybridSearchResults:
     def test_search_results_sorted_descending_by_score(self):
         hs = HybridSearch()
         hs.index("py", "Python programming language", _embed("Python programming language"))
-        hs.index(
-            "cat", "cats are fluffy animals that meow", _embed("cats are fluffy animals that meow")
-        )
+        hs.index("cat", "cats are fluffy animals that meow", _embed("cats are fluffy animals that meow"))
         results = hs.search("python programming", _embed("Python programming"), top_k=2, alpha=0.5)
         if len(results) >= 2:
             assert results[0]["score"] >= results[1]["score"]
@@ -238,7 +230,5 @@ class TestHybridSearchResults:
         )
         hs.index("animals", "Cats are fluffy animals that meow", _embed("cats animals"))
         hs.index("web", "JavaScript is used for web development", _embed("javascript web"))
-        results = hs.search(
-            "python programming language", _embed("Python programming"), top_k=3, alpha=0.5
-        )
+        results = hs.search("python programming language", _embed("Python programming"), top_k=3, alpha=0.5)
         assert results[0]["id"] == "programming"

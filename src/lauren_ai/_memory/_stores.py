@@ -83,8 +83,7 @@ class InMemoryConversationStore:
         """
         if not conversation_id:
             logger.warning(
-                "lauren_ai.InMemoryConversationStore: save called with empty "
-                "conversation_id — storing under empty key"
+                "lauren_ai.InMemoryConversationStore: save called with empty conversation_id — storing under empty key"
             )
         # Normalise legacy plain-list format to dict so load() is consistent.
         if isinstance(snapshot, list):

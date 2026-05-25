@@ -68,11 +68,7 @@ class TestSystemPromptBuilder:
         assert instruction in system
 
     def test_add_constraints_formats_bullet_list(self):
-        system = (
-            SystemPromptBuilder()
-            .add_constraints("Never give stock picks", "Always mention risks")
-            .build()
-        )
+        system = SystemPromptBuilder().add_constraints("Never give stock picks", "Always mention risks").build()
         assert "- Never give stock picks" in system
         assert "- Always mention risks" in system
         assert "Constraints:" in system

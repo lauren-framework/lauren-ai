@@ -74,9 +74,7 @@ class TestKnowledgeBase:
     async def test_load_and_search(self):
         store = InMemoryVectorStore()
         kb = KnowledgeBase(store=store)
-        loader = TextLoader(
-            "Paris is the capital of France. Python is a programming language.", is_file=False
-        )
+        loader = TextLoader("Paris is the capital of France. Python is a programming language.", is_file=False)
         count = await kb.load(loader)
         assert count >= 1
 

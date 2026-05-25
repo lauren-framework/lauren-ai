@@ -28,9 +28,7 @@ from pathlib import Path
 try:
     import griffe
 except ImportError:
-    raise SystemExit(
-        "griffe is required.  Install it with:\n    pip install griffe\n"
-    ) from ImportError
+    raise SystemExit("griffe is required.  Install it with:\n    pip install griffe\n") from ImportError
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -68,8 +66,7 @@ PAGES: dict[str, list[str | tuple[str, str]]] = {
     ],
     "module.md": [
         (
-            "# Modules & Services\n\n"
-            "DI-wiring helpers for integrating `lauren-ai` into a Lauren application.",
+            "# Modules & Services\n\nDI-wiring helpers for integrating `lauren-ai` into a Lauren application.",
             "",
         ),
         "lauren_ai.LLMModule",
@@ -78,8 +75,7 @@ PAGES: dict[str, list[str | tuple[str, str]]] = {
     ],
     "config.md": [
         (
-            "# Configuration\n\n"
-            "Frozen dataclasses that configure the LLM provider and agent behaviour.",
+            "# Configuration\n\nFrozen dataclasses that configure the LLM provider and agent behaviour.",
             "",
         ),
         "lauren_ai.LLMConfig",
@@ -443,8 +439,7 @@ def _render_docstring(obj: griffe.Object) -> str:
                 rows.append(f"| {name} | {type_cell} | {desc} |")
             if rows:
                 parts.append(
-                    "**Parameters:**\n\n"
-                    "| Name | Type | Description |\n|---|---|---|\n" + "\n".join(rows) + "\n\n"
+                    "**Parameters:**\n\n| Name | Type | Description |\n|---|---|---|\n" + "\n".join(rows) + "\n\n"
                 )
 
         elif kind_name == "returns":
@@ -462,10 +457,7 @@ def _render_docstring(obj: griffe.Object) -> str:
                 desc = _clean_rst_inline(exc.description.strip()) if exc.description else ""
                 rows.append(f"| {exc_name} | {desc} |")
             if rows:
-                parts.append(
-                    "**Raises:**\n\n"
-                    "| Exception | Description |\n|---|---|\n" + "\n".join(rows) + "\n\n"
-                )
+                parts.append("**Raises:**\n\n| Exception | Description |\n|---|---|\n" + "\n".join(rows) + "\n\n")
 
         elif kind_name in ("examples", "example"):
             example_text = str(val).strip() if val else ""

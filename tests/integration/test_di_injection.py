@@ -102,9 +102,7 @@ class TestClassToolDIInjectionAtExecution:
         @module(imports=[LLMProvider, AIModule, PriceModule], controllers=[ShopController])
         class AppModule: ...
 
-        r = TestClient(LaurenFactory.create(AppModule)).post(
-            "/shop/chat", json={"message": "Price of widget?"}
-        )
+        r = TestClient(LaurenFactory.create(AppModule)).post("/shop/chat", json={"message": "Price of widget?"})
 
         assert r.status_code == 200
         assert r.json()["tool_calls"] == 1
@@ -176,9 +174,7 @@ class TestClassToolDIInjectionAtExecution:
         @module(imports=[LLMProvider, AIModule, ServiceModule], controllers=[ChainController])
         class AppModule: ...
 
-        r = TestClient(LaurenFactory.create(AppModule)).post(
-            "/chain/chat", json={"message": "Run chain."}
-        )
+        r = TestClient(LaurenFactory.create(AppModule)).post("/chain/chat", json={"message": "Run chain."})
 
         assert r.status_code == 200
         assert r.json()["tool_calls"] == 1
@@ -402,9 +398,7 @@ class TestClassToolDIInjectionAtExecution:
         @module(imports=[LLMProvider, AIModule, GreetModule], controllers=[GreetController])
         class AppModule: ...
 
-        r = TestClient(LaurenFactory.create(AppModule)).post(
-            "/greet/chat", json={"message": "Greet Alice."}
-        )
+        r = TestClient(LaurenFactory.create(AppModule)).post("/greet/chat", json={"message": "Greet Alice."})
 
         assert r.status_code == 200
         data = r.json()
@@ -565,9 +559,7 @@ class TestGenericAliasToolEndToEnd:
         @module(imports=[LLMProv, AIMod], controllers=[EchoController])
         class AppModule: ...
 
-        r = TestClient(LaurenFactory.create(AppModule)).post(
-            "/echo/chat", json={"message": "Say hello"}
-        )
+        r = TestClient(LaurenFactory.create(AppModule)).post("/echo/chat", json={"message": "Say hello"})
         assert r.status_code == 200
         assert called_with == ["hello"]
 
@@ -805,9 +797,7 @@ class TestSharedTools:
         @module(imports=[LLMProv, OwnerModule, BorrowerMod], controllers=[BorrowController])
         class AppModule: ...
 
-        r = TestClient(LaurenFactory.create(AppModule)).post(
-            "/borrow/chat", json={"message": "Say hello."}
-        )
+        r = TestClient(LaurenFactory.create(AppModule)).post("/borrow/chat", json={"message": "Say hello."})
 
         assert r.status_code == 200
         assert r.json()["content"] == "hello world"

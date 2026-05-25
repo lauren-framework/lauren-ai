@@ -94,8 +94,7 @@ def _build_transport(config: LLMConfig, override: Any = None) -> Any:
             return OpenAITransport(config)
         except ImportError as exc:
             raise AgentConfigError(
-                "OpenAI transport requires the 'openai' package.  "
-                "Install it with: pip install openai",
+                "OpenAI transport requires the 'openai' package.  Install it with: pip install openai",
                 cause=exc,
             ) from exc
 
@@ -106,8 +105,7 @@ def _build_transport(config: LLMConfig, override: Any = None) -> Any:
             return OllamaTransport(config)
         except ImportError as exc:
             raise AgentConfigError(
-                "Ollama transport requires the 'httpx' package.  "
-                "Install it with: pip install httpx",
+                "Ollama transport requires the 'httpx' package.  Install it with: pip install httpx",
                 cause=exc,
             ) from exc
 
@@ -118,14 +116,12 @@ def _build_transport(config: LLMConfig, override: Any = None) -> Any:
             return LiteLLMTransport(config)
         except ImportError as exc:
             raise AgentConfigError(
-                "LiteLLM transport requires the 'litellm' package.  "
-                "Install it with: pip install litellm",
+                "LiteLLM transport requires the 'litellm' package.  Install it with: pip install litellm",
                 cause=exc,
             ) from exc
 
     raise AgentConfigError(
-        f"Unknown LLM provider: {config.provider!r}.  "
-        "Supported providers: 'anthropic', 'openai', 'ollama', 'litellm'."
+        f"Unknown LLM provider: {config.provider!r}.  Supported providers: 'anthropic', 'openai', 'ollama', 'litellm'."
     )
 
 
@@ -493,9 +489,7 @@ def _attach_agent_tools(
             # Support generic aliases like HandoffTo[AgentA]: look up TOOL_META on
             # the origin class, which is what _add_to_tool_map uses as the key.
             _origin = get_origin(tool_item)
-            _lookup = (
-                _origin if (_origin is not None and _std_inspect.isclass(_origin)) else tool_item
-            )
+            _lookup = _origin if (_origin is not None and _std_inspect.isclass(_origin)) else tool_item
             tm = getattr(_lookup, TOOL_META, None)
             if tm is not None and tm.name in full_tools:
                 agent_tools[tm.name] = full_tools[tm.name]
@@ -552,6 +546,7 @@ class AgentModule:
         tools: list[Any] | None = None,
         imports: Any | None = None,
         signals: Any | None = None,
+        message_bus: Any | None = None,
         config: AgentConfig | None = None,
         tool_cache: Any | None = None,
         knowledge: list[Any] | None = None,
@@ -581,6 +576,11 @@ class AgentModule:
             into the :class:`~lauren_ai._agents._runner.AgentRunner` so it emits
             ``ModelCallComplete`` / ``AgentRunComplete`` events.
         :type signals: Any | None
+        :param message_bus: Optional shared inter-agent message bus.  When
+            supplied, it is registered as a DI value provider, exported from
+            the module, threaded into the generated runner, and exposed on
+            :class:`~lauren_ai._agents.AgentContext` / :class:`~lauren_ai._tools.ToolContext`.
+        :type message_bus: Any | None
         :param config: Default :class:`~lauren_ai._config.AgentConfig`.
         :type config: AgentConfig | None
         :param tool_cache: Cache backend for tool result caching.
@@ -672,8 +672,7 @@ class AgentModule:
             _meta = getattr(_agent_cls, AGENT_META, None)
             if _meta is None:
                 raise AgentConfigError(
-                    f"AgentModule.for_root: {_agent_cls.__name__} has no "
-                    f"AgentMeta.  Decorate with @agent(...) first.",
+                    f"AgentModule.for_root: {_agent_cls.__name__} has no AgentMeta.  Decorate with @agent(...) first.",
                     agent_class=_agent_cls,
                 )
             _meta.runner_class = _runner_cls
@@ -689,6 +688,7 @@ class AgentModule:
 
         _captured_tool_cache = tool_cache
         _captured_signals = signals
+        _captured_message_bus = message_bus
 
         _fn_tools: list[Any] = []
         _class_tools: list[Any] = []
@@ -713,9 +713,7 @@ class AgentModule:
                 return  # deduplicate across shared + per-agent lists
             _seen_tool_names.add(meta.name)
             if _inspect.isclass(_lookup):
-                if (
-                    _lookup not in _shared_tools_set
-                ):  # owned by an imported module; skip re-registration
+                if _lookup not in _shared_tools_set:  # owned by an imported module; skip re-registration
                     _class_tools.append(tool_item)  # keep alias as DI token
             else:
                 _fn_tools.append(tool_item)
@@ -837,6 +835,12 @@ class AgentModule:
         providers: list[Any] = []
         exports: list[Any] = []
 
+        if _captured_message_bus is not None:
+            from lauren_ai._messaging import AgentMessageBus  # noqa: PLC0415
+
+            providers.append(use_value(provide=AgentMessageBus, value=_captured_message_bus))
+            exports.append(AgentMessageBus)
+
         # Knowledge-base loader injectables (one per KnowledgeSource with
         # ``loaders=``).  Their ``@post_construct`` hooks fire once at app
         # startup and populate each KB before the first request lands.
@@ -908,9 +912,7 @@ class AgentModule:
                 def _build_runner_with_classes(*args: Any) -> AgentRunner:
                     transport = args[0]
                     class_instances = args[1 : 1 + _num_class_tools]
-                    shared_instances = args[
-                        1 + _num_class_tools : 1 + _num_class_tools + _num_shared_tools
-                    ]
+                    shared_instances = args[1 + _num_class_tools : 1 + _num_class_tools + _num_shared_tools]
                     hook_instances = args[
                         1 + _num_class_tools + _num_shared_tools : 1
                         + _num_class_tools
@@ -947,13 +949,9 @@ class AgentModule:
                                 exc,
                             )
                     # Wire per-tool resolved hooks from the DI-resolved instances.
-                    _hook_by_cls: dict[type, Any] = dict(
-                        zip(_captured_all_hook_classes, hook_instances, strict=True)
-                    )
+                    _hook_by_cls: dict[type, Any] = dict(zip(_captured_all_hook_classes, hook_instances, strict=True))
                     for _tn, (_fc, _tm) in tools.items():
-                        _tm.resolved_hooks = tuple(
-                            _hook_by_cls[_hc] for _hc in _tm.hook_classes if _hc in _hook_by_cls
-                        )
+                        _tm.resolved_hooks = tuple(_hook_by_cls[_hc] for _hc in _tm.hook_classes if _hc in _hook_by_cls)
                     # Attach per-agent tool maps and resolve model fallback
                     # (runs once; runner is SINGLETON).
                     _attach_agent_tools(list(agents), tools, _captured_kb_tool_names)
@@ -962,15 +960,14 @@ class AgentModule:
                         if _am.model is None:
                             _am.model = cfg.model
                     _global_hook_instances = [
-                        _hook_by_cls[_hc]
-                        for _hc in _captured_global_hook_classes
-                        if _hc in _hook_by_cls
+                        _hook_by_cls[_hc] for _hc in _captured_global_hook_classes if _hc in _hook_by_cls
                     ]
                     return _runner_cls(
                         transport=transport,
                         signals=_captured_signals_ref,
                         cache_backend=_captured_tool_cache_ref,
                         global_hooks=_global_hook_instances,
+                        message_bus=_captured_message_bus,
                     )
 
                 _runner_provider = use_factory(
@@ -1004,9 +1001,7 @@ class AgentModule:
                 _captured_kb_tool_names_eager = frozenset(_kb_tool_names)
 
                 # Attach per-agent tool maps now (eager path — all fn tools resolved).
-                _attach_agent_tools(
-                    list(agents), _captured_eager_tools, _captured_kb_tool_names_eager
-                )
+                _attach_agent_tools(list(agents), _captured_eager_tools, _captured_kb_tool_names_eager)
                 _captured_agents = list(agents)
 
                 def _eager_factory(transport: Any, cfg: Any) -> Any:
@@ -1018,6 +1013,7 @@ class AgentModule:
                         transport=transport,
                         signals=_captured_signals_ref,
                         cache_backend=_captured_tool_cache_ref,
+                        message_bus=_captured_message_bus,
                     )
 
                 _runner_provider = use_factory(

@@ -45,6 +45,9 @@ __all__ = [
     "OutputParserError",
     "EvalError",
     "TracingError",
+    "MessageBusError",
+    "MessageBusTimeoutError",
+    "MessageValidationError",
 ]
 
 
@@ -357,10 +360,7 @@ class AgentBudgetExceededError(LaurenAIError):
 
     def __str__(self) -> str:
         agent_name = self.agent_class.__name__ if self.agent_class is not None else "unknown"
-        return (
-            f"Agent {agent_name!r} exceeded {self.budget_type} budget "
-            f"({self.used} / {self.limit}): {self.message}"
-        )
+        return f"Agent {agent_name!r} exceeded {self.budget_type} budget ({self.used} / {self.limit}): {self.message}"
 
 
 class AgentConfigError(LaurenAIError):
@@ -620,3 +620,40 @@ class TracingError(LaurenAIError):
     :param cause: The underlying exception.
     :type cause: BaseException | None
     """
+
+
+# ---------------------------------------------------------------------------
+# Messaging
+# ---------------------------------------------------------------------------
+
+
+class MessageBusError(LaurenAIError):
+    """Base class for inter-agent messaging failures."""
+
+
+class MessageBusTimeoutError(MessageBusError):
+    """Raised when a request/response exchange times out."""
+
+    def __init__(self, *, target: str, elapsed_ms: float) -> None:
+        super().__init__(f"No response from agent '{target}' within {elapsed_ms:.1f} ms")
+        self.target = target
+        self.elapsed_ms = elapsed_ms
+
+
+class MessageValidationError(MessageBusError):
+    """Raised when a message fails schema or serialisation validation."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        field_name: str | None = None,
+        cause: BaseException | None = None,
+    ) -> None:
+        super().__init__(message, cause=cause)
+        self.field_name = field_name
+
+    def __str__(self) -> str:
+        if self.field_name is None:
+            return self.message
+        return f"{self.message} (field={self.field_name!r})"

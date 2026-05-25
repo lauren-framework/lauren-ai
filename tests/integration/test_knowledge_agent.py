@@ -243,9 +243,7 @@ class TestKnowledgeAgentIntegration:
         DocsAgent.__lauren_ai_agent__.tools = tools
 
         mock.queue_tool_use("search_lauren_docs", {"query": "Lauren framework"})
-        mock.queue_response(
-            text_completion("Lauren is a Python web framework inspired by NestJS.", id="c2")
-        )
+        mock.queue_response(text_completion("Lauren is a Python web framework inspired by NestJS.", id="c2"))
 
         instance = DocsAgent()
         response = await runner.run(instance, "What is Lauren?")

@@ -236,11 +236,7 @@ class TestAgentConversationMemory:
                 conversation_store=override_store,
             )
         )
-        override_length = len(
-            (asyncio.run(override_store.load("s")) or {"messages": []}).get("messages", [])
-        )
-        meta_length = len(
-            (asyncio.run(meta_store.load("s")) or {"messages": []}).get("messages", [])
-        )
+        override_length = len((asyncio.run(override_store.load("s")) or {"messages": []}).get("messages", []))
+        meta_length = len((asyncio.run(meta_store.load("s")) or {"messages": []}).get("messages", []))
         assert override_length == 2
         assert meta_length == 0

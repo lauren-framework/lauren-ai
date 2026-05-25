@@ -159,17 +159,11 @@ def _message_to_openai(message: Any) -> list[dict[str, Any]]:
         content_parts: list[dict[str, Any]] = []
         tool_calls_list: list[dict[str, Any]] = []
         for block in regular_blocks:
-            block_type = (
-                block.get("type") if isinstance(block, dict) else getattr(block, "type", "")
-            )
+            block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", "")
             if block_type == "tool_use":
                 if isinstance(block, dict):
                     # ShortTermMemory stores tool_use blocks with an "id" key
-                    blk_id = (
-                        block.get("id")
-                        or block.get("tool_use_id")
-                        or f"call_{uuid.uuid4().hex[:16]}"
-                    )
+                    blk_id = block.get("id") or block.get("tool_use_id") or f"call_{uuid.uuid4().hex[:16]}"
                     blk_name = block.get("name", "")
                     blk_input = block.get("input", {})
                 else:
@@ -375,13 +369,9 @@ class OpenAITransport:
         if isinstance(exc, _openai.APIStatusError):
             code = status_code or 0
             if code in (429,):
-                return TransientTransportError(
-                    str(exc), status_code=code, provider="openai", cause=exc
-                )
+                return TransientTransportError(str(exc), status_code=code, provider="openai", cause=exc)
             if code >= 500:
-                return TransientTransportError(
-                    str(exc), status_code=code, provider="openai", cause=exc
-                )
+                return TransientTransportError(str(exc), status_code=code, provider="openai", cause=exc)
             if code in (401, 403):
                 return AuthTransportError(str(exc), status_code=code, provider="openai", cause=exc)
             return TransportError(str(exc), status_code=code, provider="openai", cause=exc)
@@ -765,9 +755,7 @@ class OpenAITransport:
             total += max(1, len(system) // 4)
         if tools:
             for t in tools:
-                total += max(
-                    1, (len(t.name) + len(t.description) + len(json.dumps(t.input_schema))) // 4
-                )
+                total += max(1, (len(t.name) + len(t.description) + len(json.dumps(t.input_schema))) // 4)
         for msg in messages:
             if isinstance(msg.content, str):
                 total += max(1, len(msg.content) // 4)

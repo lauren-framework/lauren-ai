@@ -130,9 +130,7 @@ class TestKnowledgeBaseSearch:
             asyncio.run(kb.load(TextLoader(text, is_file=False)))
         results = asyncio.run(kb.search("programming language", top_k=3))
         assert len(results) >= 1
-        assert any(
-            word in results[0].content.lower() for word in ["python", "javascript", "language"]
-        )
+        assert any(word in results[0].content.lower() for word in ["python", "javascript", "language"])
 
     def test_search_returns_metadata(self):
         kb = KnowledgeBase(store=InMemoryVectorStore())

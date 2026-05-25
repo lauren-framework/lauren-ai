@@ -84,9 +84,7 @@ class ToolPendingApprovalSignal(Exception):
         self.tool_name = tool_name
         self.tool_use_id = tool_use_id
         self.tool_input = tool_input
-        super().__init__(
-            f"Tool '{tool_name}' (id={tool_use_id}) requires human approval before execution."
-        )
+        super().__init__(f"Tool '{tool_name}' (id={tool_use_id}) requires human approval before execution.")
 
 
 # ---------------------------------------------------------------------------
@@ -304,12 +302,9 @@ class ToolExecutor:
 
         entry = (tool_map if tool_map is not None else self._tools).get(name)
         if entry is None:
-            agent_name = (
-                tool_context.agent_context.agent_name if tool_context.agent_context else "unknown"
-            )
+            agent_name = tool_context.agent_context.agent_name if tool_context.agent_context else "unknown"
             logger.warning(
-                "lauren_ai.ToolExecutor: agent '%s' called unknown tool '%s'"
-                " — returning error result",
+                "lauren_ai.ToolExecutor: agent '%s' called unknown tool '%s' — returning error result",
                 agent_name,
                 name,
             )

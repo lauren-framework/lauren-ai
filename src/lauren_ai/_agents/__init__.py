@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 if TYPE_CHECKING:
     from lauren_ai._config import AgentConfig
+    from lauren_ai._messaging import AgentMessageBus
 
 C = TypeVar("C", bound=type)
 
@@ -166,9 +167,14 @@ class AgentContext:
         ``route_template``, and ``metadata``) when the agent is invoked
         from a route handler.  ``None`` otherwise.
     :type execution_context: Any | None
+    :param conversation_id: Optional session/conversation scope for this run.
+    :type conversation_id: str | None
     :param signals: Signal bus for emitting lifecycle events.  ``None`` in
         environments where no :class:`SignalBus` is registered.
     :type signals: Any | None
+    :param message_bus: Optional inter-agent message bus wired by
+        :class:`~lauren_ai._module.AgentModule`.
+    :type message_bus: AgentMessageBus | None
     """
 
     agent_id: str
@@ -180,7 +186,9 @@ class AgentContext:
     metadata: dict[str, Any]
     request: Any | None = None
     execution_context: Any | None = None  # lauren ExecutionContext, or None
+    conversation_id: str | None = None
     signals: Any | None = None
+    message_bus: AgentMessageBus | None = None
 
     @property
     def agent_name(self) -> str:

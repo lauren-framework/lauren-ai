@@ -40,6 +40,8 @@ __all__ = [
     "AgentTurnComplete",
     "AgentRunComplete",
     "EmbeddingGenerated",
+    "AgentMessageSent",
+    "AgentMessageRequestCompleted",
     # Bus
     "SignalBus",
 ]
@@ -47,6 +49,8 @@ __all__ = [
 import contextlib
 
 from lauren.signals import LifecycleEvent
+
+from lauren_ai._messaging import AgentMessageType
 
 T = TypeVar("T")
 
@@ -287,6 +291,42 @@ class EmbeddingGenerated(LifecycleEvent):  # type: ignore[misc]
     model: str = ""
     input_count: int = 0
     duration_ms: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Agent messaging signals
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AgentMessageSent(LifecycleEvent):  # type: ignore[misc]
+    """Emitted after an inter-agent message is routed."""
+
+    message_id: Any = None
+    from_agent: str = ""
+    to: str | None = None
+    topic: str | None = None
+    session_id: str | None = None
+    task_id: str | None = None
+    correlation_id: Any = None
+    message_type: AgentMessageType = AgentMessageType.NOTIFICATION
+    receiver_count: int = 0
+    dropped_count: int = 0
+    attempt: int = 1
+
+
+@dataclass
+class AgentMessageRequestCompleted(LifecycleEvent):  # type: ignore[misc]
+    """Emitted when a request/response exchange completes or times out."""
+
+    request_id: Any = None
+    from_agent: str = ""
+    target: str = ""
+    session_id: str | None = None
+    task_id: str | None = None
+    elapsed_ms: float = 0.0
+    attempts: int = 1
+    timed_out: bool = False
 
 
 # ---------------------------------------------------------------------------

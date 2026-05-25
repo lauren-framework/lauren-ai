@@ -226,8 +226,7 @@ def use_guardrails(
     """
     if args:
         raise DecoratorUsageError(
-            "@use_guardrails must be called with parentheses: "
-            "@use_guardrails(input=[...], output=[...])"
+            "@use_guardrails must be called with parentheses: @use_guardrails(input=[...], output=[...])"
         )
 
     def _apply(cls: C) -> C:

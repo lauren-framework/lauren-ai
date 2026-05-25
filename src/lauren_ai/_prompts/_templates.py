@@ -82,8 +82,7 @@ class PromptTemplate:
         missing = required - set(kwargs.keys())
         if missing:
             raise PromptRenderError(
-                f"PromptTemplate missing variables: {sorted(missing)}. "
-                f"Provided: {sorted(kwargs.keys())}"
+                f"PromptTemplate missing variables: {sorted(missing)}. Provided: {sorted(kwargs.keys())}"
             )
         return self.template.format(**kwargs)
 
@@ -287,18 +286,12 @@ class FewShotPromptTemplate:
         :rtype: str
         :raises PromptRenderError: When required suffix variables are missing.
         """
-        required = (
-            set(self.input_variables)
-            if self.input_variables
-            else set(re.findall(r"\{(\w+)\}", self.suffix))
-        )
+        required = set(self.input_variables) if self.input_variables else set(re.findall(r"\{(\w+)\}", self.suffix))
         missing = required - set(kwargs.keys())
         if missing:
             raise PromptRenderError(f"FewShotPromptTemplate missing variables: {sorted(missing)}")
         all_examples = list(self.examples)
-        example_strs = [
-            self.example_template.format(input=ex.input, output=ex.output) for ex in all_examples
-        ]
+        example_strs = [self.example_template.format(input=ex.input, output=ex.output) for ex in all_examples]
         suffix_str = self.suffix.format(**kwargs)
         parts = [self.prefix] + example_strs + [suffix_str]
         return self.example_separator.join(p for p in parts if p)
@@ -320,18 +313,12 @@ class FewShotPromptTemplate:
         :raises PromptRenderError: When required suffix variables are missing
             from *kwargs*.
         """
-        required = (
-            set(self.input_variables)
-            if self.input_variables
-            else set(re.findall(r"\{(\w+)\}", self.suffix))
-        )
+        required = set(self.input_variables) if self.input_variables else set(re.findall(r"\{(\w+)\}", self.suffix))
         missing = required - set(kwargs.keys())
         if missing:
             raise PromptRenderError(f"FewShotPromptTemplate missing variables: {sorted(missing)}")
         all_examples = list(self.examples) + (extra_examples or [])
-        example_strs = [
-            self.example_template.format(input=ex.input, output=ex.output) for ex in all_examples
-        ]
+        example_strs = [self.example_template.format(input=ex.input, output=ex.output) for ex in all_examples]
         suffix_str = self.suffix.format(**kwargs)
         parts = [self.prefix] + example_strs + [suffix_str]
         content = self.example_separator.join(p for p in parts if p)

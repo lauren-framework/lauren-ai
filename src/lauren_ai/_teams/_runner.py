@@ -152,9 +152,7 @@ class TeamRunner:
                 chunks.append(chunk.delta)
         return "".join(chunks)
 
-    async def _coordinator_decide(
-        self, task: str, worker_outputs: dict[str, str], round_num: int
-    ) -> tuple[str, str]:
+    async def _coordinator_decide(self, task: str, worker_outputs: dict[str, str], round_num: int) -> tuple[str, str]:
         """Ask coordinator to route or declare done.
 
         :param task: The overall task.
@@ -165,9 +163,7 @@ class TeamRunner:
         from lauren_ai._transport import Completion, Message  # noqa: PLC0415
 
         worker_desc = "\n".join(f"- {name}: A specialist agent" for name in self._worker_names)
-        prior = (
-            "\n".join(f"{name}: {output}" for name, output in worker_outputs.items()) or "None yet."
-        )
+        prior = "\n".join(f"{name}: {output}" for name, output in worker_outputs.items()) or "None yet."
 
         prompt_template = self._meta.coordinator_prompt or _DEFAULT_COORDINATOR_PROMPT
         prompt = prompt_template.format(
@@ -198,9 +194,7 @@ class TeamRunner:
                 return "ROUTE", parts[1].strip()
         return "DONE", text
 
-    async def _run_coordinator(
-        self, task: str, memory: TeamMemory, worker_outputs: dict[str, str]
-    ) -> TeamResult:
+    async def _run_coordinator(self, task: str, memory: TeamMemory, worker_outputs: dict[str, str]) -> TeamResult:
         """Run coordinator mode: route to workers one at a time until DONE.
 
         :param task: The overall task.
@@ -236,9 +230,7 @@ class TeamRunner:
             rounds=rounds,
         )
 
-    async def _run_collaborate(
-        self, task: str, memory: TeamMemory, worker_outputs: dict[str, str]
-    ) -> TeamResult:
+    async def _run_collaborate(self, task: str, memory: TeamMemory, worker_outputs: dict[str, str]) -> TeamResult:
         """Run collaborate mode: all workers in sequence, then synthesise.
 
         :param task: The overall task.
@@ -252,9 +244,8 @@ class TeamRunner:
             await memory.set(worker_name, output)
 
         # Synthesise
-        synthesis_prompt = (
-            f"Synthesise these expert outputs into a final answer for: {task}\n\n"
-            + "\n\n".join(f"{k}:\n{v}" for k, v in worker_outputs.items())
+        synthesis_prompt = f"Synthesise these expert outputs into a final answer for: {task}\n\n" + "\n\n".join(
+            f"{k}:\n{v}" for k, v in worker_outputs.items()
         )
         from lauren_ai._transport import Completion, Message  # noqa: PLC0415
 
@@ -302,9 +293,7 @@ class TeamRunner:
             output = await self._call_worker(worker_name, task)
             worker_outputs[worker_name] = output
             await memory.set(worker_name, output)
-            yield TeamWorkerFinished(
-                worker_name=worker_name, result_content=output, round=round_num
-            )
+            yield TeamWorkerFinished(worker_name=worker_name, result_content=output, round=round_num)
 
         final = "\n\n".join(f"{k}: {v}" for k, v in worker_outputs.items())
         yield TeamFinalAnswer(content=final, rounds=self._meta.max_rounds)
@@ -326,9 +315,7 @@ class TeamRunner:
             await memory.set(worker_name, output)
             yield TeamWorkerFinished(worker_name=worker_name, result_content=output, round=i)
 
-        synthesis_prompt = f"Synthesise: {task}\n\n" + "\n\n".join(
-            f"{k}:\n{v}" for k, v in worker_outputs.items()
-        )
+        synthesis_prompt = f"Synthesise: {task}\n\n" + "\n\n".join(f"{k}:\n{v}" for k, v in worker_outputs.items())
         from lauren_ai._transport import Completion, Message  # noqa: PLC0415
 
         result = await self._llm.complete([Message(role="user", content=synthesis_prompt)])

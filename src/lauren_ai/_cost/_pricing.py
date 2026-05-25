@@ -178,12 +178,8 @@ class PricingTable:
         return CostEstimate(
             input_usd=usage.input_tokens * pricing.input_per_m / 1_000_000,
             output_usd=usage.output_tokens * pricing.output_per_m / 1_000_000,
-            cache_read_usd=getattr(usage, "cache_read_tokens", 0)
-            * pricing.cache_read_per_m
-            / 1_000_000,
-            cache_write_usd=getattr(usage, "cache_write_tokens", 0)
-            * pricing.cache_write_per_m
-            / 1_000_000,
+            cache_read_usd=getattr(usage, "cache_read_tokens", 0) * pricing.cache_read_per_m / 1_000_000,
+            cache_write_usd=getattr(usage, "cache_write_tokens", 0) * pricing.cache_write_per_m / 1_000_000,
         )
 
     def get(self, model: str) -> ModelPricing | None:

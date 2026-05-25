@@ -139,9 +139,7 @@ class SemanticRouter:
         names = [r.name for r in routes]
         if len(names) != len(set(names)):
             dupes = [n for n in names if names.count(n) > 1]
-            raise RouterConfigError(
-                f"SemanticRouter has duplicate route names: {sorted(set(dupes))}"
-            )
+            raise RouterConfigError(f"SemanticRouter has duplicate route names: {sorted(set(dupes))}")
         for r in routes:
             if not r.description and not r.examples:
                 raise RouterConfigError(f"Route {r.name!r} must have a description or examples.")

@@ -275,9 +275,7 @@ class TestConversationMiddleware:
     @pytest.mark.asyncio
     async def test_returns_class_without_store(self):
         # Should not raise during class creation
-        cls = conversation_middleware(
-            store=None, header="x-conv-id", cookie=None, auto_create=False
-        )
+        cls = conversation_middleware(store=None, header="x-conv-id", cookie=None, auto_create=False)
         assert cls is not None
 
 

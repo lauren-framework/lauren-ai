@@ -47,9 +47,7 @@ class TestExceptionHierarchy:
         assert isinstance(exc, LaurenAIError)
 
     def test_agent_budget_exceeded(self):
-        exc = AgentBudgetExceededError(
-            "Over budget", budget_type="tokens", limit=1000.0, used=1200.0
-        )
+        exc = AgentBudgetExceededError("Over budget", budget_type="tokens", limit=1000.0, used=1200.0)
         assert isinstance(exc, LaurenAIError)
         assert exc.budget_type == "tokens"
 

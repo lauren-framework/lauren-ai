@@ -172,9 +172,7 @@ class TestUpdateRecordToolPermissions:
         """ADMIN permission (higher rank) succeeds when MUTATE is required."""
         agent_inst = PermissionTestAgent()
         client = TestClient(agent_inst)
-        client.mock.queue_tool_use(
-            "update_record_tool", {"record_id": "99", "data": "admin update"}
-        )
+        client.mock.queue_tool_use("update_record_tool", {"record_id": "99", "data": "admin update"})
         client.mock.queue_response(_c("Updated."))
         client.run("Update record 99", metadata={"caller_permission": "admin"})
         data = json.loads(agent_inst.captured[0].content)

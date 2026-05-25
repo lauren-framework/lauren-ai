@@ -85,8 +85,7 @@ def ai_metrics_interceptor() -> type:
                                     agent_class=None,
                                     model=getattr(usage, "model", "unknown"),
                                     total_tokens=(
-                                        getattr(usage, "input_tokens", 0)
-                                        + getattr(usage, "output_tokens", 0)
+                                        getattr(usage, "input_tokens", 0) + getattr(usage, "output_tokens", 0)
                                     ),
                                     cost_usd=getattr(usage, "cost_usd", 0.0),
                                     turns=1,
@@ -145,9 +144,7 @@ def token_usage_response_interceptor() -> type:
                 usage = getattr(request.state, "ai_token_usage", None)
                 if usage is not None and response is not None:
                     try:
-                        total = getattr(usage, "input_tokens", 0) + getattr(
-                            usage, "output_tokens", 0
-                        )
+                        total = getattr(usage, "input_tokens", 0) + getattr(usage, "output_tokens", 0)
                         cost = getattr(usage, "cost_usd", 0.0)
                         if hasattr(response, "headers"):
                             response.headers["x-token-usage"] = str(total)

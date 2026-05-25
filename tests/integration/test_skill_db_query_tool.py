@@ -50,9 +50,7 @@ class SQLQueryTool:
         self._setup()
 
     def _setup(self):
-        self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT, value REAL)"
-        )
+        self._conn.execute("CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT, value REAL)")
         self._conn.execute("INSERT OR IGNORE INTO items VALUES (1, 'Widget', 9.99)")
         self._conn.execute("INSERT OR IGNORE INTO items VALUES (2, 'Gadget', 29.99)")
         self._conn.commit()

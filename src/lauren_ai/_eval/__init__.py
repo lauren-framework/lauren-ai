@@ -173,8 +173,7 @@ class EvalReport:
         actual = self.pass_rate
         assert actual >= min_pass_rate, (
             f"Pass rate {actual:.1%} is below the minimum {min_pass_rate:.1%}. "
-            f"Failed examples: "
-            + "; ".join(f"[{r.example.input[:40]!r}]" for r in self.results if not r.passed)
+            f"Failed examples: " + "; ".join(f"[{r.example.input[:40]!r}]" for r in self.results if not r.passed)
         )
 
     def summary(self) -> str:
@@ -184,8 +183,7 @@ class EvalReport:
         """
         lines = [
             f"Eval: {self.evaluator_name!r}  Dataset: {self.dataset_name!r}",
-            f"Pass rate: {self.pass_rate:.1%}"
-            f"  ({sum(r.passed for r in self.results)}/{len(self.results)})",
+            f"Pass rate: {self.pass_rate:.1%}  ({sum(r.passed for r in self.results)}/{len(self.results)})",
             f"Avg latency: {self.avg_latency_ms:.0f}ms",
         ]
         if self.avg_score is not None:
@@ -318,9 +316,7 @@ class TrajectoryEval:
                         resp = agent_client.run(ex.input)
                 else:
                     resp = await agent_client(ex.input)
-                actual_tools = [
-                    getattr(tc, "name", str(tc)) for tc in getattr(resp, "tool_calls_made", [])
-                ]
+                actual_tools = [getattr(tc, "name", str(tc)) for tc in getattr(resp, "tool_calls_made", [])]
             except Exception as exc:
                 error = exc
 
@@ -401,9 +397,7 @@ class PerformanceEval:
                 actual = getattr(resp, "content", str(resp))
                 usage = getattr(resp, "total_usage", None)
                 if usage:
-                    total_tokens = getattr(usage, "input_tokens", 0) + getattr(
-                        usage, "output_tokens", 0
-                    )
+                    total_tokens = getattr(usage, "input_tokens", 0) + getattr(usage, "output_tokens", 0)
             except Exception as exc:
                 error = exc
 

@@ -104,9 +104,7 @@ class PIIRedactor:
     ) -> None:
         self._entities = entities or list(self.PATTERNS.keys())
         self._replacement = replacement
-        self._compiled = [
-            re.compile(self.PATTERNS[e]) for e in self._entities if e in self.PATTERNS
-        ]
+        self._compiled = [re.compile(self.PATTERNS[e]) for e in self._entities if e in self.PATTERNS]
 
     async def check(self, response: str, context: GuardrailContext) -> GuardrailDecision:
         modified = response

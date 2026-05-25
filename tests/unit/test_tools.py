@@ -158,9 +158,7 @@ class TestToolClassInjectable:
             async def run(self, x: str) -> str:
                 return x
 
-        assert hasattr(MySimpleTool, "__lauren_injectable__"), (
-            "@tool() on a class must set __lauren_injectable__"
-        )
+        assert hasattr(MySimpleTool, "__lauren_injectable__"), "@tool() on a class must set __lauren_injectable__"
 
     def test_tool_class_default_scope_singleton(self):
         from lauren._di import INJECTABLE_META
@@ -233,9 +231,7 @@ class TestToolClassInjectable:
             async def run(self, x: str) -> str:
                 return x
 
-        assert TOOL_META in MetaTool.__dict__, (
-            "TOOL_META must be on the class __dict__ after injectable"
-        )
+        assert TOOL_META in MetaTool.__dict__, "TOOL_META must be on the class __dict__ after injectable"
 
 
 class TestToolInheritance:

@@ -242,8 +242,7 @@ def ai_rate_limit(
     """
     if not any([tokens_per_minute, requests_per_minute, requests_per_day]):
         raise ValueError(
-            "At least one limit (tokens_per_minute, requests_per_minute, "
-            "or requests_per_day) must be specified."
+            "At least one limit (tokens_per_minute, requests_per_minute, or requests_per_day) must be specified."
         )
 
     _store = store or InMemoryRateLimitStore()

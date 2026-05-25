@@ -52,8 +52,7 @@ from lauren_ai._transport import (
 __all__ = ["OllamaTransport"]
 
 _HTTPX_IMPORT_ERROR = (
-    "The 'httpx' package is required to use OllamaTransport.\n"
-    "Install it with: pip install httpx>=0.27"
+    "The 'httpx' package is required to use OllamaTransport.\nInstall it with: pip install httpx>=0.27"
 )
 
 
@@ -476,9 +475,7 @@ class OllamaTransport:
 
                     if done:
                         done_reason = data.get("done_reason", "stop")
-                        tool_calls_present = bool(raw_tool_calls) or (
-                            _current_tool_use_id is not None
-                        )
+                        tool_calls_present = bool(raw_tool_calls) or (_current_tool_use_id is not None)
                         stop_reason = _parse_stop_reason(
                             done_reason, [ToolCall("", "", {})] if tool_calls_present else []
                         )
@@ -591,9 +588,7 @@ class OllamaTransport:
             total += max(1, len(system) // 4)
         if tools:
             for t in tools:
-                total += max(
-                    1, (len(t.name) + len(t.description) + len(json.dumps(t.input_schema))) // 4
-                )
+                total += max(1, (len(t.name) + len(t.description) + len(json.dumps(t.input_schema))) // 4)
         for msg in messages:
             if isinstance(msg.content, str):
                 total += max(1, len(msg.content) // 4)

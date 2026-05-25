@@ -32,9 +32,7 @@ class ResponseValidator:
                 return response
             last_response = response
             if attempt < self._max_retries - 1:
-                correction = (
-                    f"\nPrevious response was invalid. Please try again.\nPrevious: {content}"
-                )
+                correction = f"\nPrevious response was invalid. Please try again.\nPrevious: {content}"
                 prompt = prompt + correction
                 await asyncio.sleep(0)
         return last_response
@@ -111,10 +109,7 @@ class TestValidatorFunctions:
         assert max_length(5)("too long string here") is False
 
     def test_contains_keys_all_present(self):
-        assert (
-            contains_required_keys("result", "confidence")('{"result": "yes", "confidence": 0.9}')
-            is True
-        )
+        assert contains_required_keys("result", "confidence")('{"result": "yes", "confidence": 0.9}') is True
 
     def test_contains_keys_missing_key(self):
         assert contains_required_keys("result", "confidence")('{"result": "yes"}') is False

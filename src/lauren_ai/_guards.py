@@ -407,14 +407,9 @@ def safety_guard(
 
             if text and not policy.is_safe(text):
                 if on_violation == "block":
-                    raise PermissionError(
-                        "Request blocked by safety policy. The content violates usage guidelines."
-                    )
+                    raise PermissionError("Request blocked by safety policy. The content violates usage guidelines.")
                 else:
-                    logger.warning(
-                        "Safety policy violation detected (on_violation=log). "
-                        "Request allowed through."
-                    )
+                    logger.warning("Safety policy violation detected (on_violation=log). Request allowed through.")
 
             return True
 

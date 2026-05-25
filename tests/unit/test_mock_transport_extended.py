@@ -128,9 +128,7 @@ class TestAggregateChunks:
         chunks = [
             CompletionChunk(delta="Hello "),
             CompletionChunk(delta="world"),
-            CompletionChunk(
-                delta="", stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=2)
-            ),
+            CompletionChunk(delta="", stop_reason="end_turn", usage=TokenUsage(input_tokens=5, output_tokens=2)),
         ]
         completion = _aggregate_chunks(chunks, model="test-model")
         assert completion.content == "Hello world"

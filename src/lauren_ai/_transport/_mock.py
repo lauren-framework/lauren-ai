@@ -266,9 +266,7 @@ class MockTransport:
         """
         import json  # noqa: PLC0415
 
-        input_data: dict[str, Any] = (
-            instance.model_dump() if hasattr(instance, "model_dump") else vars(instance)
-        )
+        input_data: dict[str, Any] = instance.model_dump() if hasattr(instance, "model_dump") else vars(instance)
         tc = ToolCall(
             tool_use_id="struct_001",
             name="structured_output",
@@ -370,9 +368,7 @@ class MockTransport:
         :raises EmptyQueueError: If no response has been queued.
         """
         if not self._queue:
-            raise EmptyQueueError(
-                f"MockTransport has no queued responses for call #{len(self._calls) + 1}"
-            )
+            raise EmptyQueueError(f"MockTransport has no queued responses for call #{len(self._calls) + 1}")
 
         # Record the call.
         self._calls.append(
@@ -507,9 +503,7 @@ def _aggregate_chunks(
     tool_calls: list[ToolCall] = []
     for tool_use_id, data in _tool_calls.items():
         try:
-            parsed_input: dict[str, Any] = (
-                json.loads(data["input_json"]) if data["input_json"] else {}
-            )
+            parsed_input: dict[str, Any] = json.loads(data["input_json"]) if data["input_json"] else {}
         except json.JSONDecodeError:
             parsed_input = {"_raw": data["input_json"]}
         tool_calls.append(

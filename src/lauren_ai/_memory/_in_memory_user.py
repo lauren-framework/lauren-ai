@@ -29,9 +29,7 @@ class InMemoryUserMemoryStore:
             f
             for f in self._facts.values()
             if f.user_id == user_id
-            and (
-                query_lower in f.content.lower() or any(query_lower in t.lower() for t in f.topics)
-            )
+            and (query_lower in f.content.lower() or any(query_lower in t.lower() for t in f.topics))
         ]
         # Sort by confidence descending
         results.sort(key=lambda f: f.confidence, reverse=True)
@@ -44,9 +42,7 @@ class InMemoryUserMemoryStore:
         results.sort(key=lambda f: f.last_seen_at, reverse=True)
         return results
 
-    async def update(
-        self, memory_id: str, *, content: str | None = None, confidence: float | None = None
-    ) -> None:
+    async def update(self, memory_id: str, *, content: str | None = None, confidence: float | None = None) -> None:
         fact = self._facts.get(memory_id)
         if fact is None:
             return

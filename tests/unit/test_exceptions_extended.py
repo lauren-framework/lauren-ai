@@ -75,9 +75,7 @@ class TestTransportErrorStr:
 
 class TestTransientTransportErrorStr:
     def test_str_with_retry_after(self):
-        exc = TransientTransportError(
-            "Rate limited", status_code=429, retry_after=5.0, provider="anthropic"
-        )
+        exc = TransientTransportError("Rate limited", status_code=429, retry_after=5.0, provider="anthropic")
         s = str(exc)
         assert "retry_after=5.0s" in s
         assert "status_code=429" in s
@@ -108,9 +106,7 @@ class TestAuthTransportError:
 
 class TestToolExecutionErrorStr:
     def test_str_with_cause(self):
-        exc = ToolExecutionError(
-            "boom", tool_name="my_tool", tool_use_id="tc1", cause=ValueError("bad input")
-        )
+        exc = ToolExecutionError("boom", tool_name="my_tool", tool_use_id="tc1", cause=ValueError("bad input"))
         s = str(exc)
         assert "my_tool" in s
         assert "tc1" in s
@@ -208,9 +204,7 @@ class TestAgentBudgetExceededErrorStr:
         assert "0.5" in s
 
     def test_str_without_agent_class(self):
-        exc = AgentBudgetExceededError(
-            "over budget", budget_type="tokens", limit=1000.0, used=1200.0
-        )
+        exc = AgentBudgetExceededError("over budget", budget_type="tokens", limit=1000.0, used=1200.0)
         s = str(exc)
         assert "unknown" in s
         assert "tokens" in s

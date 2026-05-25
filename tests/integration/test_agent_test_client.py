@@ -164,8 +164,7 @@ class TestAgentTestClientCallTracking:
         user_msgs = [
             m
             for m in call.messages
-            if getattr(m, "role", None) == "user"
-            or (isinstance(m, dict) and m.get("role") == "user")
+            if getattr(m, "role", None) == "user" or (isinstance(m, dict) and m.get("role") == "user")
         ]
         assert len(user_msgs) >= 1
 

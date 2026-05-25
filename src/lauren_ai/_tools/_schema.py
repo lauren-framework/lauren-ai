@@ -310,8 +310,7 @@ def type_to_json_schema(ann: Any, *, depth: int = 0) -> dict[str, Any]:
 
     # Fallback
     logger.warning(
-        "lauren_ai: unrecognised type annotation %r — falling back to "
-        '{"type": "string"} in generated JSON Schema',
+        'lauren_ai: unrecognised type annotation %r — falling back to {"type": "string"} in generated JSON Schema',
         ann,
     )
     return {"type": "string"}
@@ -395,9 +394,7 @@ def generate_tool_schema(
         _entry_module = sys.modules.get(entry_fn.__module__)
         _globalns = vars(_entry_module) if _entry_module is not None else {}
         try:
-            _hints: dict[str, Any] = typing.get_type_hints(
-                entry_fn, globalns=_globalns, include_extras=False
-            )
+            _hints: dict[str, Any] = typing.get_type_hints(entry_fn, globalns=_globalns, include_extras=False)
         except Exception:
             _hints = {}
 

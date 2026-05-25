@@ -56,14 +56,8 @@ class RestAPITool:
         if self._auth_header:
             extra_headers["Authorization"] = self._auth_header
 
-        if (
-            ctx is not None
-            and hasattr(ctx, "execution_context")
-            and ctx.execution_context is not None
-        ):
-            req = (
-                ctx.execution_context.request if hasattr(ctx.execution_context, "request") else None
-            )
+        if ctx is not None and hasattr(ctx, "execution_context") and ctx.execution_context is not None:
+            req = ctx.execution_context.request if hasattr(ctx.execution_context, "request") else None
             if req and hasattr(req, "headers"):
                 auth = req.headers.get("authorization")
                 if auth:
@@ -107,10 +101,7 @@ def _mock_response(status: int = 200, text: str = "ok") -> MagicMock:
 
 def _make_mock_client(method: str, mock_resp=None, error: str | None = None):
     """Build a mocked httpx.AsyncClient context manager."""
-    if error:
-        mock_method_fn = AsyncMock(side_effect=Exception(error))
-    else:
-        mock_method_fn = AsyncMock(return_value=mock_resp)
+    mock_method_fn = AsyncMock(side_effect=Exception(error)) if error else AsyncMock(return_value=mock_resp)
 
     mock_client = MagicMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)

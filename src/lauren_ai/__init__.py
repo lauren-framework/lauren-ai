@@ -72,6 +72,9 @@ __all__ = [
     "AgentConfigError",
     "DecoratorUsageError",
     "ToolExecutionError",
+    "MessageBusError",
+    "MessageBusTimeoutError",
+    "MessageValidationError",
     # Decorators
     "agent",
     "use_tools",
@@ -92,6 +95,21 @@ __all__ = [
     "get_tool_context_from_func_args",
     "set_metadata",
     "use_hooks",
+    # Messaging
+    "AgentMessage",
+    "AgentMessageBus",
+    "AgentMessageMiddleware",
+    "AgentMessageSerializer",
+    "AgentMessageTransport",
+    "AgentMessageType",
+    "DeadLetterReason",
+    "DeadLetterRecord",
+    "DeliveryGuarantee",
+    "DeliveryResult",
+    "InMemoryAgentMessageTransport",
+    "JSONAgentMessageSerializer",
+    "MessageRetryPolicy",
+    "MessageSubscription",
     # Memory
     "ShortTermMemory",
     "MemoryStore",
@@ -108,6 +126,8 @@ __all__ = [
     "REMEMBER_META",
     # Signals
     "SignalBus",
+    "AgentMessageSent",
+    "AgentMessageRequestCompleted",
     "ModelCallStarted",
     "ModelCallComplete",
     "ToolCallStarted",
@@ -276,6 +296,9 @@ from lauren_ai._exceptions import (
     AgentMaxTurnsError,
     DecoratorUsageError,
     LaurenAIError,
+    MessageBusError,
+    MessageBusTimeoutError,
+    MessageValidationError,
     OutputParserError,
     ToolExecutionError,
     TracingError,
@@ -349,6 +372,26 @@ from lauren_ai._memory._stores import InMemoryConversationStore
 from lauren_ai._memory._vector import InMemoryVectorStore
 
 # ---------------------------------------------------------------------------
+# Messaging
+# ---------------------------------------------------------------------------
+from lauren_ai._messaging import (
+    AgentMessage,
+    AgentMessageBus,
+    AgentMessageMiddleware,
+    AgentMessageSerializer,
+    AgentMessageTransport,
+    AgentMessageType,
+    DeadLetterReason,
+    DeadLetterRecord,
+    DeliveryGuarantee,
+    DeliveryResult,
+    InMemoryAgentMessageTransport,
+    JSONAgentMessageSerializer,
+    MessageRetryPolicy,
+    MessageSubscription,
+)
+
+# ---------------------------------------------------------------------------
 # Middleware factories
 # ---------------------------------------------------------------------------
 from lauren_ai._middleware import ai_rate_limit, conversation_middleware
@@ -398,6 +441,8 @@ from lauren_ai._routing import (
 # Signals
 # ---------------------------------------------------------------------------
 from lauren_ai._signals import (
+    AgentMessageRequestCompleted,
+    AgentMessageSent,
     AgentRunComplete,
     ModelCallComplete,
     ModelCallStarted,

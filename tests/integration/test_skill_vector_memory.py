@@ -175,16 +175,8 @@ class TestInMemoryUserMemoryStore:
 
     def test_different_users_facts_are_isolated(self):
         store = InMemoryUserMemoryStore()
-        asyncio.run(
-            store.add(
-                MemoryFact(
-                    memory_id="a1", user_id="alice", content="Alice prefers morning meetings"
-                )
-            )
-        )
-        asyncio.run(
-            store.add(MemoryFact(memory_id="b1", user_id="bob", content="Bob works remotely"))
-        )
+        asyncio.run(store.add(MemoryFact(memory_id="a1", user_id="alice", content="Alice prefers morning meetings")))
+        asyncio.run(store.add(MemoryFact(memory_id="b1", user_id="bob", content="Bob works remotely")))
         alice_results = asyncio.run(store.search("alice", "morning"))
         bob_results = asyncio.run(store.search("bob", "remote"))
         assert len(alice_results) >= 1

@@ -34,11 +34,7 @@ class InMemorySearchProvider(WebSearchProvider):
 
     async def search(self, query: str, max_results: int = 5) -> list[dict]:
         q = query.lower()
-        matching = [
-            r
-            for r in self._results
-            if q in r.get("title", "").lower() or q in r.get("snippet", "").lower()
-        ]
+        matching = [r for r in self._results if q in r.get("title", "").lower() or q in r.get("snippet", "").lower()]
         return matching[:max_results] if matching else self._results[:max_results]
 
 
@@ -130,19 +126,14 @@ class TestInMemorySearchProvider:
     async def test_respects_max_results_limit(self):
         """max_results limits the number of returned results."""
         provider = InMemorySearchProvider(
-            [
-                {"title": f"Python article {i}", "url": f"https://g{i}.com", "snippet": "python"}
-                for i in range(10)
-            ]
+            [{"title": f"Python article {i}", "url": f"https://g{i}.com", "snippet": "python"} for i in range(10)]
         )
         results = await provider.search("python", max_results=3)
         assert len(results) == 3
 
     async def test_case_insensitive_title_match(self):
         """Title matching is case-insensitive."""
-        provider = InMemorySearchProvider(
-            [{"title": "UPPER CASE TITLE", "url": "https://h.com", "snippet": "content"}]
-        )
+        provider = InMemorySearchProvider([{"title": "UPPER CASE TITLE", "url": "https://h.com", "snippet": "content"}])
         results = await provider.search("upper case")
         assert len(results) == 1
 
@@ -177,9 +168,7 @@ class TestInMemorySearchProvider:
 class TestWebSearchTool:
     def test_search_tool_runs_through_agent(self):
         """WebSearchTool executes within an agent run and produces a tool result."""
-        provider = InMemorySearchProvider(
-            [{"title": "Test", "url": "https://t.com", "snippet": "test content"}]
-        )
+        provider = InMemorySearchProvider([{"title": "Test", "url": "https://t.com", "snippet": "test content"}])
 
         @agent(model="mock-model")
         @use_tools(WebSearchTool(provider=provider))
@@ -248,10 +237,7 @@ class TestWebSearchTool:
     def test_max_results_parameter_forwarded(self):
         """max_results kwarg is accepted and forwarded during the agent tool call."""
         provider = InMemorySearchProvider(
-            [
-                {"title": f"Result {i}", "url": f"https://r{i}.com", "snippet": "result"}
-                for i in range(10)
-            ]
+            [{"title": f"Result {i}", "url": f"https://r{i}.com", "snippet": "result"} for i in range(10)]
         )
 
         @agent(model="mock-model")

@@ -706,9 +706,7 @@ class AnthropicTransport:
                     elif event_type == "message_delta":
                         delta = getattr(event, "delta", None)
                         usage_obj = getattr(event, "usage", None)
-                        stop_reason = _parse_stop_reason(
-                            getattr(delta, "stop_reason", None) if delta else None
-                        )
+                        stop_reason = _parse_stop_reason(getattr(delta, "stop_reason", None) if delta else None)
                         usage = None
                         if usage_obj is not None:
                             usage = TokenUsage(
@@ -764,9 +762,7 @@ class AnthropicTransport:
                 input=inputs,
                 **({"dimensions": dimensions} if dimensions is not None else {}),
             )
-            return [
-                Embedding(index=i, vector=item.embedding) for i, item in enumerate(response.data)
-            ]
+            return [Embedding(index=i, vector=item.embedding) for i, item in enumerate(response.data)]
         except Exception as exc:  # noqa: BLE001
             classified = self._classify_exception(exc)
             if classified is not None:
@@ -853,9 +849,7 @@ def _heuristic_count(
         total += max(1, len(system) // 4)
     if tools:
         for t in tools:
-            total += max(
-                1, (len(t.name) + len(t.description) + len(json.dumps(t.input_schema))) // 4
-            )
+            total += max(1, (len(t.name) + len(t.description) + len(json.dumps(t.input_schema))) // 4)
     for msg in messages:
         if isinstance(msg.content, str):
             total += max(1, len(msg.content) // 4)

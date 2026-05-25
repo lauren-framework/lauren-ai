@@ -59,9 +59,7 @@ class GeneralAgent: ...
 # ---------------------------------------------------------------------------
 
 
-@agent(
-    model="mock-model", system="Route user to the correct specialist. Call classify_intent first."
-)
+@agent(model="mock-model", system="Route user to the correct specialist. Call classify_intent first.")
 @use_tools(classify_intent)
 class SupervisorAgent: ...
 

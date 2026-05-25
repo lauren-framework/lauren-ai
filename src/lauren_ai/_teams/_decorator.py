@@ -60,9 +60,7 @@ def team(
     :param coordinator_prompt: Override the default routing prompt.
     """
     if args:
-        raise DecoratorUsageError(
-            "@team must be called with parentheses: @team(name=..., mode=..., model=...)"
-        )
+        raise DecoratorUsageError("@team must be called with parentheses: @team(name=..., mode=..., model=...)")
 
     def _apply(cls: C) -> C:
         effective_name = name or cls.__name__

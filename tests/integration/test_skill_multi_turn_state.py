@@ -144,9 +144,7 @@ class TestShoppingCartAdd:
         """Specifying quantity=3 stores 3 units."""
         agent_inst = CartAgent()
         client = TestClient(agent_inst)
-        client.mock.queue_tool_use(
-            "shopping_cart_tool", {"action": "add", "item": "milk", "quantity": 3}
-        )
+        client.mock.queue_tool_use("shopping_cart_tool", {"action": "add", "item": "milk", "quantity": 3})
         client.mock.queue_response(_c("Added milk."))
         client.run("Add 3 milks")
         result = json.loads(agent_inst.captured[0].content)
@@ -184,12 +182,8 @@ class TestShoppingCartView:
         """View after adding two items shows correct total."""
         agent_inst = CartAgent()
         client = TestClient(agent_inst)
-        client.mock.queue_tool_use(
-            "shopping_cart_tool", {"action": "add", "item": "apple", "quantity": 2}
-        )
-        client.mock.queue_tool_use(
-            "shopping_cart_tool", {"action": "add", "item": "bread", "quantity": 1}
-        )
+        client.mock.queue_tool_use("shopping_cart_tool", {"action": "add", "item": "apple", "quantity": 2})
+        client.mock.queue_tool_use("shopping_cart_tool", {"action": "add", "item": "bread", "quantity": 1})
         client.mock.queue_tool_use("shopping_cart_tool", {"action": "view"})
         client.mock.queue_response(_c("Here is your cart."))
         client.run("Add items and view")
@@ -231,9 +225,7 @@ class TestShoppingCartRemove:
         """Removing an item that doesn't exist returns no error."""
         agent_inst = CartAgent()
         client = TestClient(agent_inst)
-        client.mock.queue_tool_use(
-            "shopping_cart_tool", {"action": "remove", "item": "nonexistent"}
-        )
+        client.mock.queue_tool_use("shopping_cart_tool", {"action": "remove", "item": "nonexistent"})
         client.mock.queue_response(_c("Removed nothing."))
         client.run("Remove nonexistent")
         result = json.loads(agent_inst.captured[0].content)

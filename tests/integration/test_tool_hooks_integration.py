@@ -55,9 +55,7 @@ class TestPerToolHookViaDI:
                 calls.append(f"before:{ctx.tool_name}")
                 return BeforeToolHookDecision.proceed()
 
-            async def after_tool_call(
-                self, result: Any, ctx: ToolCallContext
-            ) -> AfterToolHookDecision:
+            async def after_tool_call(self, result: Any, ctx: ToolCallContext) -> AfterToolHookDecision:
                 calls.append(f"after:{ctx.tool_name}")
                 return AfterToolHookDecision.proceed()
 
@@ -256,9 +254,7 @@ class TestErrorHookSuppression:
             raise RuntimeError("db connection failed")
 
         class RecoverHook(ToolHook):
-            async def on_tool_error(
-                self, exc: Exception, ctx: ToolCallContext
-            ) -> ErrorToolHookDecision:
+            async def on_tool_error(self, exc: Exception, ctx: ToolCallContext) -> ErrorToolHookDecision:
                 return ErrorToolHookDecision.suppress_with("fallback response")
 
         tm = _tool_map(broken_tool, hook_instances=(RecoverHook(),))

@@ -322,9 +322,7 @@ class TestToolExecutor:
 
     def test_default_cache_key(self):
         executor = ToolExecutor(tools={})
-        meta = ToolMeta(
-            name="my_tool", description="", parameters={}, is_async=False, reads_context=False
-        )
+        meta = ToolMeta(name="my_tool", description="", parameters={}, is_async=False, reads_context=False)
         key = executor._default_cache_key(meta, {"b": 2, "a": 1})
         # Keys should be sorted
         assert "my_tool" in key
