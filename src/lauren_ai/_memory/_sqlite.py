@@ -214,7 +214,7 @@ class SQLiteStoreBackend:
     def _fetch_all_sync(conn: sqlite3.Connection, query: str, parameters: Sequence[Any]) -> list[Any]:
         cursor = conn.execute(query, parameters)
         try:
-            return cast(list[Any], cursor.fetchall())
+            return cursor.fetchall()
         finally:
             cursor.close()
 

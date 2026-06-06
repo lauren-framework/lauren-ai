@@ -1093,10 +1093,18 @@ class AgentRunnerBase(AgentRunner):
                         accumulated_stop_reason = "end_turn"
                 # ─────────────────────────────────────────────────────────────
 
-                # Build tool calls from accumulated deltas
+                # Build tool calls from accumulated deltas.
+                # Skip entries with no resolved name — a tool call without a name
+                # can never be dispatched (ToolExecutor would return "unknown tool").
+                # This covers phantom entries created when the transport generates a
+                # temporary random ID for a blank first delta and then updates the
+                # real ID/name in a subsequent delta.
                 import json  # noqa: PLC0415
 
                 for tid, input_json in partial_tool_inputs.items():
+                    name = partial_tool_names.get(tid, "")
+                    if not name:
+                        continue
                     try:
                         parsed_input = json.loads(input_json)
                     except (json.JSONDecodeError, ValueError):
@@ -1104,7 +1112,7 @@ class AgentRunnerBase(AgentRunner):
                     accumulated_tool_calls.append(
                         ToolCall(
                             tool_use_id=tid,
-                            name=partial_tool_names.get(tid, ""),
+                            name=name,
                             input=parsed_input,
                         )
                     )

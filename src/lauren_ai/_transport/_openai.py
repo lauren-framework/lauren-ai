@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Literal
@@ -46,6 +47,7 @@ from lauren_ai._transport import (
 )
 
 __all__ = ["OpenAITransport"]
+logger = logging.getLogger(__name__)
 
 _OPENAI_IMPORT_ERROR = (
     "The 'openai' package is required to use OpenAITransport.\n"
@@ -668,16 +670,76 @@ class OpenAITransport:
 
                             _tool_call_state[idx]["args"] += fn_args or ""
 
+                            # Use the accumulated name so the runner receives it
+                            # on every delta once it is known — some models only
+                            # emit the name on the first delta with an empty
+                            # string or omit it entirely on subsequent deltas.
+                            accumulated_name = _tool_call_state[idx]["name"]
+
+                            # Skip blank header deltas (no name yet, no args)
+                            # to avoid creating phantom entries in the runner.
+                            if not accumulated_name and not fn_args:
+                                continue
+
                             yield CompletionChunk(
                                 tool_call_delta=ToolCallDelta(
                                     tool_use_id=_tool_call_state[idx]["id"],
-                                    name=fn_name,
+                                    name=accumulated_name or None,
                                     input_delta=fn_args or "",
                                 )
                             )
 
                     if finish_reason is not None:
                         stop_reason = _parse_stop_reason(finish_reason)
+
+                        # Some models (e.g. poolside) correctly signal
+                        # finish_reason="tool_calls" but omit the function name
+                        # from streaming deltas. When any accumulated tool call
+                        # still has an empty name, fall back to a non-streaming
+                        # call to get the complete, authoritative tool-call data.
+                        if stop_reason == "tool_use" and any(not s["name"] for s in _tool_call_state.values()):
+                            logger.debug(
+                                "openai_transport: tool call name missing after "
+                                "streaming — fetching non-streaming response"
+                            )
+                            fallback_kwargs = {**call_kwargs, "stream": False}
+                            try:
+                                sync_resp = await client.chat.completions.create(**fallback_kwargs)
+                                sync_msg = getattr(
+                                    getattr(sync_resp, "choices", [{}])[0],
+                                    "message",
+                                    None,
+                                )
+                                raw_tcs = getattr(sync_msg, "tool_calls", None) or []
+                                for tc in raw_tcs:
+                                    tc_fn = getattr(tc, "function", None)
+                                    if tc_fn is None:
+                                        continue
+                                    tc_name = getattr(tc_fn, "name", "") or ""
+                                    tc_args = getattr(tc_fn, "arguments", "") or ""
+                                    logger.debug(
+                                        "openai_transport: fallback tool call name=%r args=%r",
+                                        tc_name,
+                                        tc_args[:80],
+                                    )
+                                    if tc_name:
+                                        # Use a fresh ID so the runner's
+                                        # partial_tool_inputs dict doesn't
+                                        # collide with the (empty-named)
+                                        # streaming entry for the same call.
+                                        yield CompletionChunk(
+                                            tool_call_delta=ToolCallDelta(
+                                                tool_use_id=f"fb_{uuid.uuid4().hex[:16]}",
+                                                name=tc_name,
+                                                input_delta=tc_args,
+                                            )
+                                        )
+                            except Exception as _fb_exc:  # noqa: BLE001
+                                logger.warning(
+                                    "openai_transport: fallback non-streaming call failed: %s",
+                                    _fb_exc,
+                                )
+
                         # Include usage if present in the same chunk.
                         chunk_usage: TokenUsage | None = None
                         if usage_obj is not None:
