@@ -30,6 +30,7 @@ Tool call support requires Ollama ≥ 0.3 with a function-calling capable model.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Literal
@@ -50,6 +51,7 @@ from lauren_ai._transport import (
 )
 
 __all__ = ["OllamaTransport"]
+logger = logging.getLogger(__name__)
 
 _HTTPX_IMPORT_ERROR = (
     "The 'httpx' package is required to use OllamaTransport.\nInstall it with: pip install httpx>=0.27"
@@ -439,6 +441,9 @@ class OllamaTransport:
 
                 _current_tool_use_id: str | None = None
                 _current_tool_name: str | None = None
+                # Set when at least one tool call had an empty name, so we can
+                # fall back to a non-streaming request to recover the real names.
+                _empty_name_seen: bool = False
 
                 async for line in response.aiter_lines():
                     line = line.strip()
@@ -457,18 +462,22 @@ class OllamaTransport:
                     raw_tool_calls = message_data.get("tool_calls") or []
                     for tc in raw_tool_calls:
                         fn = tc.get("function", {})
+                        tc_name = fn.get("name", "") or ""
                         args = fn.get("arguments", {})
                         args_str = json.dumps(args) if isinstance(args, dict) else str(args)
                         tc_id = tc.get("id") or f"toolu_{uuid.uuid4().hex[:16]}"
                         _current_tool_use_id = tc_id
-                        _current_tool_name = fn.get("name", "")
-                        yield CompletionChunk(
-                            tool_call_delta=ToolCallDelta(
-                                tool_use_id=tc_id,
-                                name=_current_tool_name,
-                                input_delta=args_str,
+                        _current_tool_name = tc_name
+                        if tc_name:
+                            yield CompletionChunk(
+                                tool_call_delta=ToolCallDelta(
+                                    tool_use_id=tc_id,
+                                    name=tc_name,
+                                    input_delta=args_str,
+                                )
                             )
-                        )
+                        else:
+                            _empty_name_seen = True
 
                     if content_delta:
                         yield CompletionChunk(delta=content_delta)
@@ -479,6 +488,43 @@ class OllamaTransport:
                         stop_reason = _parse_stop_reason(
                             done_reason, [ToolCall("", "", {})] if tool_calls_present else []
                         )
+
+                        # Fall back to non-streaming when any tool call had no name.
+                        if stop_reason == "tool_use" and _empty_name_seen:
+                            logger.debug(
+                                "ollama_transport: tool call name missing after "
+                                "streaming — fetching non-streaming response"
+                            )
+                            fallback_payload = {**payload, "stream": False}
+                            try:
+                                fb_resp = await client.post("/api/chat", json=fallback_payload)
+                                if fb_resp.status_code == 200:
+                                    fb_data = fb_resp.json()
+                                    fb_msg = fb_data.get("message", {}) or {}
+                                    for tc in fb_msg.get("tool_calls", []) or []:
+                                        fn = tc.get("function", {})
+                                        fb_name = fn.get("name", "") or ""
+                                        if fb_name:
+                                            fb_args = fn.get("arguments", {})
+                                            fb_args_str = (
+                                                json.dumps(fb_args) if isinstance(fb_args, dict) else str(fb_args)
+                                            )
+                                            logger.debug(
+                                                "ollama_transport: fallback tool call name=%r",
+                                                fb_name,
+                                            )
+                                            yield CompletionChunk(
+                                                tool_call_delta=ToolCallDelta(
+                                                    tool_use_id=f"fb_{uuid.uuid4().hex[:16]}",
+                                                    name=fb_name,
+                                                    input_delta=fb_args_str,
+                                                )
+                                            )
+                            except Exception as _fb_exc:  # noqa: BLE001
+                                logger.warning(
+                                    "ollama_transport: fallback non-streaming call failed: %s",
+                                    _fb_exc,
+                                )
 
                         prompt_eval_count = data.get("prompt_eval_count", 0) or 0
                         eval_count = data.get("eval_count", 0) or 0

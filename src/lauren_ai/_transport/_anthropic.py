@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
@@ -42,6 +43,7 @@ if TYPE_CHECKING:
     pass
 
 __all__ = ["AnthropicTransport"]
+logger = logging.getLogger(__name__)
 
 _ANTHROPIC_IMPORT_ERROR = (
     "The 'anthropic' package is required to use AnthropicTransport.\n"
@@ -657,6 +659,9 @@ class AnthropicTransport:
             async with client.messages.stream(**call_kwargs) as stream:
                 _current_tool_use_id: str | None = None
                 _current_tool_name: str | None = None
+                # Tool blocks where the name was empty on content_block_start.
+                # Tracked so we can fall back to a non-streaming call to recover names.
+                _empty_name_tool_ids: list[str] = []
 
                 async for event in stream:
                     event_type = getattr(event, "type", None)
@@ -688,16 +693,25 @@ class AnthropicTransport:
                             continue
                         block_type = getattr(block, "type", None)
                         if block_type == "tool_use":
-                            _current_tool_use_id = getattr(block, "id", None)
-                            _current_tool_name = getattr(block, "name", None)
-                            if _current_tool_use_id:
-                                yield CompletionChunk(
-                                    tool_call_delta=ToolCallDelta(
-                                        tool_use_id=_current_tool_use_id,
-                                        name=_current_tool_name,
-                                        input_delta="",
+                            tc_id = getattr(block, "id", None)
+                            tc_name = getattr(block, "name", None) or ""
+                            if tc_id:
+                                if tc_name:
+                                    _current_tool_use_id = tc_id
+                                    _current_tool_name = tc_name
+                                    yield CompletionChunk(
+                                        tool_call_delta=ToolCallDelta(
+                                            tool_use_id=tc_id,
+                                            name=tc_name,
+                                            input_delta="",
+                                        )
                                     )
-                                )
+                                else:
+                                    # Empty name — suppress header and input_json_delta
+                                    # chunks for this block; record for fallback.
+                                    _empty_name_tool_ids.append(tc_id)
+                                    _current_tool_use_id = None
+                                    _current_tool_name = None
 
                     elif event_type == "content_block_stop":
                         _current_tool_use_id = None
@@ -713,6 +727,38 @@ class AnthropicTransport:
                                 input_tokens=0,
                                 output_tokens=getattr(usage_obj, "output_tokens", 0),
                             )
+
+                        # Fall back to a non-streaming call when any tool block had
+                        # an empty name — mirrors the OpenAI transport's behaviour.
+                        if stop_reason == "tool_use" and _empty_name_tool_ids:
+                            logger.debug(
+                                "anthropic_transport: tool call name missing after "
+                                "streaming — fetching non-streaming response"
+                            )
+                            try:
+                                sync_resp = await client.messages.create(**call_kwargs)
+                                for tc_block in getattr(sync_resp, "content", []):
+                                    if getattr(tc_block, "type", None) == "tool_use":
+                                        tc_name = getattr(tc_block, "name", "") or ""
+                                        tc_input = getattr(tc_block, "input", {}) or {}
+                                        if tc_name:
+                                            logger.debug(
+                                                "anthropic_transport: fallback tool call name=%r",
+                                                tc_name,
+                                            )
+                                            yield CompletionChunk(
+                                                tool_call_delta=ToolCallDelta(
+                                                    tool_use_id=f"fb_{uuid.uuid4().hex[:16]}",
+                                                    name=tc_name,
+                                                    input_delta=json.dumps(tc_input),
+                                                )
+                                            )
+                            except Exception as _fb_exc:  # noqa: BLE001
+                                logger.warning(
+                                    "anthropic_transport: fallback non-streaming call failed: %s",
+                                    _fb_exc,
+                                )
+
                         yield CompletionChunk(
                             stop_reason=stop_reason,
                             usage=usage,

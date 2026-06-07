@@ -739,3 +739,448 @@ class TestAnthropicTransportToolName:
 
         assert ("search", "noodles") in dispatch_log
         assert ("lookup", "mi_42") in dispatch_log
+
+
+# ---------------------------------------------------------------------------
+# Tests: Anthropic transport empty-name fallback
+# ---------------------------------------------------------------------------
+
+
+def _fake_anthropic_events_empty_name(events: list[dict], block_index_attr: bool = False) -> Any:
+    """Like _fake_anthropic_events but supports an index attribute on events."""
+
+    async def _aiter():
+        for ev in events:
+            chunk = MagicMock()
+            chunk.type = ev["type"]
+            chunk.index = ev.get("index", 0)
+            if ev["type"] == "content_block_start":
+                block = MagicMock()
+                block.type = ev.get("block_type", "text")
+                block.id = ev.get("block_id", None)
+                block.name = ev.get("block_name", None)
+                chunk.content_block = block
+            elif ev["type"] == "content_block_delta":
+                delta = MagicMock()
+                delta.type = ev.get("delta_type", "text_delta")
+                delta.text = ev.get("text", "")
+                delta.thinking = ev.get("thinking", "")
+                delta.partial_json = ev.get("partial_json", "")
+                chunk.delta = delta
+            elif ev["type"] == "message_delta":
+                delta = MagicMock()
+                delta.stop_reason = ev.get("stop_reason", "end_turn")
+                chunk.delta = delta
+                chunk.usage = None
+            yield chunk
+
+    class FakeStream:
+        async def __aenter__(self):
+            return _aiter()
+
+        async def __aexit__(self, *_):
+            pass
+
+    return FakeStream()
+
+
+class TestAnthropicTransportEmptyNameFallback:
+    """AnthropicTransport must handle empty-name tool calls via a non-streaming fallback."""
+
+    @pytest.mark.asyncio
+    async def test_empty_name_on_content_block_start_suppresses_header(self):
+        """Header chunk is not emitted when content_block_start has no name."""
+        from dataclasses import replace as dc_replace
+
+        from lauren_ai._config import LLMConfig
+        from lauren_ai._transport._anthropic import AnthropicTransport
+
+        config, _ = LLMConfig.for_testing()
+        config = dc_replace(config, provider="anthropic")
+        transport = AnthropicTransport(config)
+
+        events = [
+            {
+                "type": "content_block_start",
+                "block_type": "tool_use",
+                "block_id": "toolu_empty",
+                "block_name": "",  # empty name — common in some proxy implementations
+            },
+            {
+                "type": "content_block_delta",
+                "delta_type": "input_json_delta",
+                "partial_json": '{"query": "tofu"}',
+            },
+            {"type": "content_block_stop"},
+            {"type": "message_delta", "stop_reason": "tool_use"},
+        ]
+
+        # Fallback non-streaming response
+        fb_block = MagicMock()
+        fb_block.type = "tool_use"
+        fb_block.name = "search_menu_tool"
+        fb_block.id = "toolu_fb_001"
+        fb_block.input = {"query": "tofu"}
+        fb_resp = MagicMock()
+        fb_resp.content = [fb_block]
+
+        async def fake_create(**kwargs):
+            return fb_resp
+
+        mock_client = MagicMock()
+        mock_client.messages.stream = MagicMock(return_value=_fake_anthropic_events_empty_name(events))
+        mock_client.messages.create = fake_create
+
+        call_kwargs = {"model": "test", "messages": []}
+        chunks: list[CompletionChunk] = []
+        async for chunk in transport._stream(mock_client, call_kwargs):
+            chunks.append(chunk)
+
+        tc_deltas = [c for c in chunks if c.tool_call_delta is not None]
+        # The blank-name header must be suppressed — only the fallback fb_ chunk appears
+        assert not any(d.tool_call_delta.tool_use_id == "toolu_empty" for d in tc_deltas)
+        fb_deltas = [d for d in tc_deltas if d.tool_call_delta.tool_use_id.startswith("fb_")]
+        assert len(fb_deltas) == 1
+        assert fb_deltas[0].tool_call_delta.name == "search_menu_tool"
+
+    @pytest.mark.asyncio
+    async def test_empty_name_triggers_fallback_api_call(self):
+        """A non-streaming call is made when content_block_start has empty name."""
+        from dataclasses import replace as dc_replace
+
+        from lauren_ai._config import LLMConfig
+        from lauren_ai._transport._anthropic import AnthropicTransport
+
+        config, _ = LLMConfig.for_testing()
+        config = dc_replace(config, provider="anthropic")
+        transport = AnthropicTransport(config)
+
+        events = [
+            {
+                "type": "content_block_start",
+                "block_type": "tool_use",
+                "block_id": "toolu_noname",
+                "block_name": None,  # None is also treated as empty
+            },
+            {"type": "content_block_stop"},
+            {"type": "message_delta", "stop_reason": "tool_use"},
+        ]
+
+        fallback_call_count = 0
+
+        fb_block = MagicMock()
+        fb_block.type = "tool_use"
+        fb_block.name = "check_dietary_tool"
+        fb_block.id = "toolu_real"
+        fb_block.input = {"dish_name": "Mapo Tofu"}
+        fb_resp = MagicMock()
+        fb_resp.content = [fb_block]
+
+        async def fake_create(**kwargs):
+            nonlocal fallback_call_count
+            fallback_call_count += 1
+            return fb_resp
+
+        mock_client = MagicMock()
+        mock_client.messages.stream = MagicMock(return_value=_fake_anthropic_events_empty_name(events))
+        mock_client.messages.create = fake_create
+
+        call_kwargs = {"model": "test", "messages": []}
+        chunks: list[CompletionChunk] = []
+        async for chunk in transport._stream(mock_client, call_kwargs):
+            chunks.append(chunk)
+
+        assert fallback_call_count == 1
+        fb_deltas = [
+            c for c in chunks if c.tool_call_delta is not None and c.tool_call_delta.tool_use_id.startswith("fb_")
+        ]
+        assert len(fb_deltas) == 1
+        assert fb_deltas[0].tool_call_delta.name == "check_dietary_tool"
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_when_name_present(self):
+        """No extra API call when all tool names arrive on content_block_start."""
+        from dataclasses import replace as dc_replace
+
+        from lauren_ai._config import LLMConfig
+        from lauren_ai._transport._anthropic import AnthropicTransport
+
+        config, _ = LLMConfig.for_testing()
+        config = dc_replace(config, provider="anthropic")
+        transport = AnthropicTransport(config)
+
+        events = [
+            {
+                "type": "content_block_start",
+                "block_type": "tool_use",
+                "block_id": "toolu_good",
+                "block_name": "find_restaurant_tool",
+            },
+            {
+                "type": "content_block_delta",
+                "delta_type": "input_json_delta",
+                "partial_json": '{"city": "Beijing"}',
+            },
+            {"type": "content_block_stop"},
+            {"type": "message_delta", "stop_reason": "tool_use"},
+        ]
+
+        fallback_call_count = 0
+
+        async def fake_create(**kwargs):
+            nonlocal fallback_call_count
+            fallback_call_count += 1
+
+        mock_client = MagicMock()
+        mock_client.messages.stream = MagicMock(return_value=_fake_anthropic_events_empty_name(events))
+        mock_client.messages.create = fake_create
+
+        call_kwargs = {"model": "test", "messages": []}
+        async for _ in transport._stream(mock_client, call_kwargs):
+            pass
+
+        assert fallback_call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: Ollama transport empty-name guard and fallback
+# ---------------------------------------------------------------------------
+
+
+def _make_ollama_line(d: dict) -> str:
+    return json.dumps(d)
+
+
+class TestOllamaTransportEmptyNameFallback:
+    """OllamaTransport must skip empty-name tool calls and fall back to non-streaming."""
+
+    @pytest.mark.asyncio
+    async def test_empty_name_tool_call_skipped(self):
+        """Tool calls with empty name are not emitted as ToolCallDelta chunks."""
+        from lauren_ai._config import LLMConfig
+        from lauren_ai._transport._ollama import OllamaTransport
+
+        config, _ = LLMConfig.for_testing()
+        transport = OllamaTransport(config)
+
+        lines = [
+            _make_ollama_line(
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "toolu_empty",
+                                "function": {
+                                    "name": "",  # empty name
+                                    "arguments": {"query": "noodles"},
+                                },
+                            }
+                        ],
+                    },
+                    "done": False,
+                }
+            ),
+            _make_ollama_line(
+                {
+                    "message": {"role": "assistant", "content": ""},
+                    "done": True,
+                    "done_reason": "stop",
+                    "prompt_eval_count": 10,
+                    "eval_count": 5,
+                }
+            ),
+        ]
+
+        async def _aiter_lines():
+            for line in lines:
+                yield line
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.aiter_lines = _aiter_lines
+
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def _fake_stream(*_a, **_kw):
+            yield mock_resp
+
+        mock_client = MagicMock()
+        mock_client.stream = _fake_stream
+        transport._client = mock_client
+
+        payload = {"model": "llama3.2", "messages": [], "stream": True}
+        chunks: list[CompletionChunk] = []
+        async for chunk in transport._stream(payload):
+            chunks.append(chunk)
+
+        tc_deltas = [c for c in chunks if c.tool_call_delta is not None]
+        assert len(tc_deltas) == 0  # empty-name call must be suppressed
+
+    @pytest.mark.asyncio
+    async def test_empty_name_triggers_fallback(self):
+        """Empty-name tool call with done_reason=tool triggers non-streaming fallback."""
+
+        from lauren_ai._config import LLMConfig
+        from lauren_ai._transport._ollama import OllamaTransport
+
+        config, _ = LLMConfig.for_testing()
+        transport = OllamaTransport(config)
+
+        lines = [
+            _make_ollama_line(
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "toolu_bad",
+                                "function": {"name": "", "arguments": {"q": "dumplings"}},
+                            }
+                        ],
+                    },
+                    "done": False,
+                }
+            ),
+            _make_ollama_line(
+                {
+                    "message": {"role": "assistant", "content": ""},
+                    "done": True,
+                    "done_reason": "stop",
+                    "prompt_eval_count": 8,
+                    "eval_count": 3,
+                }
+            ),
+        ]
+
+        async def _aiter_lines():
+            for line in lines:
+                yield line
+
+        mock_stream_resp = MagicMock()
+        mock_stream_resp.status_code = 200
+        mock_stream_resp.aiter_lines = _aiter_lines
+
+        # Fallback non-streaming response
+        fallback_body = {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "toolu_real", "function": {"name": "search_menu_tool", "arguments": {"q": "dumplings"}}}
+                ],
+            },
+            "done": True,
+            "done_reason": "stop",
+        }
+        mock_fb_resp = MagicMock()
+        mock_fb_resp.status_code = 200
+        mock_fb_resp.json = MagicMock(return_value=fallback_body)
+
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def _fake_stream_ctx(*_a, **_kw):
+            yield mock_stream_resp
+
+        fallback_call_count = 0
+
+        async def _fake_post(path, json=None):
+            nonlocal fallback_call_count
+            fallback_call_count += 1
+            return mock_fb_resp
+
+        mock_client = MagicMock()
+        mock_client.stream = _fake_stream_ctx
+        mock_client.post = _fake_post
+
+        payload = {"model": "llama3.2", "messages": [], "stream": True}
+
+        # Patch _get_client to return our mock
+        transport._client = mock_client
+
+        chunks: list[CompletionChunk] = []
+        async for chunk in transport._stream(payload):
+            chunks.append(chunk)
+
+        # Fallback must have been called once
+        assert fallback_call_count == 1
+        fb_deltas = [
+            c for c in chunks if c.tool_call_delta is not None and c.tool_call_delta.tool_use_id.startswith("fb_")
+        ]
+        assert len(fb_deltas) == 1
+        assert fb_deltas[0].tool_call_delta.name == "search_menu_tool"
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_when_name_present(self):
+        """No fallback call when all Ollama tool calls have names."""
+        from lauren_ai._config import LLMConfig
+        from lauren_ai._transport._ollama import OllamaTransport
+
+        config, _ = LLMConfig.for_testing()
+        transport = OllamaTransport(config)
+
+        lines = [
+            _make_ollama_line(
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "toolu_good",
+                                "function": {"name": "find_dish_tool", "arguments": {"dish": "Peking Duck"}},
+                            }
+                        ],
+                    },
+                    "done": False,
+                }
+            ),
+            _make_ollama_line(
+                {
+                    "message": {"role": "assistant", "content": ""},
+                    "done": True,
+                    "done_reason": "stop",
+                    "prompt_eval_count": 5,
+                    "eval_count": 2,
+                }
+            ),
+        ]
+
+        async def _aiter_lines():
+            for line in lines:
+                yield line
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.aiter_lines = _aiter_lines
+
+        fallback_count = 0
+
+        async def _fake_post(*_a, **_kw):
+            nonlocal fallback_count
+            fallback_count += 1
+
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def _fake_stream(*_a, **_kw):
+            yield mock_resp
+
+        mock_client = MagicMock()
+        mock_client.stream = _fake_stream
+        mock_client.post = _fake_post
+        transport._client = mock_client
+
+        payload = {"model": "llama3.2", "messages": [], "stream": True}
+        chunks: list[CompletionChunk] = []
+        async for chunk in transport._stream(payload):
+            chunks.append(chunk)
+
+        assert fallback_count == 0
+        tc_deltas = [c for c in chunks if c.tool_call_delta is not None]
+        assert len(tc_deltas) == 1
+        assert tc_deltas[0].tool_call_delta.name == "find_dish_tool"
