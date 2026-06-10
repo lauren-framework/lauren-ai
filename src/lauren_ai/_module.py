@@ -496,7 +496,9 @@ def _attach_agent_tools(
         for kb_name in allowed_kb:
             if kb_name in full_tools:
                 agent_tools.setdefault(kb_name, full_tools[kb_name])
-        meta.tools = agent_tools
+        # Use update() so any MCP tools already injected by McpBridge.post_construct
+        # are preserved when the runner factory runs later (class-form path).
+        meta.tools.update(agent_tools)
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +557,7 @@ class AgentModule:
         export_tools: list[type] | None = None,
         shared_tools: list[type] | None = None,
         global_tool_hooks: list[type] | None = None,
+        mcp_servers: list[Any] | None = None,
     ) -> type:
         """Create a ``@module`` providing the agent runner and all agent instances.
 
@@ -637,6 +640,13 @@ class AgentModule:
             them through the import chain.  Only the *declaration* step is skipped; ownership,
             lifecycle, and scope all remain in the providing module.
         :type shared_tools: list[type] | None
+        :param mcp_servers: Optional list of MCP server configurations.  Each
+            entry is an ``McpServerConfig(alias, client)`` or a bare
+            ``McpClientProtocol`` (alias derived from the command/URL).  At
+            application startup the bridge connects every client, fetches its
+            tool list, and injects ``{alias}__{tool_name}`` entries into every
+            agent's tool map so they are visible to the LLM.
+        :type mcp_servers: list[McpServerConfig | McpClientProtocol] | None
         :return: A ``@module``-decorated class.
         :rtype: type
         """
@@ -676,6 +686,7 @@ class AgentModule:
                     agent_class=_agent_cls,
                 )
             _meta.runner_class = _runner_cls
+            _meta.tools = {}  # reset so MCP tools from prior apps don't leak
             if _meta.conversation_store is None:
                 _meta.conversation_store = InMemoryConversationStore()
             # Strict-inheritance check — mirrors framework rule for
@@ -854,6 +865,30 @@ class AgentModule:
         # subclass token to inject a specific source singularly.
         for _kb_value_provider in _kb_value_providers:
             providers.append(_kb_value_provider)
+
+        # MCP server bridge — connects remote MCP servers at startup and injects
+        # namespaced tool entries ({alias}__{tool_name}) into each agent's
+        # AgentMeta.tools dict so the LLM sees them alongside native @tool()s.
+        if mcp_servers:
+            from lauren_ai.mcp._bridge import (  # noqa: PLC0415
+                McpServerConfig as _McpServerConfig,
+            )
+            from lauren_ai.mcp._bridge import (
+                _make_mcp_bridge_class,
+            )
+
+            _mcp_configs: list[_McpServerConfig] = []
+            for _mcp_item in mcp_servers:
+                if isinstance(_mcp_item, _McpServerConfig):
+                    _mcp_configs.append(_mcp_item)
+                else:
+                    # Bare McpClientProtocol — derive alias from URL or command
+                    _alias: str = (
+                        getattr(_mcp_item, "_url", None) or (getattr(_mcp_item, "_command", None) or ["mcp"])[0]
+                    )
+                    _mcp_configs.append(_McpServerConfig(alias=_alias, client=_mcp_item))
+
+            providers.append(_make_mcp_bridge_class(_mcp_configs, list(agents)))
 
         # Add class-form tools as DI providers only — they are module-internal
         # and resolved by the AgentRunner factory.  Exporting them would cause
