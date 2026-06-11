@@ -81,6 +81,7 @@ __all__ = [
     "agent",
     "use_tools",
     "use_knowledge_sources",
+    "use_mcp_servers",
     "tool",
     # Agent types
     "AgentMeta",
@@ -88,6 +89,8 @@ __all__ = [
     "AgentResponse",
     # Tool types
     "ToolContext",
+    "UnifiedToolContext",
+    "ToolContextAdapter",
     "ToolCallContext",
     "ToolResult",
     "ToolHook",
@@ -151,6 +154,8 @@ __all__ = [
     "ToolCallStarted",
     "ToolCallComplete",
     "AgentRunComplete",
+    "ToolProgressEvent",
+    "McpToolsRefreshed",
     # Modules / services
     "LLMModule",
     "AgentModule",
@@ -274,6 +279,7 @@ from lauren_ai._agents import (
     AgentResponse,
     agent,
     use_knowledge_sources,
+    use_mcp_servers,
     use_tools,
 )
 
@@ -469,6 +475,7 @@ from lauren_ai._signals import (
     AgentMessageRequestCompleted,
     AgentMessageSent,
     AgentRunComplete,
+    McpToolsRefreshed,
     ModelCallComplete,
     ModelCallStarted,
     SignalBus,
@@ -476,6 +483,7 @@ from lauren_ai._signals import (
     SubagentStarted,
     ToolCallComplete,
     ToolCallStarted,
+    ToolProgressEvent,
 )
 from lauren_ai._subagent import (
     BriefCompiler,
@@ -507,7 +515,9 @@ from lauren_ai._teams import (
 )
 from lauren_ai._tools import (
     ToolContext,
+    ToolContextAdapter,
     ToolResult,
+    UnifiedToolContext,
     get_tool_context_from_func_args,
     set_metadata,
     tool,

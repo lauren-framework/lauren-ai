@@ -874,6 +874,7 @@ class AgentModule:
                 McpServerConfig as _McpServerConfig,
             )
             from lauren_ai.mcp._bridge import (
+                _make_dynamic_mcp_bridge_class,
                 _make_mcp_bridge_class,
             )
 
@@ -888,7 +889,13 @@ class AgentModule:
                     )
                     _mcp_configs.append(_McpServerConfig(alias=_alias, client=_mcp_item))
 
-            providers.append(_make_mcp_bridge_class(_mcp_configs, list(agents)))
+            # Use dynamic bridge (list_changed subscription) when any client
+            # exposes on_list_changed; otherwise use the simpler static bridge.
+            _has_dynamic_client = any(hasattr(c.client, "on_list_changed") for c in _mcp_configs)
+            if _has_dynamic_client:
+                providers.append(_make_dynamic_mcp_bridge_class(_mcp_configs, list(agents), signals=_captured_signals))
+            else:
+                providers.append(_make_mcp_bridge_class(_mcp_configs, list(agents), signals=_captured_signals))
 
         # Add class-form tools as DI providers only — they are module-internal
         # and resolved by the AgentRunner factory.  Exporting them would cause

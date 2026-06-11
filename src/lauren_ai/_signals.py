@@ -44,6 +44,9 @@ __all__ = [
     "AgentMessageRequestCompleted",
     "SubagentStarted",
     "SubagentCompleted",
+    # MCP-specific signals
+    "ToolProgressEvent",
+    "McpToolsRefreshed",
     # Bus
     "SignalBus",
 ]
@@ -184,6 +187,66 @@ class ToolCallComplete(LifecycleEvent):  # type: ignore[misc]
     duration_ms: float = 0.0
     success: bool = True
     error: str | None = None
+
+
+@dataclass
+class ToolProgressEvent(LifecycleEvent):  # type: ignore[misc]
+    """Emitted when an MCP tool sends a ``notifications/progress`` message.
+
+    Subscribers can forward live progress updates to a client-facing transport
+    (SSE, WebSocket) without polling.
+
+    :param tool_name: Namespaced tool name in ``{alias}__{name}`` format.
+    :type tool_name: str
+    :param tool_use_id: Provider-assigned identifier correlating to the active
+        tool call.  Empty string when the progress token is not a tool-use ID.
+    :type tool_use_id: str
+    :param agent_id: The active agent run identifier, or ``None``.
+    :type agent_id: str | None
+    :param agent_name: Human-readable agent name, or empty string.
+    :type agent_name: str
+    :param progress: Current progress value reported by the server.
+    :type progress: float
+    :param total: Optional upper bound.  ``None`` means indeterminate.
+    :type total: float | None
+    :param message: Optional human-readable status string from the server.
+    :type message: str | None
+    :param alias: The MCP server alias (e.g. ``"code_runner"``).
+    :type alias: str
+    """
+
+    tool_name: str = ""
+    tool_use_id: str = ""
+    agent_id: str | None = None
+    agent_name: str = ""
+    progress: float = 0.0
+    total: float | None = None
+    message: str | None = None
+    alias: str = ""
+
+
+@dataclass
+class McpToolsRefreshed(LifecycleEvent):  # type: ignore[misc]
+    """Emitted when an MCP server's tool catalogue changes at runtime.
+
+    Fired by the dynamic tool discovery bridge after it has atomically updated
+    ``AgentMeta.tools`` in response to a ``notifications/tools/list_changed``
+    notification (or a poll-based refresh).
+
+    :param alias: The MCP server alias whose tools changed.
+    :type alias: str
+    :param added: Tool names added to the catalogue.
+    :type added: list[str]
+    :param removed: Tool names removed from the catalogue.
+    :type removed: list[str]
+    :param total: Total number of tools after the refresh.
+    :type total: int
+    """
+
+    alias: str = ""
+    added: list[str] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
+    total: int = 0
 
 
 @dataclass

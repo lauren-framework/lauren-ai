@@ -254,9 +254,12 @@ class TestAgentRunnerWithRealMcpSubprocess:
             content = getattr(m, "content", None) or (m.get("content") if isinstance(m, dict) else None)
             if isinstance(content, list):
                 for block in content:
-                    if isinstance(block, dict) and block.get("type") == "tool_result":
-                        if "HELLO" in str(block.get("content", "")):
-                            uppercase_found = True
+                    if (
+                        isinstance(block, dict)
+                        and block.get("type") == "tool_result"
+                        and "HELLO" in str(block.get("content", ""))
+                    ):
+                        uppercase_found = True
         assert uppercase_found, "Expected HELLO in tool result messages"
         await bridge._disconnect_all()
 
@@ -271,5 +274,7 @@ class TestAgentRunnerWithRealMcpSubprocess:
         await bridge._disconnect_all()
 
         # After disconnect, calling list_tools should fail
-        with pytest.raises(Exception):
+        from lauren_mcp import McpCallError  # noqa: PLC0415
+
+        with pytest.raises(McpCallError):
             await asyncio.wait_for(client.list_tools(), timeout=3.0)

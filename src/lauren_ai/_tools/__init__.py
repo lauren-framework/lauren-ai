@@ -35,11 +35,15 @@ __all__ = [
     "ToolMeta",
     "ToolResult",
     "ToolSchema",
+    "UnifiedToolContext",
+    "ToolContextAdapter",
     "get_tool_context_from_func_args",
     "set_metadata",
     "tool",
     "use_hooks",
 ]
+
+from lauren_ai._tools._unified import ToolContextAdapter, UnifiedToolContext  # noqa: E402
 
 # Sentinel attribute used by @set_metadata to attach static key-value pairs to
 # @tool()-decorated functions and classes — same pattern as lauren.set_metadata
@@ -112,6 +116,7 @@ class ToolContext:
     execution_context: Any | None = None  # lauren ExecutionContext, or None
     metadata: dict[str, Any] = field(default_factory=dict)
     state: dict[str, Any] = field(default_factory=dict)
+    tool_name: str = ""  # populated by _execute_single_tool at call time
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
         """Return metadata by *key*, checking tool-level then agent-level.

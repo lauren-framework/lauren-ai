@@ -24,12 +24,14 @@ from __future__ import annotations
 __all__ = [
     "AGENT_META",
     "USE_KB_SOURCES_META",
+    "USE_MCP_SERVERS_META",
     "USE_TOOLS_META",
     "AgentMeta",
     "AgentContext",
     "AgentResponse",
     "agent",
     "use_knowledge_sources",
+    "use_mcp_servers",
     "use_tools",
 ]
 
@@ -58,6 +60,10 @@ USE_TOOLS_META: str = "__lauren_ai_tools__"
 #: ``tuple[str, ...]``.  Absence (or own ``__dict__`` lacking the key) means
 #: the agent has **no** knowledge-source tools — opt-in only.
 USE_KB_SOURCES_META: str = "__lauren_ai_knowledge_sources__"
+
+#: Attribute name set by ``@use_mcp_servers()`` to restrict which MCP aliases
+#: an agent is allowed to call.  Stored as a ``frozenset[str]``.
+USE_MCP_SERVERS_META: str = "__lauren_ai_use_mcp_servers__"
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +131,7 @@ class AgentMeta:
     knowledge_source_filter: tuple[str, ...] | None = None
     runner_class: type | None = None
     tools: dict[str, Any] = field(default_factory=dict)
+    allowed_mcp_aliases: frozenset[str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +408,11 @@ def agent(
             memory=memory,
             conversation_store=conversation_store,
         )
+        # Read @use_mcp_servers from own __dict__ and copy to meta.
+        _raw_mcp_aliases = cls.__dict__.get(USE_MCP_SERVERS_META)
+        if _raw_mcp_aliases is not None:
+            meta.allowed_mcp_aliases = frozenset(_raw_mcp_aliases)
+
         setattr(cls, AGENT_META, meta)
 
         # Auto-apply @injectable(scope=Scope.SINGLETON) unless already applied.
@@ -512,6 +524,55 @@ def use_knowledge_sources(*sources: Any) -> Callable[[type[C]], type[C]]:
         # inherit from a parent class.  Stacking rule: concatenate.
         existing: tuple[str, ...] = cls.__dict__.get(USE_KB_SOURCES_META, ())
         setattr(cls, USE_KB_SOURCES_META, existing + names)
+        return cls
+
+    return decorator
+
+
+def use_mcp_servers(*aliases: str) -> Callable[[type[C]], type[C]]:
+    """Restrict an agent to only receive tools from the listed MCP server aliases.
+
+    Without this decorator the agent receives tools from **all** configured MCP
+    aliases (backward-compatible behaviour).  With it, only tools from the
+    listed aliases are injected into the agent's tool schema.
+
+    Pass no arguments (``@use_mcp_servers()``) to explicitly prevent an agent
+    from receiving **any** MCP tools.
+
+    Stacking is allowed — multiple ``@use_mcp_servers(...)`` decorators
+    accumulate aliases.
+
+    Example::
+
+        @use_mcp_servers("filesystem", "weather")
+        @agent(model="claude-sonnet-4-6", system="You are a researcher.")
+        class ResearchAgent: ...
+
+    :param aliases: Zero or more MCP alias strings.
+    :type aliases: str
+    :return: A class decorator.
+    :raises DecoratorUsageError: When the same alias is listed more than once.
+    """
+    if len(aliases) != len(set(aliases)):
+        duplicates = {a for a in aliases if aliases.count(a) > 1}
+        from lauren_ai._exceptions import DecoratorUsageError  # noqa: PLC0415
+
+        raise DecoratorUsageError(
+            f"@use_mcp_servers has duplicate alias(es): {sorted(duplicates)!r}.  Each alias must appear at most once.",
+            decorator_name="use_mcp_servers",
+        )
+
+    def decorator(cls: type[C]) -> type[C]:
+        existing: frozenset[str] = cls.__dict__.get(USE_MCP_SERVERS_META, frozenset())
+        new_set = existing | frozenset(aliases)
+        setattr(cls, USE_MCP_SERVERS_META, new_set)
+        # If @agent() already ran and set AGENT_META, update meta directly.
+        # (Python applies decorators bottom-up, so @use_mcp_servers written
+        # above @agent() runs after @agent() — this is the normal order.)
+        if AGENT_META in cls.__dict__:
+            meta = getattr(cls, AGENT_META)
+            current = meta.allowed_mcp_aliases or frozenset()
+            meta.allowed_mcp_aliases = current | new_set
         return cls
 
     return decorator
