@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, TypeVar
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
 __all__ = [
     # Base
@@ -49,9 +49,13 @@ __all__ = [
     "McpToolsRefreshed",
     # Bus
     "SignalBus",
+    # Event sink (PRD: pluggable-event-sink)
+    "EventSink",
+    "serialize",
 ]
 
 import contextlib
+import dataclasses
 
 from lauren.signals import LifecycleEvent
 
@@ -419,6 +423,112 @@ class AgentMessageRequestCompleted(LifecycleEvent):  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
+# EventSink protocol (PRD: pluggable-event-sink)
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class EventSink(Protocol):
+    """Receives every lifecycle signal emitted by an :class:`AgentRunnerBase`.
+
+    Implementations must be exception-safe: anything raised by
+    :meth:`on_signal` is logged at ``WARNING`` and swallowed so it can
+    never interrupt the agentic loop.
+
+    Sinks are awaited **sequentially, in registration order**, before the
+    :class:`SignalBus` fan-out — within a single run a sink observes
+    signals in exactly the order they were emitted.
+
+    Example::
+
+        class KernelBridge:
+            def __init__(self, processor: EventProcessor) -> None:
+                self._processor = processor
+
+            async def on_signal(self, signal: Any) -> None:
+                await self._processor.emit(Event.create(
+                    event_type=f"lauren.{type(signal).__name__}",
+                    payload=serialize(signal),
+                ))
+    """
+
+    async def on_signal(self, signal: Any) -> None: ...
+
+
+# ---------------------------------------------------------------------------
+# serialize() — JSON-safe dict from any LifecycleEvent dataclass
+# ---------------------------------------------------------------------------
+
+
+def _json_safe(value: Any) -> Any:
+    """Recursively make *value* JSON-serialisable."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        result = {f.name: _json_safe(getattr(value, f.name)) for f in dataclasses.fields(value)}
+        result["signal_type"] = type(value).__name__
+        return result
+    if isinstance(value, type):
+        return f"{value.__module__}.{value.__qualname__}"
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, (set, frozenset)):
+        return sorted([_json_safe(v) for v in value], key=str)
+    # Enum → .value
+    try:
+        return value.value  # type: ignore[attr-defined]
+    except AttributeError:
+        pass
+    # datetime / date → ISO-8601
+    try:
+        return value.isoformat()  # type: ignore[attr-defined]
+    except AttributeError:
+        pass
+    # UUID → str
+    try:
+        return str(value.hex)  # type: ignore[attr-defined]
+    except AttributeError:
+        pass
+    # Final fallback
+    try:
+        return repr(value)
+    except Exception:  # noqa: BLE001
+        return "<unserializable>"
+
+
+def serialize(event: Any) -> dict[str, Any]:
+    """Return a JSON-safe ``dict`` representation of a lifecycle signal.
+
+    Works for any dataclass-based :class:`LifecycleEvent` subclass — present
+    or future — without per-class knowledge:
+
+    - the result always contains ``"signal_type": type(event).__name__``
+    - nested dataclasses (e.g. ``TokenUsage``) are recursed
+    - ``type`` values (e.g. ``agent_class``) become ``"module.QualName"`` strings
+    - ``Enum`` → ``.value``; ``datetime`` → ISO-8601; ``set`` / ``frozenset`` →
+      sorted ``list``
+    - anything else not JSON-encodable falls back to ``repr()``
+
+    The output is designed for append-only event logs (e.g. Agenthicc's kernel
+    log); it is not intended for round-trip reconstruction of the dataclass.
+
+    :param event: A signal instance (any dataclass).
+    :type event: Any
+    :return: JSON-safe dictionary with ``"signal_type"`` discriminator key.
+    :rtype: dict[str, Any]
+    :raises TypeError: When *event* is not a dataclass instance.
+    """
+    if not dataclasses.is_dataclass(event) or isinstance(event, type):
+        raise TypeError(f"serialize() requires a dataclass instance; got {type(event)!r}")
+    result: dict[str, Any] = {"signal_type": type(event).__name__}
+    for f in dataclasses.fields(event):
+        result[f.name] = _json_safe(getattr(event, f.name))
+    return result
+
+
+# ---------------------------------------------------------------------------
 # SignalBus — standalone, does not require lauren
 # ---------------------------------------------------------------------------
 
@@ -448,6 +558,7 @@ class SignalBus:
     def __init__(self) -> None:
         """Initialise the signal bus with an empty handler registry."""
         self._handlers: dict[type, list[Callable[..., Awaitable[None]]]] = {}
+        self._any_handlers: list[Callable[..., Awaitable[None]]] = []
 
     def on(
         self,
@@ -476,16 +587,18 @@ class SignalBus:
         return decorator
 
     async def emit(self, event: Any) -> None:
-        """Emit *event* to all registered handlers for its type.
+        """Emit *event* to all registered handlers for its type, then to
+        wildcard handlers registered via :meth:`on_any`.
 
         Handlers are called concurrently via :func:`asyncio.gather`.
-        Individual handler exceptions are caught, printed to ``stderr``,
-        and suppressed.
+        Typed handlers precede wildcard handlers in argument order so
+        invocation *start* order is deterministic.  Individual handler
+        exceptions are caught, printed to ``stderr``, and suppressed.
 
         :param event: The event instance to emit.
         :type event: Any
         """
-        handlers = self._handlers.get(type(event), [])
+        handlers = [*self._handlers.get(type(event), []), *self._any_handlers]
         if not handlers:
             return
         coros = [handler(event) for handler in handlers]
@@ -521,21 +634,70 @@ class SignalBus:
         if not handlers:
             del self._handlers[event_type]
 
+    def on_any(
+        self,
+        handler: Callable[..., Awaitable[None]],
+    ) -> Callable[..., Awaitable[None]]:
+        """Register *handler* for **every** emitted event, regardless of type.
+
+        Usable directly or as a bare decorator::
+
+            @bus.on_any
+            async def audit(event: Any) -> None:
+                log.info("signal %s", type(event).__name__)
+
+        Wildcard handlers are called via the same :func:`asyncio.gather` as
+        typed handlers for the event, **after** them in argument order, so
+        invocation start order is typed → wildcard.  Returns *handler*
+        unchanged.
+
+        :param handler: Async callable accepting a single event argument.
+        :type handler: Callable
+        :return: *handler* unchanged (enables use as a decorator).
+        :rtype: Callable
+        """
+        self._any_handlers.append(handler)
+        return handler
+
+    def off_any(self, handler: Callable[..., Awaitable[None]]) -> None:
+        """Unregister a wildcard handler.  No-op when not registered.
+
+        :param handler: The handler to remove.
+        :type handler: Callable
+        """
+        with contextlib.suppress(ValueError):
+            self._any_handlers.remove(handler)
+
+    def any_handler_count(self) -> int:
+        """Return the number of registered wildcard handlers.
+
+        :return: Wildcard handler count.
+        :rtype: int
+        """
+        return len(self._any_handlers)
+
     def clear(self, event_type: type | None = None) -> None:
         """Remove all handlers, optionally scoped to a specific *event_type*.
 
+        When *event_type* is ``None``, both typed and wildcard handlers are
+        cleared.  When a type is provided, only handlers for that type are
+        removed (wildcard handlers are untouched).
+
         :param event_type: When provided, only handlers for this event type
-            are removed.  When ``None``, all handlers across all types are
-            cleared.
+            are removed.  When ``None``, all handlers across all types and
+            all wildcard handlers are cleared.
         :type event_type: type | None
         """
         if event_type is None:
             self._handlers.clear()
+            self._any_handlers.clear()
         else:
             self._handlers.pop(event_type, None)
 
     def handler_count(self, event_type: type) -> int:
         """Return the number of handlers registered for *event_type*.
+
+        Does **not** include wildcard handlers.  See :meth:`any_handler_count`.
 
         :param event_type: The event type to query.
         :type event_type: type

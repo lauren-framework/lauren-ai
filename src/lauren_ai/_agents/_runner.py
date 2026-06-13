@@ -363,10 +363,12 @@ class AgentRunnerBase(AgentRunner):
         cache_backend: CacheBackend | None = None,
         global_hooks: list[Any] | None = None,
         message_bus: AgentMessageBus | None = None,
+        event_sinks: list[Any] | None = None,
     ) -> None:
         self._transport = transport
         self._signals = signals
         self._message_bus = message_bus
+        self._event_sinks: tuple[Any, ...] = tuple(event_sinks or ())
         self._executor = ToolExecutor(
             tools={},
             cache_backend=cache_backend,
@@ -394,6 +396,7 @@ class AgentRunnerBase(AgentRunner):
         memory: Any | None = None,
         config_override: AgentConfig | None = None,
         model_override: str | None = None,
+        event_sinks: list[Any] | None = None,
     ) -> AgentResponse:
         """Run an ``@agent()``-decorated instance through the agentic loop.
 
@@ -450,6 +453,9 @@ class AgentRunnerBase(AgentRunner):
         effective_config = self._merge_config(meta, config_override)
         agent_run_id = run_id or uuid.uuid4().hex
         agent_id = uuid.uuid4().hex
+
+        # Run-scoped sinks: constructor sinks + per-run sinks, immutable tuple.
+        _run_sinks: tuple[Any, ...] = (*self._event_sinks, *tuple(event_sinks or ()))
 
         # Resolve per-run state from AgentMeta with per-request overrides.
         # The store / memory live with the agent class (set via @agent(...))
@@ -542,6 +548,7 @@ class AgentRunnerBase(AgentRunner):
             # Signal: ModelCallStarted
             await self._emit(
                 "ModelCallStarted",
+                _run_sinks,
                 model=model,
                 agent_id=agent_run_id,
                 agent_class=ctx.agent_class,
@@ -585,6 +592,7 @@ class AgentRunnerBase(AgentRunner):
                 # Signal: ModelCallComplete
                 await self._emit(
                     "ModelCallComplete",
+                    _run_sinks,
                     model=model,
                     agent_id=agent_run_id,
                     agent_class=ctx.agent_class,
@@ -633,6 +641,7 @@ class AgentRunnerBase(AgentRunner):
                 # Signal: AgentTurnComplete
                 await self._emit(
                     "AgentTurnComplete",
+                    _run_sinks,
                     agent_id=agent_run_id,
                     agent_class=ctx.agent_class,
                     turn=_turn,
@@ -665,6 +674,7 @@ class AgentRunnerBase(AgentRunner):
                         ctx=ctx,
                         agent=agent,
                         model=model,
+                        run_sinks=_run_sinks,
                     )
                     all_tool_calls.extend(completion.tool_calls)
 
@@ -716,6 +726,7 @@ class AgentRunnerBase(AgentRunner):
         # Signal: AgentRunComplete
         await self._emit(
             "AgentRunComplete",
+            _run_sinks,
             agent_id=agent_run_id,
             agent_class=ctx.agent_class,
             agent_name=ctx.agent_name,
@@ -741,6 +752,7 @@ class AgentRunnerBase(AgentRunner):
         memory: Any | None = None,
         config_override: AgentConfig | None = None,
         model_override: str | None = None,
+        event_sinks: list[Any] | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         """Run an agent with streaming output.
 
@@ -796,6 +808,9 @@ class AgentRunnerBase(AgentRunner):
         effective_config = self._merge_config(meta, config_override)
         agent_run_id = run_id or uuid.uuid4().hex
         agent_id = uuid.uuid4().hex
+
+        # Run-scoped sinks for this streaming run.
+        _run_sinks: tuple[Any, ...] = (*self._event_sinks, *tuple(event_sinks or ()))
 
         # Resolve per-run state from AgentMeta with per-request overrides.
         # Use explicit ``is None`` checks — ShortTermMemory has ``__len__``
@@ -872,6 +887,7 @@ class AgentRunnerBase(AgentRunner):
         # Mirrors run(): ModelCallStarted fires once before the loop.
         await self._emit(
             "ModelCallStarted",
+            _run_sinks,
             model=model,
             agent_id=agent_run_id,
             agent_class=ctx.agent_class,
@@ -892,6 +908,7 @@ class AgentRunnerBase(AgentRunner):
             conversation_id=conversation_id,
             conversation_store=effective_store,
             output_guards=_get_output_guardrails(agent),
+            run_sinks=_run_sinks,
         )
 
     async def approve_tool(self, agent_run_id: str, tool_use_id: str) -> None:
@@ -955,6 +972,7 @@ class AgentRunnerBase(AgentRunner):
         conversation_id: str | None = None,
         conversation_store: Any | None = None,
         output_guards: list[Any] | None = None,
+        run_sinks: tuple[Any, ...] = (),
     ) -> AsyncIterator[CompletionChunk]:
         """Internal generator that drives the streaming agentic loop.
 
@@ -1135,6 +1153,7 @@ class AgentRunnerBase(AgentRunner):
                 # Per-turn signals + hook (mirrors run() 260–286)
                 await self._emit(
                     "ModelCallComplete",
+                    run_sinks,
                     model=model,
                     agent_id=agent_run_id,
                     agent_class=ctx.agent_class,
@@ -1149,6 +1168,7 @@ class AgentRunnerBase(AgentRunner):
 
                 await self._emit(
                     "AgentTurnComplete",
+                    run_sinks,
                     agent_id=agent_run_id,
                     agent_class=ctx.agent_class,
                     turn=_turn,
@@ -1180,6 +1200,7 @@ class AgentRunnerBase(AgentRunner):
                         ctx=ctx,
                         agent=agent,
                         model=model,
+                        run_sinks=run_sinks,
                     )
                     all_tool_calls.extend(accumulated_tool_calls)
                     for result in results:
@@ -1218,6 +1239,7 @@ class AgentRunnerBase(AgentRunner):
 
         await self._emit(
             "AgentRunComplete",
+            run_sinks,
             agent_id=agent_run_id,
             agent_class=ctx.agent_class,
             agent_name=ctx.agent_name,
@@ -1282,6 +1304,7 @@ class AgentRunnerBase(AgentRunner):
         ctx: AgentContext,
         agent: Any,
         model: str,
+        run_sinks: tuple[Any, ...] = (),
     ) -> list[ToolResult]:
         """Execute a batch of tool calls, respecting the parallel_tool_calls config.
 
@@ -1293,16 +1316,18 @@ class AgentRunnerBase(AgentRunner):
         :type agent: Any
         :param model: The current model identifier (used for budget checks).
         :type model: str
+        :param run_sinks: Event sinks for this run.
+        :type run_sinks: tuple
         :return: Ordered list of tool results.
         :rtype: list[ToolResult]
         """
         if ctx.config.parallel_tool_calls and len(tool_calls) > 1:
-            coros = [self._execute_single_tool(tc, ctx=ctx, agent=agent) for tc in tool_calls]
+            coros = [self._execute_single_tool(tc, ctx=ctx, agent=agent, run_sinks=run_sinks) for tc in tool_calls]
             results = list(await asyncio.gather(*coros, return_exceptions=False))
         else:
             results = []
             for tc in tool_calls:
-                result = await self._execute_single_tool(tc, ctx=ctx, agent=agent)
+                result = await self._execute_single_tool(tc, ctx=ctx, agent=agent, run_sinks=run_sinks)
                 results.append(result)
         return results
 
@@ -1312,6 +1337,7 @@ class AgentRunnerBase(AgentRunner):
         *,
         ctx: AgentContext,
         agent: Any,
+        run_sinks: tuple[Any, ...] = (),
     ) -> ToolResult:
         """Execute one tool call, emit signals, and invoke the agent hook.
 
@@ -1347,6 +1373,7 @@ class AgentRunnerBase(AgentRunner):
 
         await self._emit(
             "ToolCallStarted",
+            run_sinks,
             tool_name=tool_call.name,
             tool_use_id=tool_call.tool_use_id,
             agent_id=ctx.agent_run_id,
@@ -1367,6 +1394,7 @@ class AgentRunnerBase(AgentRunner):
             duration_ms = (time.monotonic() - t0) * 1000
             await self._emit(
                 "ToolCallComplete",
+                run_sinks,
                 tool_name=tool_call.name,
                 tool_use_id=tool_call.tool_use_id,
                 agent_id=ctx.agent_run_id,
@@ -1379,6 +1407,7 @@ class AgentRunnerBase(AgentRunner):
             error_msg = str(exc)
             await self._emit(
                 "ToolCallComplete",
+                run_sinks,
                 tool_name=tool_call.name,
                 tool_use_id=tool_call.tool_use_id,
                 agent_id=ctx.agent_run_id,
@@ -1497,18 +1526,39 @@ class AgentRunnerBase(AgentRunner):
             )
             return None
 
-    async def _emit(self, signal_name: str, **kwargs: Any) -> None:
-        """Emit a named signal via the signal bus, if available.
+    async def _emit(
+        self,
+        signal_name: str,
+        sinks: tuple[Any, ...] = (),
+        /,
+        **kwargs: Any,
+    ) -> None:
+        """Emit a named signal to event sinks and the signal bus.
 
-        Looks up the signal class in ``lauren_ai._signals`` and emits it.
-        Failures are logged and swallowed so they never interrupt the loop.
+        Sinks are awaited sequentially before the ``SignalBus`` fan-out,
+        guaranteeing per-run ordering for event-sourced consumers.  A sink
+        that raises is logged at WARNING and skipped so it can never
+        interrupt the agentic loop.
 
-        :param signal_name: Class name of the signal to emit.
+        When no sinks are configured and no ``SignalBus`` is attached, the
+        call is a cheap early-return (byte-identical to the previous
+        behaviour).
+
+        :param signal_name: Class name of the signal to emit (e.g.
+            ``"ToolCallStarted"``).
         :type signal_name: str
-        :param kwargs: Fields for the signal dataclass.
+        :param sinks: Run-scoped sinks (positional-only so the name can
+            never collide with a signal field). Constructor sinks
+            (``self._event_sinks``) are always prepended by the call sites.
+        :type sinks: tuple
+        :param kwargs: Fields forwarded to the signal dataclass constructor.
         """
-        if self._signals is None:
+        all_sinks = sinks  # call sites already prepend self._event_sinks
+        if self._signals is None and not all_sinks:
             return
+
+        # Build the signal instance once; a bad field set is logged once
+        # rather than once per consumer.
         try:
             from lauren_ai import _signals  # noqa: PLC0415
 
@@ -1516,10 +1566,33 @@ class AgentRunnerBase(AgentRunner):
             if signal_cls is None:
                 return
             event = signal_cls(**kwargs)
-            await self._signals.emit(event)
         except Exception:  # noqa: BLE001
             logger.debug(
-                "lauren_ai.AgentRunner: failed to emit signal '%s'",
+                "lauren_ai.AgentRunner: failed to build signal '%s'",
                 signal_name,
                 exc_info=True,
             )
+            return
+
+        # 1. Sinks — sequential, ordered, exception-isolated per sink.
+        for sink in all_sinks:
+            try:
+                await sink.on_signal(event)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "lauren_ai.AgentRunner: event sink %r raised for '%s'",
+                    sink,
+                    signal_name,
+                    exc_info=True,
+                )
+
+        # 2. SignalBus — existing fan-out path, unchanged.
+        if self._signals is not None:
+            try:
+                await self._signals.emit(event)
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "lauren_ai.AgentRunner: failed to emit signal '%s'",
+                    signal_name,
+                    exc_info=True,
+                )

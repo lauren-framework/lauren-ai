@@ -145,6 +145,8 @@ __all__ = [
     "REMEMBER_META",
     # Signals
     "SignalBus",
+    "EventSink",
+    "serialize",
     "AgentMessageSent",
     "AgentMessageRequestCompleted",
     "SubagentStarted",
@@ -475,6 +477,7 @@ from lauren_ai._signals import (
     AgentMessageRequestCompleted,
     AgentMessageSent,
     AgentRunComplete,
+    EventSink,
     McpToolsRefreshed,
     ModelCallComplete,
     ModelCallStarted,
@@ -484,6 +487,7 @@ from lauren_ai._signals import (
     ToolCallComplete,
     ToolCallStarted,
     ToolProgressEvent,
+    serialize,
 )
 from lauren_ai._subagent import (
     BriefCompiler,
