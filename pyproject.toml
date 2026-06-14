@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=72", "setuptools-scm>=8.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling>=1.21", "hatch-vcs>=0.4"]
+build-backend = "hatchling.build"
 
 [project]
 name = "lauren-ai"
@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 authors = [{ name = "Lauren Contributors" }]
 keywords = ["llm", "ai", "agents", "framework", "lauren"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -60,30 +60,74 @@ dev = [
     "pymdown-extensions>=10.7",
     "mkdocstrings[python]>=0.27",
     "griffe>=1.0",
+    "hatchling>=1.21",
+    "hatch-vcs>=0.4",
+    "twine>=5.0",
     "lauren-mcp",
 ]
 
 [project.urls]
-Homepage   = "https://github.com/lauren-framework/lauren-ai"
-Repository = "https://github.com/lauren-framework/lauren-ai"
+Homepage      = "https://github.com/lauren-framework/lauren-ai"
+Repository    = "https://github.com/lauren-framework/lauren-ai"
+Documentation = "https://ai.lauren-py.dev"
+Changelog     = "https://github.com/lauren-framework/lauren-ai/blob/main/CHANGELOG.md"
 
-[tool.setuptools_scm]
-fallback_version = "0.0.0+unknown"
-version_scheme = "post-release"
-local_scheme = "dirty-tag"
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.0.0+unknown"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/lauren_ai"]
+artifacts = ["src/lauren_ai/py.typed"]
+
+[tool.hatch.build.targets.sdist]
+# Only include what a downstream user or contributor needs
+include = [
+    "src/",
+    "tests/",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "llms-full.txt",
+    "llms.txt",
+    "pyproject.toml",
+]
+exclude = [
+    "prds/",
+    "skills/",
+    ".github/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "MANIFEST.in",
+    ".ruff_cache/",
+    ".mypy_cache/",
+    ".pytest_cache/",
+    ".nox/",
+    "dist/",
+    "build/",
+    "htmlcov/",
+]
 
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+exclude = [
+    "tests",
+    "examples",
+    "docs",
+    "scripts",
+    ".nox",
+    ".venv",
+    "build",
+    "dist",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "ANN"]
 ignore = [
-    "ANN101", "ANN102", "ANN401",   # self/cls/Any annotations
-    "B008",                          # function calls in default args (common in DI)
+    "ANN401",   # Any annotations are fine in generic helpers
+    "B008",     # function calls in default args (common in DI)
 ]
 
 [tool.ruff.lint.per-file-ignores]

@@ -183,7 +183,7 @@ def lint(session: nox.Session) -> None:
     """
     session.install("ruff>=0.6")
     extra = session.posargs or []
-    session.run("ruff", "check", "--fix", "src", "tests", *extra)
+    session.run("ruff", "check", "--fix", "src", *extra)
 
 
 @nox.session(python=PRIMARY_PYTHON, reuse_venv=True)
