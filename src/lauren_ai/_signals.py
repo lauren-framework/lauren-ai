@@ -37,6 +37,7 @@ __all__ = [
     "ToolCallStarted",
     "ToolCallComplete",
     "ToolPendingApproval",
+    "ToolApprovalResolved",
     "AgentTurnComplete",
     "AgentRunComplete",
     "EmbeddingGenerated",
@@ -278,6 +279,38 @@ class ToolPendingApproval(LifecycleEvent):  # type: ignore[misc]
     tool_name: str = ""
     tool_use_id: str = ""
     input: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ToolApprovalResolved(LifecycleEvent):  # type: ignore[misc]
+    """Emitted when a pending HITL approval is resolved (approved or denied).
+
+    Fired immediately after :class:`ToolPendingApproval` is resolved — either
+    by a call to ``approve_tool()``, ``reject_tool()``, or by timeout.
+
+    :param agent_id: Unique identifier for the current agent run.
+    :type agent_id: str
+    :param agent_run_id: A secondary correlation identifier for the run.
+    :type agent_run_id: str
+    :param tool_name: The tool whose approval was resolved.
+    :type tool_name: str
+    :param tool_use_id: The provider-assigned identifier.
+    :type tool_use_id: str
+    :param approved: ``True`` when the tool was approved; ``False`` when
+        denied or timed out.
+    :type approved: bool
+    :param reason: Human-readable reason for denial.  ``""`` when approved.
+        ``"timeout"`` when the approval window expired.
+        ``"denied by user"`` when explicitly rejected via ``reject_tool()``.
+    :type reason: str
+    """
+
+    agent_id: str = ""
+    agent_run_id: str = ""
+    tool_name: str = ""
+    tool_use_id: str = ""
+    approved: bool = False
+    reason: str = ""
 
 
 # ---------------------------------------------------------------------------

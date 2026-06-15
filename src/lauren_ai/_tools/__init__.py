@@ -353,8 +353,22 @@ class ToolMeta:
     :type reads_context: bool
     :param requires_confirmation: When ``True`` the executor raises
         ``ToolPendingApprovalSignal`` before invoking the tool, allowing a
-        human-in-the-loop review step.
+        human-in-the-loop review step.  Takes priority over
+        ``confirmation_policy`` — the gate always fires regardless of what
+        the policy returns.
     :type requires_confirmation: bool
+    :param confirmation_policy: Optional callable evaluated at execution time
+        (after before-hooks) to decide dynamically whether confirmation is
+        needed.  Receives the ``ToolCallContext`` — which carries the
+        hook-modified input and ``ctx.state`` (populated by global hooks such
+        as ``AppStateInjectorHook``).  May be sync or async.  Ignored when
+        ``requires_confirmation=True``.
+    :type confirmation_policy: Callable[[ToolCallContext], bool | Awaitable[bool]] | None
+    :param confirmation_policy_error_default: What to do when
+        ``confirmation_policy`` raises an exception.  ``True`` = fail-closed
+        (require confirmation — safer for write tools).  ``False`` = fail-open
+        (skip confirmation — safer for read tools).  Defaults to ``True``.
+    :type confirmation_policy_error_default: bool
     :param pre_hook: Optional callable invoked *before* the tool runs.
         Receives ``(tool_call, tool_context)``.
     :type pre_hook: Callable[..., Any] | None
@@ -386,6 +400,8 @@ class ToolMeta:
     reads_context: bool
     context_param_name: str | None = None
     requires_confirmation: bool = False
+    confirmation_policy: Callable[..., Any] | None = None
+    confirmation_policy_error_default: bool = True
     pre_hook: Callable[..., Any] | None = None
     post_hook: Callable[..., Any] | None = None
     error_hook: Callable[..., Any] | None = None
@@ -482,6 +498,8 @@ def _build_meta(
     name: str | None,
     description: str | None,
     requires_confirmation: bool,
+    confirmation_policy: Callable[..., Any] | None = None,
+    confirmation_policy_error_default: bool = True,
     pre_hook: Callable[..., Any] | None,
     post_hook: Callable[..., Any] | None,
     error_hook: Callable[..., Any] | None,
@@ -564,6 +582,8 @@ def _build_meta(
         reads_context=reads_context,
         context_param_name=context_param_name,
         requires_confirmation=requires_confirmation,
+        confirmation_policy=confirmation_policy,
+        confirmation_policy_error_default=confirmation_policy_error_default,
         pre_hook=pre_hook,
         post_hook=post_hook,
         error_hook=error_hook,
@@ -578,6 +598,8 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     requires_confirmation: bool = False,
+    confirmation_policy: Callable[..., Any] | None = None,
+    confirmation_policy_error_default: bool = True,
     pre_hook: Callable[..., Any] | None = None,
     post_hook: Callable[..., Any] | None = None,
     error_hook: Callable[..., Any] | None = None,
@@ -654,6 +676,8 @@ def tool(
             name=name,
             description=description,
             requires_confirmation=requires_confirmation,
+            confirmation_policy=confirmation_policy,
+            confirmation_policy_error_default=confirmation_policy_error_default,
             pre_hook=pre_hook,
             post_hook=post_hook,
             error_hook=error_hook,

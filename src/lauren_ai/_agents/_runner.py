@@ -37,7 +37,7 @@ from lauren_ai._exceptions import (
 from lauren_ai._memory import ShortTermMemory
 from lauren_ai._messaging import AgentMessageBus
 from lauren_ai._tools import TOOL_METADATA, ToolContext, ToolResult
-from lauren_ai._tools._executor import CacheBackend, ToolExecutor
+from lauren_ai._tools._executor import CacheBackend, ToolExecutor, ToolPendingApprovalSignal
 from lauren_ai._tools._executor import ToolCall as ExecutorToolCall
 from lauren_ai._transport import Completion, CompletionChunk, Message, TokenUsage, ToolCall
 
@@ -270,9 +270,9 @@ class AgentRunner(Protocol):
         model_override: str | None = None,
     ) -> AsyncIterator[CompletionChunk]: ...
 
-    async def approve_tool(self, agent_run_id: str, tool_use_id: str) -> None: ...
+    def approve_tool(self, agent_run_id: str, tool_use_id: str) -> None: ...
 
-    async def reject_tool(self, agent_run_id: str, tool_use_id: str, *, reason: str = "") -> None: ...
+    def reject_tool(self, agent_run_id: str, tool_use_id: str, *, reason: str = "") -> None: ...
 
 
 # Attach ``__class_getitem__`` after the Protocol body so it doesn't appear in
@@ -668,14 +668,24 @@ class AgentRunnerBase(AgentRunner):
                     break
 
                 if completion.stop_reason == "tool_use" and completion.tool_calls:
-                    # Execute all tool calls (serial or parallel)
-                    results = await self._execute_tools(
-                        completion.tool_calls,
-                        ctx=ctx,
-                        agent=agent,
-                        model=model,
-                        run_sinks=_run_sinks,
-                    )
+                    # Extension point — subclasses can filter, pause, or reorder.
+                    approved_calls = await self._on_tools_requested(list(completion.tool_calls), ctx=ctx)
+                    if approved_calls:
+                        results = await self._execute_tools(
+                            approved_calls,
+                            ctx=ctx,
+                            agent=agent,
+                            model=model,
+                            run_sinks=_run_sinks,
+                        )
+                    else:
+                        results = [
+                            ToolResult.error(
+                                f"Tool call '{tc.name}' was not approved.",
+                                tool_use_id=tc.tool_use_id,
+                            )
+                            for tc in completion.tool_calls
+                        ]
                     all_tool_calls.extend(completion.tool_calls)
 
                     # Record tool results in memory
@@ -911,8 +921,11 @@ class AgentRunnerBase(AgentRunner):
             run_sinks=_run_sinks,
         )
 
-    async def approve_tool(self, agent_run_id: str, tool_use_id: str) -> None:
+    def approve_tool(self, agent_run_id: str, tool_use_id: str) -> None:
         """Approve a pending HITL tool call.
+
+        Synchronous and thread-safe — may be called from any context,
+        including from a signal handler or a TUI key-press callback.
 
         :param agent_run_id: The run identifier returned by ``run()``.
         :type agent_run_id: str
@@ -925,7 +938,7 @@ class AgentRunnerBase(AgentRunner):
         if fut is not None and not fut.done():
             fut.set_result(True)
 
-    async def reject_tool(
+    def reject_tool(
         self,
         agent_run_id: str,
         tool_use_id: str,
@@ -934,26 +947,22 @@ class AgentRunnerBase(AgentRunner):
     ) -> None:
         """Reject a pending HITL tool call.
 
+        Synchronous and thread-safe — may be called from any context.
+        Uses ``set_result(False)`` so the suspension handler branches on
+        a bool rather than catching a specific exception type.
+
         :param agent_run_id: The run identifier.
         :type agent_run_id: str
         :param tool_use_id: The tool call identifier to reject.
         :type tool_use_id: str
-        :param reason: Optional human-readable rejection reason.
+        :param reason: Optional human-readable rejection reason logged via
+            the ``ToolApprovalResolved`` signal.
         :type reason: str
         """
-        from lauren_ai._exceptions import ToolConfirmationRejectedError  # noqa: PLC0415
-
         futures = self._pending_approvals.get(agent_run_id, {})
         fut = futures.get(tool_use_id)
         if fut is not None and not fut.done():
-            fut.set_exception(
-                ToolConfirmationRejectedError(
-                    reason or "Tool call rejected by operator",
-                    tool_name="",
-                    tool_use_id=tool_use_id,
-                    reason=reason,
-                )
-            )
+            fut.set_result(False)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -1194,14 +1203,24 @@ class AgentRunnerBase(AgentRunner):
                     break
 
                 if accumulated_stop_reason == "tool_use" and accumulated_tool_calls:
-                    # Execute tools silently (do not yield tool results)
-                    results = await self._execute_tools(
-                        accumulated_tool_calls,
-                        ctx=ctx,
-                        agent=agent,
-                        model=model,
-                        run_sinks=run_sinks,
-                    )
+                    # Extension point — subclasses can filter, pause, or reorder.
+                    approved_calls = await self._on_tools_requested(list(accumulated_tool_calls), ctx=ctx)
+                    if approved_calls:
+                        results = await self._execute_tools(
+                            approved_calls,
+                            ctx=ctx,
+                            agent=agent,
+                            model=model,
+                            run_sinks=run_sinks,
+                        )
+                    else:
+                        results = [
+                            ToolResult.error(
+                                f"Tool call '{tc.name}' was not approved.",
+                                tool_use_id=tc.tool_use_id,
+                            )
+                            for tc in accumulated_tool_calls
+                        ]
                     all_tool_calls.extend(accumulated_tool_calls)
                     for result in results:
                         memory.add_tool_result(result)
@@ -1283,6 +1302,34 @@ class AgentRunnerBase(AgentRunner):
         :rtype: AgentConfig
         """
         return override if override is not None else meta.config
+
+    async def _on_tools_requested(
+        self,
+        tool_calls: list[Any],
+        *,
+        ctx: AgentContext,
+    ) -> list[Any]:
+        """Called before any tool calls are dispatched in the agent loop.
+
+        Override in a subclass or mixin to filter, pause, reorder, or audit
+        tool calls before execution.  Applied in **both** ``run()`` and
+        ``run_stream()``.
+
+        Return the list of :class:`ToolCall` objects to execute.  Return an
+        empty list to reject all calls — each omitted call receives a
+        ``ToolResult.error(...)`` response so the model is informed.
+
+        **Model-retry note:** When calls are rejected the model receives error
+        results and may attempt the same calls again on the next turn.  To
+        prevent retries, return an informative error message that instructs
+        the model to stop, or raise ``StopIteration`` to break the loop.
+
+        :param tool_calls: The tool calls the model requested.
+        :param ctx: Current agent context (carries ``agent_run_id`` for
+            correlation with ``approve_tool()`` / ``reject_tool()``).
+        :return: Subset of *tool_calls* to execute (may be the full list).
+        """
+        return tool_calls
 
     def _get_tool_schemas(self, meta: AgentMeta) -> list[Any]:
         """Build the list of tool schemas for the agent's attached tools.
@@ -1380,14 +1427,15 @@ class AgentRunnerBase(AgentRunner):
             input=tool_call.input,
         )
 
+        _executor_call = ExecutorToolCall(
+            tool_use_id=tool_call.tool_use_id,
+            name=tool_call.name,
+            input=tool_call.input,
+        )
         t0 = time.monotonic()
         try:
             result = await self._executor.execute(
-                ExecutorToolCall(
-                    tool_use_id=tool_call.tool_use_id,
-                    name=tool_call.name,
-                    input=tool_call.input,
-                ),
+                _executor_call,
                 tool_context,
                 tool_map=_tool_map,
             )
@@ -1402,6 +1450,83 @@ class AgentRunnerBase(AgentRunner):
                 success=True,
                 error=None,
             )
+
+        except ToolPendingApprovalSignal as sig:
+            # ── HITL: suspend the loop and wait for out-of-band approval ─────
+            # Emit ToolPendingApproval so host UIs can react before we suspend.
+            await self._emit(
+                "ToolPendingApproval",
+                run_sinks,
+                tool_name=sig.tool_name,
+                tool_use_id=sig.tool_use_id,
+                agent_id=ctx.agent_run_id,
+                agent_run_id=ctx.agent_run_id,
+                input=sig.tool_input,
+            )
+
+            loop = asyncio.get_running_loop()
+            fut: asyncio.Future[bool] = loop.create_future()
+            run_approvals = self._pending_approvals.setdefault(ctx.agent_run_id, {})
+            run_approvals[sig.tool_use_id] = fut
+
+            approved = False
+            denial_reason = "denied by user"
+            timeout_s: float = getattr(self, "_hitl_timeout_s", 300.0)
+            try:
+                # asyncio.shield prevents the inner future from being
+                # cancelled when wait_for's timeout fires, avoiding a race
+                # with a concurrent approve_tool() call.
+                approved = await asyncio.wait_for(asyncio.shield(fut), timeout=timeout_s)
+            except TimeoutError:
+                approved = False
+                denial_reason = "timeout"
+                if not fut.done():
+                    fut.cancel()
+            finally:
+                run_approvals.pop(sig.tool_use_id, None)
+
+            # Emit resolution signal so integrations can update their UI.
+            await self._emit(
+                "ToolApprovalResolved",
+                run_sinks,
+                tool_name=sig.tool_name,
+                tool_use_id=sig.tool_use_id,
+                agent_id=ctx.agent_run_id,
+                agent_run_id=ctx.agent_run_id,
+                approved=approved,
+                reason="" if approved else denial_reason,
+            )
+
+            if approved:
+                # Re-execute via execute_approved() — runs after-hooks and
+                # cache write; skips before-hooks and the HITL gate.
+                try:
+                    result = await self._executor.execute_approved(
+                        _executor_call,
+                        tool_context,
+                        tool_map=_tool_map,
+                        approved_input=sig.tool_input,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    result = ToolResult.error(str(exc), tool_use_id=sig.tool_use_id)
+            else:
+                result = ToolResult.error(
+                    f"User denied permission to run '{sig.tool_name}' ({denial_reason}).",
+                    tool_use_id=sig.tool_use_id,
+                )
+
+            duration_ms = (time.monotonic() - t0) * 1000
+            await self._emit(
+                "ToolCallComplete",
+                run_sinks,
+                tool_name=tool_call.name,
+                tool_use_id=tool_call.tool_use_id,
+                agent_id=ctx.agent_run_id,
+                duration_ms=duration_ms,
+                success=approved,
+                error=None if approved else denial_reason,
+            )
+
         except Exception as exc:  # noqa: BLE001
             duration_ms = (time.monotonic() - t0) * 1000
             error_msg = str(exc)
