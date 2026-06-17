@@ -445,6 +445,50 @@ def _heal_dangling_tail(snapshot: list) -> list:
     return snapshot[:insert_at] + synthetic + snapshot[insert_at:]
 
 
+def _heal_dangling_tail_unconditional(snapshot: list) -> list:
+    """Like ``_heal_dangling_tail`` but without the ``has_moved_on`` guard.
+
+    Injects synthetic error results for *any* unanswered tool_calls in the
+    last assistant-with-tool-calls message, even if the conversation has not
+    yet progressed past that turn.  Use this for pre-request healing only —
+    it would incorrectly mutate mid-flight turns if called during a stream.
+    """
+    last_assistant_idx = -1
+    for i, msg in enumerate(snapshot):
+        if _has_tool_calls(msg):
+            last_assistant_idx = i
+
+    if last_assistant_idx == -1:
+        return snapshot
+
+    expected = _get_tool_call_ids(snapshot[last_assistant_idx])
+    if not expected:
+        return snapshot
+
+    answered: set[str] = set()
+    last_result_idx = last_assistant_idx
+    for j in range(last_assistant_idx + 1, len(snapshot)):
+        result_ids = _get_tool_result_ids(snapshot[j])
+        if result_ids:
+            answered.update(result_ids)
+            last_result_idx = j
+
+    missing = expected - answered
+    if not missing:
+        return snapshot
+
+    synthetic = [
+        {
+            "role": "tool",
+            "tool_call_id": tc_id,
+            "content": _INTERRUPTED_CONTENT,
+        }
+        for tc_id in sorted(missing)
+    ]
+    insert_at = last_result_idx + 1
+    return snapshot[:insert_at] + synthetic + snapshot[insert_at:]
+
+
 def _message_char_length(message: Any) -> int:
     """Return the character length of a ``Message`` object.
 
@@ -692,6 +736,21 @@ class ShortTermMemory:
             self._messages = new_msgs
         # Heal dangling tail after mutating the buffer.
         self._messages = _heal_dangling_tail(self._messages)
+
+    def ensure_valid(self) -> None:
+        """Heal dangling tool_calls in-place before making an API request.
+
+        Unlike ``messages()`` (which has a ``has_moved_on`` guard to avoid
+        healing mid-flight tool calls) this method heals *unconditionally*.
+        It should be called once immediately before each ``run_stream()`` /
+        ``run()`` invocation to handle cases where a previous agent turn was
+        interrupted while a tool was suspended — e.g. when the user cancels
+        a plan-approval overlay after the LLM has already called the approval
+        tool for a second time.
+
+        The method is idempotent — calling it multiple times is safe.
+        """
+        self._messages = _heal_dangling_tail_unconditional(self._messages)
 
     @property
     def token_estimate(self) -> int:

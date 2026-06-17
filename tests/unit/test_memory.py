@@ -238,6 +238,61 @@ class TestShortTermMemory:
         assert tool_msgs[0]["tool_call_id"] == "tc_only"
         assert "interrupted" in tool_msgs[0]["content"].lower()
 
+    def test_ensure_valid_heals_without_subsequent_message(self):
+        """ensure_valid() heals dangling tool_calls even when no continuation
+        message follows — the scenario that occurs after a user cancels a second
+        plan-approval attempt mid-stream."""
+        mem = ShortTermMemory()
+        mem.add_user("Here is the context.")
+        # First approval attempt: assistant calls approve, user rejects,
+        # tool result stored correctly.
+        mem._messages.append(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "tc_approve_1", "type": "function", "function": {"name": "approve", "arguments": "{}"}}
+                ],
+                "content": None,
+            }
+        )
+        mem._messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": "tc_approve_1",
+                "content": '{"approved": false, "feedback": "needs more detail"}',
+            }
+        )
+        mem._messages.append({"role": "assistant", "content": "I will revise the plan."})
+        # Second approval attempt: assistant calls approve again, tool is
+        # suspended waiting for user, then CancelledError terminates the turn.
+        # The tool result is NEVER stored.
+        mem._messages.append(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "tc_approve_2", "type": "function", "function": {"name": "approve", "arguments": "{}"}}
+                ],
+                "content": None,
+            }
+        )
+        # ← tc_approve_2 result missing; no subsequent user message either
+
+        # messages() with has_moved_on guard does NOT heal (no subsequent message)
+        msgs_before = mem.messages()
+        tool_ids_before = {
+            m.get("tool_call_id") for m in msgs_before if isinstance(m, dict) and m.get("role") == "tool"
+        }
+        assert "tc_approve_2" not in tool_ids_before, (
+            "messages() should NOT heal without a subsequent message (has_moved_on guard)"
+        )
+
+        # ensure_valid() DOES heal unconditionally
+        mem.ensure_valid()
+        tool_ids_after = {
+            m.get("tool_call_id") for m in mem._messages if isinstance(m, dict) and m.get("role") == "tool"
+        }
+        assert "tc_approve_2" in tool_ids_after, "ensure_valid() must inject synthetic result for tc_approve_2"
+
     def test_trim_to_fit_also_atomic(self):
         """trim_to_fit() must apply the same atomicity guarantee."""
         mem = ShortTermMemory(max_tokens=100_000)
