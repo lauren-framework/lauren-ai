@@ -124,6 +124,14 @@ def _message_to_openai(message: Any) -> list[dict[str, Any]]:
         content = message.content
 
     if isinstance(content, str):
+        # Fast path for string content — but role="tool" messages MUST preserve
+        # tool_call_id or OpenAI rejects the request with a 400.
+        if role == "tool":
+            tc_id = message.get("tool_call_id", "") if isinstance(message, dict) else ""
+            if not tc_id:
+                # Skip tool messages with no ID — cannot be sent to OpenAI.
+                return []
+            return [{"role": "tool", "tool_call_id": tc_id, "content": content}]
         return [{"role": role, "content": content}]
 
     result: list[dict[str, Any]] = []
@@ -146,6 +154,12 @@ def _message_to_openai(message: Any) -> list[dict[str, Any]]:
         else:
             blk_content = block.content
             blk_tool_use_id = block.tool_use_id or ""
+        # A tool result without a tool_use_id cannot be sent to OpenAI — the API
+        # rejects any tool message missing tool_call_id (even an empty string).
+        # Skip such blocks silently; the upstream heal logic should have already
+        # ensured all tool calls have matching results.
+        if not blk_tool_use_id:
+            continue
         if isinstance(blk_content, list):
             blk_content = json.dumps(blk_content)
         result.append(
