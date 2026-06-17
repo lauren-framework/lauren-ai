@@ -151,6 +151,93 @@ class TestShortTermMemory:
                                 f"Orphaned Anthropic tool_result: tool_use_id={tid!r} has no preceding tool_use block."
                             )
 
+    # ── dangling tail healing (regression for insufficient-tool-messages bug) ─
+
+    def test_heal_dangling_tail_injects_synthetic_result(self):
+        """When an agent turn is interrupted before all tool results arrive,
+        messages() must inject synthetic error results for the missing IDs so
+        OpenAI does not return 400 'insufficient tool messages'."""
+        mem = ShortTermMemory()
+        mem.add_user("do something")
+        # Parallel tool calls: A, B, C
+        mem._messages.append(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "tc_A", "type": "function", "function": {"name": "write_file", "arguments": "{}"}},
+                    {"id": "tc_B", "type": "function", "function": {"name": "run_bash", "arguments": "{}"}},
+                    {"id": "tc_C", "type": "function", "function": {"name": "run_tests", "arguments": "{}"}},
+                ],
+                "content": None,
+            }
+        )
+        # Only A and B returned — C was interrupted
+        mem._messages.append({"role": "tool", "tool_call_id": "tc_A", "content": "wrote"})
+        mem._messages.append({"role": "tool", "tool_call_id": "tc_B", "content": "exit 0"})
+        # Continuation turn (C result never arrived)
+        mem.add_user("Continue...")
+
+        msgs = mem.messages()
+
+        # Find the synthetic result for tc_C
+        tool_msgs = [m for m in msgs if isinstance(m, dict) and m.get("role") == "tool"]
+        answered_ids = {m.get("tool_call_id") for m in tool_msgs}
+        assert "tc_A" in answered_ids
+        assert "tc_B" in answered_ids
+        assert "tc_C" in answered_ids, "Synthetic result for tc_C must be injected"
+
+        # Verify the synthetic message is positioned before the user continuation
+        roles = [m.get("role") for m in msgs if isinstance(m, dict)]
+        tc_c_idx = next(i for i, m in enumerate(msgs) if isinstance(m, dict) and m.get("tool_call_id") == "tc_C")
+        user_continue_idx = next(
+            i
+            for i, m in enumerate(msgs)
+            if isinstance(m, dict) and m.get("role") == "user" and m.get("content") == "Continue..."
+        )
+        assert tc_c_idx < user_continue_idx, "Synthetic result must appear before the next user message"
+
+    def test_heal_dangling_tail_all_results_present_no_change(self):
+        """When all tool results are present, messages() must not inject anything."""
+        mem = ShortTermMemory()
+        mem.add_user("do something")
+        mem._messages.append(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "tc_X", "type": "function", "function": {"name": "write_file", "arguments": "{}"}}
+                ],
+                "content": None,
+            }
+        )
+        mem._messages.append({"role": "tool", "tool_call_id": "tc_X", "content": "done"})
+        mem._messages.append({"role": "assistant", "content": "all good"})
+
+        msgs = mem.messages()
+        tool_msgs = [m for m in msgs if isinstance(m, dict) and m.get("role") == "tool"]
+        assert len(tool_msgs) == 1, "No synthetic results injected when all present"
+
+    def test_heal_dangling_tail_single_missing_result(self):
+        """Single tool call whose result was never stored → one synthetic result."""
+        mem = ShortTermMemory()
+        mem.add_user("run bash")
+        mem._messages.append(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "tc_only", "type": "function", "function": {"name": "run_bash", "arguments": "{}"}}
+                ],
+                "content": None,
+            }
+        )
+        # Result never arrived
+        mem.add_user("Continue...")
+
+        msgs = mem.messages()
+        tool_msgs = [m for m in msgs if isinstance(m, dict) and m.get("role") == "tool"]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0]["tool_call_id"] == "tc_only"
+        assert "interrupted" in tool_msgs[0]["content"].lower()
+
     def test_trim_to_fit_also_atomic(self):
         """trim_to_fit() must apply the same atomicity guarantee."""
         mem = ShortTermMemory(max_tokens=100_000)

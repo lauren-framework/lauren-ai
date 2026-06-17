@@ -317,6 +317,134 @@ def _drop_oldest_turn(msgs: list) -> tuple[list, int]:
     return msgs, 0
 
 
+def _get_tool_call_ids(message: Any) -> set[str]:
+    """Return the set of tool_call_ids that *message* is requesting results for.
+
+    Returns an empty set for messages that are not assistant turns with tool
+    calls.  Handles both OpenAI format (``tool_calls`` list) and Anthropic
+    format (``content`` list of ``tool_use`` blocks).
+    """
+    ids: set[str] = set()
+    if isinstance(message, dict):
+        for tc in message.get("tool_calls") or []:
+            if isinstance(tc, dict):
+                tc_id = tc.get("id") or tc.get("tool_use_id", "")
+                if tc_id:
+                    ids.add(tc_id)
+        content = message.get("content", "")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    tc_id = block.get("id", "")
+                    if tc_id:
+                        ids.add(tc_id)
+    else:
+        for tc in getattr(message, "tool_calls", None) or []:
+            tc_id = getattr(tc, "id", None) or getattr(tc, "tool_use_id", "")
+            if tc_id:
+                ids.add(tc_id)
+    return ids
+
+
+def _get_tool_result_ids(message: Any) -> set[str]:
+    """Return the set of tool_call_ids answered by *message*.
+
+    Returns an empty set for non-tool-result messages.  Handles both OpenAI
+    format (``role="tool"`` with ``tool_call_id``) and Anthropic format
+    (``role="user"`` with ``tool_result`` content blocks).
+    """
+    ids: set[str] = set()
+    if isinstance(message, dict):
+        if message.get("role") == "tool":
+            tc_id = message.get("tool_call_id", "")
+            if tc_id:
+                ids.add(tc_id)
+        content = message.get("content", "")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    tc_id = block.get("tool_use_id", "")
+                    if tc_id:
+                        ids.add(tc_id)
+    else:
+        tc_id = getattr(message, "tool_call_id", "") or getattr(message, "tool_use_id", "")
+        if tc_id:
+            ids.add(tc_id)
+    return ids
+
+
+_INTERRUPTED_CONTENT = (
+    "[Tool execution was interrupted before a result was received. "
+    "The tool may or may not have completed. "
+    "Decide whether to retry or proceed without this result.]"
+)
+
+
+def _heal_dangling_tail(snapshot: list) -> list:
+    """Inject synthetic error results for any unanswered tool_calls.
+
+    Scans forward to find the LAST assistant message that contains tool calls.
+    If any of its ``tool_call_id``\\s lack a corresponding tool-result message
+    anywhere later in *snapshot*, synthetic ``role="tool"`` messages are
+    inserted immediately after the last existing tool result for that turn.
+
+    This heals the "insufficient tool messages following tool_calls message"
+    400 error that OpenAI returns when an agent turn is interrupted (by
+    CancelledError, max_turns, or a network failure) after the assistant
+    message is stored but before all tool results arrive.
+
+    :param snapshot: Message list (not mutated — a new list is returned).
+    :return: Healed message list.
+    """
+    # Find the index of the last assistant message that has tool calls.
+    last_assistant_idx = -1
+    for i, msg in enumerate(snapshot):
+        if _has_tool_calls(msg):
+            last_assistant_idx = i
+
+    if last_assistant_idx == -1:
+        return snapshot
+
+    expected = _get_tool_call_ids(snapshot[last_assistant_idx])
+    if not expected:
+        return snapshot
+
+    # Collect which IDs are answered anywhere after the assistant message.
+    answered: set[str] = set()
+    last_result_idx = last_assistant_idx
+    for j in range(last_assistant_idx + 1, len(snapshot)):
+        result_ids = _get_tool_result_ids(snapshot[j])
+        if result_ids:
+            answered.update(result_ids)
+            last_result_idx = j
+
+    missing = expected - answered
+    if not missing:
+        return snapshot
+
+    # Only inject synthetic results if the conversation has moved past this
+    # tool-calling exchange — i.e. there is at least one non-tool-result
+    # message after the last tool result we found.  Without this guard,
+    # messages() would mutate a freshly-added assistant turn that is still
+    # mid-flight waiting for its tool results.
+    has_moved_on = any(not _get_tool_result_ids(snapshot[j]) for j in range(last_result_idx + 1, len(snapshot)))
+    if not has_moved_on:
+        return snapshot
+
+    # Insert synthetic error results immediately after the last existing tool
+    # result for this turn (or directly after the assistant message if none).
+    synthetic = [
+        {
+            "role": "tool",
+            "tool_call_id": tc_id,
+            "content": _INTERRUPTED_CONTENT,
+        }
+        for tc_id in sorted(missing)  # sorted for determinism
+    ]
+    insert_at = last_result_idx + 1
+    return snapshot[:insert_at] + synthetic + snapshot[insert_at:]
+
+
 def _message_char_length(message: Any) -> int:
     """Return the character length of a ``Message`` object.
 
@@ -541,7 +669,9 @@ class ShortTermMemory:
                 break  # only system messages remain — nothing more to drop
             total_chars -= removed_chars
 
-        return snapshot
+        # Heal any incomplete tool-call sequence at the tail (e.g. an agent
+        # turn interrupted before all parallel tool results arrived).
+        return _heal_dangling_tail(snapshot)
 
     def trim_to_fit(self, max_tokens: int) -> None:
         """Drop oldest non-system messages until the token estimate fits.
@@ -560,6 +690,8 @@ class ShortTermMemory:
             if not removed_chars:
                 break  # only system messages remain
             self._messages = new_msgs
+        # Heal dangling tail after mutating the buffer.
+        self._messages = _heal_dangling_tail(self._messages)
 
     @property
     def token_estimate(self) -> int:
