@@ -411,6 +411,10 @@ class OpenAITransport:
             "max_tokens": max_tokens,
             "stream": stream,
         }
+        if stream:
+            # Request usage in the final streaming chunk so token counts are
+            # available to callers without a separate non-streaming call.
+            kwargs["stream_options"] = {"include_usage": True}
         # o1/o3 models don't support temperature.
         is_reasoning_model = any(model.startswith(m) for m in _NO_TEMPERATURE_MODELS)
         if not is_reasoning_model:

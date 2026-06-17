@@ -239,6 +239,84 @@ def _estimate_content_length(content: Any) -> int:
         return len(str(content))
 
 
+def _has_tool_calls(message: Any) -> bool:
+    """Return True if *message* is an assistant turn that contains tool calls.
+
+    Handles both OpenAI format (``{"tool_calls": [...]}`` key) and Anthropic
+    format (``content`` list containing ``{"type": "tool_use"}`` blocks).
+    """
+    if isinstance(message, dict):
+        if message.get("role") != "assistant":
+            return False
+        if message.get("tool_calls"):
+            return True
+        content = message.get("content", "")
+        if isinstance(content, list):
+            return any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content)
+        return False
+    if getattr(message, "role", "") != "assistant":
+        return False
+    if getattr(message, "tool_calls", None):
+        return True
+    content = getattr(message, "content", "")
+    if isinstance(content, list):
+        return any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content)
+    return False
+
+
+def _is_tool_result(message: Any) -> bool:
+    """Return True if *message* is a tool result.
+
+    Handles both OpenAI format (``role="tool"``) and Anthropic format
+    (``role="user"`` with ``content`` containing ``{"type": "tool_result"}``
+    blocks).
+    """
+    if isinstance(message, dict):
+        if message.get("role") == "tool":
+            return True
+        if message.get("role") == "user":
+            content = message.get("content", "")
+            if isinstance(content, list):
+                return any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+        return False
+    if getattr(message, "role", "") == "tool":
+        return True
+    if getattr(message, "role", "") == "user":
+        content = getattr(message, "content", "")
+        if isinstance(content, list):
+            return any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+    return False
+
+
+def _drop_oldest_turn(msgs: list) -> tuple[list, int]:
+    """Drop the oldest complete turn from *msgs*, preserving system messages.
+
+    A "complete turn" is an atomic unit that must be removed together:
+    - A plain user or assistant message (no tool calls) → remove just that one
+    - An assistant message with tool calls **plus** all immediately following
+      tool-result messages → remove the whole block
+
+    Dropping a tool-call message without its results (or vice-versa) produces
+    an orphaned ``tool`` message that causes a 400 from the API.
+
+    :param msgs: Current message list (not mutated).
+    :return: ``(new_list, chars_removed)`` tuple.
+    """
+    for start, msg in enumerate(msgs):
+        if _get_role(msg) == "system":
+            continue
+        # Found the oldest non-system message.  Extend the slice to include all
+        # immediately following tool results so the whole transaction is atomic.
+        end = start + 1
+        if _has_tool_calls(msg):
+            while end < len(msgs) and _is_tool_result(msgs[end]):
+                end += 1
+        removed = msgs[start:end]
+        chars_removed = sum(_message_char_length(m) for m in removed)
+        return msgs[:start] + msgs[end:], chars_removed
+    return msgs, 0
+
+
 def _message_char_length(message: Any) -> int:
     """Return the character length of a ``Message`` object.
 
@@ -455,15 +533,13 @@ class ShortTermMemory:
         total_chars = sum(_message_char_length(m) for m in snapshot)
 
         while snapshot and total_chars > budget_chars:
-            # Drop the oldest non-system message
-            for idx, msg in enumerate(snapshot):
-                if _get_role(msg) != "system":
-                    removed = snapshot.pop(idx)
-                    total_chars -= _message_char_length(removed)
-                    break
-            else:
-                # All messages are system messages — nothing more to drop
-                break
+            # Drop the oldest complete turn (assistant-with-tool-calls + its
+            # tool results are always removed as one atomic block so that no
+            # orphaned tool message reaches the API).
+            snapshot, removed_chars = _drop_oldest_turn(snapshot)
+            if not removed_chars:
+                break  # only system messages remain — nothing more to drop
+            total_chars -= removed_chars
 
         return snapshot
 
@@ -476,13 +552,14 @@ class ShortTermMemory:
         :type max_tokens: int
         """
         budget_chars = max_tokens * self._CHARS_PER_TOKEN
-        while self._messages and self.token_estimate * self._CHARS_PER_TOKEN > budget_chars:
-            for idx, msg in enumerate(self._messages):
-                if _get_role(msg) != "system":
-                    self._messages.pop(idx)
-                    break
-            else:
+        while self._messages:
+            total_chars = sum(_message_char_length(m) for m in self._messages)
+            if total_chars <= budget_chars:
                 break
+            new_msgs, removed_chars = _drop_oldest_turn(self._messages)
+            if not removed_chars:
+                break  # only system messages remain
+            self._messages = new_msgs
 
     @property
     def token_estimate(self) -> int:

@@ -56,6 +56,138 @@ class TestShortTermMemory:
         mem.restore(snapshot)
         assert len(mem.messages()) == 1
 
+    # ── tool-call atomicity (regression for orphaned-tool-message bug) ────────
+
+    def test_trimming_drops_tool_call_and_result_together_openai_format(self):
+        """Trimming must never drop an assistant(tool_calls) without its tool
+        results — that produces role='tool' after role='user'/'assistant',
+        which OpenAI rejects with a 400.  Use a tiny budget so the first
+        turn gets trimmed immediately."""
+        mem = ShortTermMemory(max_tokens=1)  # force trimming
+
+        # Turn 1: user → assistant(tool_calls) → tool result
+        mem.add_user("do something")
+        mem._messages.append(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "tc_001", "type": "function", "function": {"name": "write_file", "arguments": "{}"}}
+                ],
+                "content": None,
+            }
+        )
+        mem._messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": "tc_001",
+                "content": "wrote file",
+            }
+        )
+        mem._messages.append({"role": "assistant", "content": "done"})
+
+        # Turn 2: enough content to push turn 1 out of the window
+        mem.add_user("x" * 500)
+
+        msgs = mem.messages()
+        roles = [m.get("role") for m in msgs if isinstance(m, dict)]
+
+        # No tool message should appear before an assistant-with-tool-calls
+        declared_ids: set[str] = set()
+        for msg in msgs:
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                for tc in msg["tool_calls"]:
+                    declared_ids.add(tc.get("id", ""))
+            if msg.get("role") == "tool":
+                tid = msg.get("tool_call_id", "")
+                assert tid in declared_ids, (
+                    f"Orphaned tool message: tool_call_id={tid!r} has no "
+                    f"preceding assistant tool_call.  Remaining roles: {roles}"
+                )
+
+    def test_trimming_drops_tool_call_and_result_together_anthropic_format(self):
+        """Same invariant for Anthropic content-block format."""
+        mem = ShortTermMemory(max_tokens=1)
+
+        mem.add_user("do something")
+        mem._messages.append(
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "tc_002", "name": "read_file", "input": {}},
+                ],
+            }
+        )
+        mem._messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "tc_002", "content": "file contents"},
+                ],
+            }
+        )
+        mem._messages.append({"role": "assistant", "content": "got the file"})
+        mem.add_user("x" * 500)
+
+        msgs = mem.messages()
+        declared_ids: set[str] = set()
+        for msg in msgs:
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") == "assistant":
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    for b in content:
+                        if isinstance(b, dict) and b.get("type") == "tool_use":
+                            declared_ids.add(b.get("id", ""))
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    for b in content:
+                        if isinstance(b, dict) and b.get("type") == "tool_result":
+                            tid = b.get("tool_use_id", "")
+                            assert tid in declared_ids, (
+                                f"Orphaned Anthropic tool_result: tool_use_id={tid!r} has no preceding tool_use block."
+                            )
+
+    def test_trim_to_fit_also_atomic(self):
+        """trim_to_fit() must apply the same atomicity guarantee."""
+        mem = ShortTermMemory(max_tokens=100_000)
+        mem.add_user("do something")
+        mem._messages.append(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "tc_003", "type": "function", "function": {"name": "run_bash", "arguments": "{}"}}
+                ],
+                "content": None,
+            }
+        )
+        mem._messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": "tc_003",
+                "content": "exit 0",
+            }
+        )
+        mem._messages.append({"role": "assistant", "content": "done"})
+        mem.add_user("x" * 500)
+
+        # Trim to a tiny budget — forces the tool-call turn to be dropped
+        mem.trim_to_fit(max_tokens=1)
+
+        declared_ids: set[str] = set()
+        for msg in mem._messages:
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                for tc in msg["tool_calls"]:
+                    declared_ids.add(tc.get("id", ""))
+            if msg.get("role") == "tool":
+                tid = msg.get("tool_call_id", "")
+                assert tid in declared_ids, f"trim_to_fit left orphaned tool message tool_call_id={tid!r}"
+
 
 class TestInMemoryConversationStore:
     @pytest.mark.asyncio
