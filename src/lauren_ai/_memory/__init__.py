@@ -38,7 +38,6 @@ __all__ = [
 
 import copy
 import json
-import warnings
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -808,15 +807,6 @@ class ShortTermMemory:
             # the original user intent, leaving only assistant+tool_result
             # which providers reject ("messages: at least one message required").
             if not any(_is_conversational_user(m) for m in candidate):
-                warnings.warn(
-                    f"ShortTermMemory: cannot trim history to fit the token "
-                    f"budget ({budget_chars:,} chars equivalent) without "
-                    f"removing the last conversational user message (current "
-                    f"size: {total_chars:,} chars).  Sending as-is; consider "
-                    "truncating large tool results upstream.",
-                    UserWarning,
-                    stacklevel=3,
-                )
                 break
             snapshot = candidate
             total_chars -= removed_chars
@@ -842,14 +832,6 @@ class ShortTermMemory:
             if not removed_chars:
                 break  # only system messages remain
             if not any(_is_conversational_user(m) for m in candidate):
-                warnings.warn(
-                    f"ShortTermMemory.trim_to_fit: cannot trim to "
-                    f"{budget_chars:,} chars without removing the last "
-                    f"conversational user message (current size: "
-                    f"{total_chars:,} chars).  Keeping as-is.",
-                    UserWarning,
-                    stacklevel=2,
-                )
                 break
             self._messages = candidate
         # Heal dangling tail after mutating the buffer.

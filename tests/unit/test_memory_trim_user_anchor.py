@@ -8,8 +8,6 @@ errors like "400: messages: at least one message is required".
 
 from __future__ import annotations
 
-import warnings
-
 import pytest
 
 from lauren_ai._memory import ShortTermMemory
@@ -177,61 +175,49 @@ class TestUserAnchorGuard:
         assert non_system[0]["role"] == "user"
 
 
-# ── Warning emission ───────────────────────────────────────────────────────────
+# ── User-anchor guard: silent trim-stop behaviour ──────────────────────────────
 
 
-class TestUserAnchorWarning:
-    def test_messages_emits_warning_when_user_anchor_guard_fires(self) -> None:
-        """UserWarning emitted when trimming stops to preserve user-first invariant."""
+class TestUserAnchorGuardSilent:
+    def test_messages_stops_trimming_silently_when_anchor_guard_fires(self) -> None:
+        """Guard fires silently — no warning, but trimming stops and history is returned as-is."""
         mem = ShortTermMemory(max_tokens=10)  # budget = 40 chars
         mem.add_user("task")
         mem._messages.append(_assistant_tool_use("tu_1"))
         mem._messages.append(_tool_results("tu_1", content=_big(500)))
 
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            mem.messages()
+        msgs = mem.messages()
+        # History is over-budget but is returned intact rather than dropping the user message.
+        assert any(m.get("role") == "user" for m in msgs if isinstance(m, dict))
 
-        user_warns = [w for w in caught if issubclass(w.category, UserWarning)]
-        assert user_warns, "UserWarning must be emitted when user-anchor guard fires"
-        msg = str(user_warns[0].message)
-        assert "invalid" in msg.lower() or "trim" in msg.lower() or "budget" in msg.lower()
-
-    def test_trim_to_fit_emits_warning_when_user_anchor_guard_fires(self) -> None:
+    def test_trim_to_fit_stops_silently_when_anchor_guard_fires(self) -> None:
         mem = ShortTermMemory(max_tokens=1_000_000)
         mem.add_user("task")
         mem._messages.append(_assistant_tool_use("tu_1"))
         mem._messages.append(_tool_results("tu_1", content=_big(500)))
 
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            mem.trim_to_fit(max_tokens=5)
+        mem.trim_to_fit(max_tokens=5)
+        # The original user message ("task") must survive — guard stopped trimming.
+        roles = [m.get("role") if isinstance(m, dict) else "" for m in mem._messages]
+        assert "user" in roles
 
-        user_warns = [w for w in caught if issubclass(w.category, UserWarning)]
-        assert user_warns
+    def test_normal_trimming_produces_no_warnings(self) -> None:
+        """Normal trimming (drops old pairs, keeps a user anchor) stays warning-free."""
+        import warnings  # noqa: PLC0415
 
-    def test_no_warning_when_trimming_succeeds_normally(self) -> None:
-        """No warning when old turns are dropped while a conversational user survives."""
-        # budget = 10 * 4 = 40 chars
-        # Build many small turns so trimming is needed but always leaves a user turn
         mem = ShortTermMemory(max_tokens=10)  # budget = 40 chars
         for _ in range(20):
-            mem.add_user("ab")  # 2 chars
-            mem._messages.append({"role": "assistant", "content": "cd"})  # 2 chars
-        mem.add_user("now")  # 3 chars — current request
+            mem.add_user("ab")
+            mem._messages.append({"role": "assistant", "content": "cd"})
+        mem.add_user("now")
 
-        # Total = 20*4 + 3 = 83 chars > 40 chars budget.
-        # Trimming will drop old (user, assistant) pairs.  Each drop leaves
-        # the remaining list still starting with a conversational user message,
-        # so the anchor guard must NOT fire.
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             mem.messages()
 
         user_warns = [w for w in caught if issubclass(w.category, UserWarning)]
         assert not user_warns, (
-            f"No warning expected when normal turn-pair trimming maintains "
-            f"a conversational user message.  Got: {[str(w.message) for w in user_warns]}"
+            f"No UserWarning expected during normal trimming.  Got: {[str(w.message) for w in user_warns]}"
         )
 
 

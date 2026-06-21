@@ -8,8 +8,6 @@ empty messages list that caused API errors:
 
 from __future__ import annotations
 
-import warnings
-
 import pytest
 
 from lauren_ai._memory import ShortTermMemory
@@ -160,30 +158,27 @@ class TestTrimToFitFloorGuard:
 # ── Layer 3: UserWarning emitted ─────────────────────────────────────────────
 
 
-class TestOversizedWarning:
-    def test_messages_emits_warning_when_oversized(self) -> None:
-        """messages() emits UserWarning when a single message exceeds budget."""
+class TestOversizedGuard:
+    def test_messages_returns_oversized_message_as_is(self) -> None:
+        """messages() returns the over-budget message intact rather than dropping it."""
         mem = ShortTermMemory(max_tokens=10)  # budget = 40 chars
         mem.add_user(_big_message(500))
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            mem.messages()
-        user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
-        assert user_warnings, "UserWarning must be emitted for oversized message"
-        assert "budget" in str(user_warnings[0].message).lower() or "exceed" in str(user_warnings[0].message).lower()
+        msgs = mem.messages()
+        assert len(msgs) == 1
+        assert msgs[0]["role"] == "user"
 
-    def test_trim_to_fit_emits_warning_when_oversized(self) -> None:
-        """trim_to_fit() emits UserWarning when it cannot trim further."""
+    def test_trim_to_fit_preserves_single_user_message(self) -> None:
+        """trim_to_fit() keeps the user message when dropping it would leave nothing."""
         mem = ShortTermMemory(max_tokens=400_000)
         mem.add_user(_big_message(1000))
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            mem.trim_to_fit(max_tokens=10)
-        user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
-        assert user_warnings, "UserWarning must be emitted for oversized message"
+        mem.trim_to_fit(max_tokens=10)
+        assert len(mem._messages) == 1
+        assert mem._messages[0]["role"] == "user"
 
     def test_no_warning_for_normal_sized_message(self) -> None:
         """No UserWarning is emitted when the message fits the budget."""
+        import warnings  # noqa: PLC0415
+
         mem = ShortTermMemory(max_tokens=1000)  # budget = 4000 chars
         mem.add_user("a short message")
         with warnings.catch_warnings(record=True) as caught:
@@ -194,6 +189,8 @@ class TestOversizedWarning:
 
     def test_no_warning_when_old_turns_trimmed_normally(self) -> None:
         """No warning when trimming old turns that fit within budget logic."""
+        import warnings  # noqa: PLC0415
+
         mem = ShortTermMemory(max_tokens=100)  # budget = 400 chars
         for _ in range(5):
             mem.add_user("x" * 50)
