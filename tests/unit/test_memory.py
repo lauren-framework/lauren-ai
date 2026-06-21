@@ -179,16 +179,31 @@ class TestShortTermMemory:
 
         msgs = mem.messages()
 
-        # Find the synthetic result for tc_C
-        tool_msgs = [m for m in msgs if isinstance(m, dict) and m.get("role") == "tool"]
-        answered_ids = {m.get("tool_call_id") for m in tool_msgs}
-        assert "tc_A" in answered_ids
-        assert "tc_B" in answered_ids
-        assert "tc_C" in answered_ids, "Synthetic result for tc_C must be injected"
+        # Find the synthetic result for tc_C — now in canonical tool_result format
+        def _tool_result_ids(msg: dict) -> set[str]:
+            """Extract tool_use_id values from both OpenAI and canonical formats."""
+            ids: set[str] = set()
+            if msg.get("role") == "tool":
+                ids.add(msg.get("tool_call_id", ""))
+            if msg.get("role") == "user" and isinstance(msg.get("content"), list):
+                for b in msg["content"]:
+                    if isinstance(b, dict) and b.get("type") == "tool_result":
+                        ids.add(b.get("tool_use_id", ""))
+            return ids
+
+        all_result_ids: set[str] = set()
+        for m in msgs:
+            if isinstance(m, dict):
+                all_result_ids.update(_tool_result_ids(m))
+        assert "tc_A" in all_result_ids
+        assert "tc_B" in all_result_ids
+        assert "tc_C" in all_result_ids, "Synthetic result for tc_C must be injected"
 
         # Verify the synthetic message is positioned before the user continuation
-        roles = [m.get("role") for m in msgs if isinstance(m, dict)]
-        tc_c_idx = next(i for i, m in enumerate(msgs) if isinstance(m, dict) and m.get("tool_call_id") == "tc_C")
+        def _has_result_id(m: dict, tc_id: str) -> bool:
+            return tc_id in _tool_result_ids(m)
+
+        tc_c_idx = next(i for i, m in enumerate(msgs) if isinstance(m, dict) and _has_result_id(m, "tc_C"))
         user_continue_idx = next(
             i
             for i, m in enumerate(msgs)
@@ -233,10 +248,19 @@ class TestShortTermMemory:
         mem.add_user("Continue...")
 
         msgs = mem.messages()
-        tool_msgs = [m for m in msgs if isinstance(m, dict) and m.get("role") == "tool"]
-        assert len(tool_msgs) == 1
-        assert tool_msgs[0]["tool_call_id"] == "tc_only"
-        assert "interrupted" in tool_msgs[0]["content"].lower()
+        # Canonical format: role:"user" with tool_result content block
+        synthetic_results = [
+            m
+            for m in msgs
+            if isinstance(m, dict)
+            and m.get("role") == "user"
+            and isinstance(m.get("content"), list)
+            and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in m["content"])
+        ]
+        assert len(synthetic_results) == 1
+        block = synthetic_results[0]["content"][0]
+        assert block["tool_use_id"] == "tc_only"
+        assert "interrupted" in block["content"].lower()
 
     def test_ensure_valid_heals_without_subsequent_message(self):
         """ensure_valid() heals dangling tool_calls even when no continuation
@@ -286,12 +310,21 @@ class TestShortTermMemory:
             "messages() should NOT heal without a subsequent message (has_moved_on guard)"
         )
 
-        # ensure_valid() DOES heal unconditionally
+        # ensure_valid() DOES heal unconditionally — canonical format
         mem.ensure_valid()
-        tool_ids_after = {
-            m.get("tool_call_id") for m in mem._messages if isinstance(m, dict) and m.get("role") == "tool"
-        }
-        assert "tc_approve_2" in tool_ids_after, "ensure_valid() must inject synthetic result for tc_approve_2"
+        healed_ids: set[str] = set()
+        for m in mem._messages:
+            if not isinstance(m, dict):
+                continue
+            # OpenAI format (existing real results)
+            if m.get("role") == "tool":
+                healed_ids.add(m.get("tool_call_id", ""))
+            # Canonical format (new synthetic results)
+            if m.get("role") == "user" and isinstance(m.get("content"), list):
+                for b in m["content"]:
+                    if isinstance(b, dict) and b.get("type") == "tool_result":
+                        healed_ids.add(b.get("tool_use_id", ""))
+        assert "tc_approve_2" in healed_ids, "ensure_valid() must inject synthetic result for tc_approve_2"
 
     def test_trim_to_fit_also_atomic(self):
         """trim_to_fit() must apply the same atomicity guarantee."""

@@ -688,9 +688,10 @@ class AgentRunnerBase(AgentRunner):
                         ]
                     all_tool_calls.extend(completion.tool_calls)
 
-                    # Record tool results in memory
-                    for result in results:
-                        memory.add_tool_result(result)
+                    # Record tool results as ONE consolidated message so that
+                    # Anthropic sees all parallel tool_results in the same
+                    # immediately-following user turn (required by the API).
+                    memory.add_tool_results(results)
 
                     # Continue loop for next turn
                     continue
@@ -1039,6 +1040,11 @@ class AgentRunnerBase(AgentRunner):
                         meta_for_stream.system or effective_config.system_prompt, memory
                     )
 
+                # Heal any orphaned tool_use left by a prior interrupted turn
+                # before assembling the message list.  This persists the heal
+                # into _messages so subsequent add_user / add_assistant calls
+                # build on a consistent history.
+                memory.ensure_valid()
                 messages = memory.messages()
 
                 t0 = time.monotonic()
@@ -1155,76 +1161,95 @@ class AgentRunnerBase(AgentRunner):
                     stop_reason=accumulated_stop_reason or "end_turn",  # type: ignore[arg-type]
                     usage=turn_usage,
                 )
-                memory.add_assistant(synthetic_completion)
-                last_synthetic_completion = synthetic_completion
-                last_thinking_text = accumulated_thinking
+                # ── Atomic commit: add_assistant + signals + tool execution ──────
+                # Everything from add_assistant onward is wrapped in a single
+                # try/except BaseException so that ensure_valid() is called
+                # whenever the assistant message is committed but anything later
+                # is interrupted.  The window previously spanned four awaitables
+                # (ModelCallComplete, on_turn_complete hook, AgentTurnComplete,
+                # budget check) between add_assistant (old line 1159) and the
+                # inner try: (old line 1216).  A GeneratorExit or CancelledError
+                # arriving at any of those awaits left memory with an orphaned
+                # assistant([tool_use]) and no matching tool_result, causing
+                # Anthropic 400 "tool_use ids found without tool_result blocks".
+                try:
+                    memory.add_assistant(synthetic_completion)
+                    last_synthetic_completion = synthetic_completion
+                    last_thinking_text = accumulated_thinking
 
-                # Per-turn signals + hook (mirrors run() 260–286)
-                await self._emit(
-                    "ModelCallComplete",
-                    run_sinks,
-                    model=model,
-                    agent_id=agent_run_id,
-                    agent_class=ctx.agent_class,
-                    agent_name=ctx.agent_name,
-                    usage=turn_usage,
-                    duration_ms=duration_ms,
-                    stop_reason=accumulated_stop_reason,
-                    cost_usd=turn_usage.cost_usd(model),
-                )
+                    # Per-turn signals + hook (mirrors run() 260–286)
+                    await self._emit(
+                        "ModelCallComplete",
+                        run_sinks,
+                        model=model,
+                        agent_id=agent_run_id,
+                        agent_class=ctx.agent_class,
+                        agent_name=ctx.agent_name,
+                        usage=turn_usage,
+                        duration_ms=duration_ms,
+                        stop_reason=accumulated_stop_reason,
+                        cost_usd=turn_usage.cost_usd(model),
+                    )
 
-                await self._call_hook(agent, "on_turn_complete", synthetic_completion, ctx)
+                    await self._call_hook(agent, "on_turn_complete", synthetic_completion, ctx)
 
-                await self._emit(
-                    "AgentTurnComplete",
-                    run_sinks,
-                    agent_id=agent_run_id,
-                    agent_class=ctx.agent_class,
-                    turn=_turn,
-                    turn_usage=turn_usage,
-                    cumulative_usage=total_usage,
-                )
+                    await self._emit(
+                        "AgentTurnComplete",
+                        run_sinks,
+                        agent_id=agent_run_id,
+                        agent_class=ctx.agent_class,
+                        turn=_turn,
+                        turn_usage=turn_usage,
+                        cumulative_usage=total_usage,
+                    )
 
-                # Budget check (mirrors run() 289–300)
-                if _has_budget_cap:
-                    cumulative_cost = total_usage.cost_usd(model)
-                    if cumulative_cost > effective_config.max_cost_usd:  # type: ignore[operator]
-                        raise AgentBudgetExceededError(
-                            f"Agent exceeded cost budget of ${effective_config.max_cost_usd:.4f} "
-                            f"(used ${cumulative_cost:.4f})",
-                            budget_type="cost_usd",
-                            limit=effective_config.max_cost_usd or 0.0,
-                            used=cumulative_cost,
-                            agent_class=ctx.agent_class,
-                        )
-
-                if accumulated_stop_reason in ("end_turn", "stop_sequence", None):
-                    final_stop_reason = "end_turn"
-                    break
-
-                if accumulated_stop_reason == "tool_use" and accumulated_tool_calls:
-                    # Extension point — subclasses can filter, pause, or reorder.
-                    approved_calls = await self._on_tools_requested(list(accumulated_tool_calls), ctx=ctx)
-                    if approved_calls:
-                        results = await self._execute_tools(
-                            approved_calls,
-                            ctx=ctx,
-                            agent=agent,
-                            model=model,
-                            run_sinks=run_sinks,
-                        )
-                    else:
-                        results = [
-                            ToolResult.error(
-                                f"Tool call '{tc.name}' was not approved.",
-                                tool_use_id=tc.tool_use_id,
+                    # Budget check (mirrors run() 289–300)
+                    if _has_budget_cap:
+                        cumulative_cost = total_usage.cost_usd(model)
+                        if cumulative_cost > effective_config.max_cost_usd:  # type: ignore[operator]
+                            raise AgentBudgetExceededError(
+                                f"Agent exceeded cost budget of ${effective_config.max_cost_usd:.4f} "
+                                f"(used ${cumulative_cost:.4f})",
+                                budget_type="cost_usd",
+                                limit=effective_config.max_cost_usd or 0.0,
+                                used=cumulative_cost,
+                                agent_class=ctx.agent_class,
                             )
-                            for tc in accumulated_tool_calls
-                        ]
-                    all_tool_calls.extend(accumulated_tool_calls)
-                    for result in results:
-                        memory.add_tool_result(result)
-                    continue
+
+                    if accumulated_stop_reason in ("end_turn", "stop_sequence", None):
+                        final_stop_reason = "end_turn"
+                        break
+
+                    if accumulated_stop_reason == "tool_use" and accumulated_tool_calls:
+                        # Extension point — subclasses can filter, pause, or reorder.
+                        approved_calls = await self._on_tools_requested(list(accumulated_tool_calls), ctx=ctx)
+                        if approved_calls:
+                            results = await self._execute_tools(
+                                approved_calls,
+                                ctx=ctx,
+                                agent=agent,
+                                model=model,
+                                run_sinks=run_sinks,
+                            )
+                        else:
+                            results = [
+                                ToolResult.error(
+                                    f"Tool call '{tc.name}' was not approved.",
+                                    tool_use_id=tc.tool_use_id,
+                                )
+                                for tc in accumulated_tool_calls
+                            ]
+                        all_tool_calls.extend(accumulated_tool_calls)
+                        # Consolidate all results into ONE message (Anthropic requirement).
+                        memory.add_tool_results(results)
+                        continue
+
+                except BaseException:
+                    # Heal any dangling tool_use so that the next call to
+                    # run_stream() / ensure_valid() finds a consistent history
+                    # regardless of provider or interruption point.
+                    memory.ensure_valid()
+                    raise
 
                 if accumulated_stop_reason == "max_tokens":
                     final_stop_reason = "max_turns"

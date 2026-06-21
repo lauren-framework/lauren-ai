@@ -38,6 +38,7 @@ __all__ = [
 
 import copy
 import json
+import warnings
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -288,6 +289,29 @@ def _is_tool_result(message: Any) -> bool:
     return False
 
 
+def _is_conversational_user(message: Any) -> bool:
+    """Return True when *message* is a user turn that can open a conversation.
+
+    A ``role:"user"`` message whose content consists **entirely** of
+    ``tool_result`` blocks cannot be the first message in a conversation —
+    it is a tool-result response to an assistant turn, not a standalone user
+    request.  All other user messages (string content, mixed content, or
+    content-free) qualify as conversational anchors.
+
+    :param message: Message dict or dataclass.
+    :return: ``True`` when the message is a conversational user turn.
+    :rtype: bool
+    """
+    if _get_role(message) != "user":
+        return False
+    content: Any = message.get("content", "") if isinstance(message, dict) else getattr(message, "content", "")
+    # String content (or no content) — regular user message.
+    if not isinstance(content, list):
+        return True
+    # Mixed content list — check whether any block is NOT a tool_result.
+    return any(not (isinstance(b, dict) and b.get("type") == "tool_result") for b in content)
+
+
 def _drop_oldest_turn(msgs: list) -> tuple[list, int]:
     """Drop the oldest complete turn from *msgs*, preserving system messages.
 
@@ -433,13 +457,25 @@ def _heal_dangling_tail(snapshot: list) -> list:
 
     # Insert synthetic error results immediately after the last existing tool
     # result for this turn (or directly after the assistant message if none).
+    # Produce ONE consolidated canonical synthetic result message containing
+    # ALL missing tool_result blocks.  Anthropic requires every tool_use in an
+    # assistant turn to have a corresponding tool_result in the *immediately
+    # following* user message — it does NOT accept separate per-tool messages.
+    # Using a single user message with multiple content blocks satisfies both
+    # Anthropic (native) and OpenAI (the transport converts each block to a
+    # separate role:"tool" message, which OpenAI accepts).
     synthetic = [
         {
-            "role": "tool",
-            "tool_call_id": tc_id,
-            "content": _INTERRUPTED_CONTENT,
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tc_id,
+                    "content": _INTERRUPTED_CONTENT,
+                }
+                for tc_id in sorted(missing)  # sorted for determinism
+            ],
         }
-        for tc_id in sorted(missing)  # sorted for determinism
     ]
     insert_at = last_result_idx + 1
     return snapshot[:insert_at] + synthetic + snapshot[insert_at:]
@@ -479,11 +515,16 @@ def _heal_dangling_tail_unconditional(snapshot: list) -> list:
 
     synthetic = [
         {
-            "role": "tool",
-            "tool_call_id": tc_id,
-            "content": _INTERRUPTED_CONTENT,
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tc_id,
+                    "content": _INTERRUPTED_CONTENT,
+                }
+                for tc_id in sorted(missing)  # all missing IDs in ONE message
+            ],
         }
-        for tc_id in sorted(missing)
     ]
     insert_at = last_result_idx + 1
     return snapshot[:insert_at] + synthetic + snapshot[insert_at:]
@@ -627,6 +668,48 @@ class ShortTermMemory:
             }
         )
 
+    def add_tool_results(self, results: list[Any]) -> None:
+        """Append multiple tool results as a **single** consolidated message.
+
+        Anthropic requires all ``tool_result`` blocks for a given assistant
+        turn to appear in the *same* immediately-following user message.
+        Calling ``add_tool_result`` in a loop creates N separate messages,
+        which causes Anthropic to report that only the first ID is answered
+        and the rest are missing (400 error).
+
+        This method consolidates all results into one ``role:"user"`` message
+        with multiple content blocks, satisfying Anthropic's constraint while
+        remaining compatible with OpenAI (the transport converts each block to
+        a separate ``role:"tool"`` message as needed).
+
+        For a single result, delegates to ``add_tool_result`` unchanged.
+
+        :param results: List of ``ToolResult`` objects or dicts to add.
+        :type results: list
+        """
+        if not results:
+            return
+        if len(results) == 1:
+            self.add_tool_result(results[0])
+            return
+        # Build consolidated content block list
+        blocks: list[dict[str, Any]] = []
+        for result in results:
+            if isinstance(result, dict):
+                blocks.append(result)
+                continue
+            tool_use_id = getattr(result, "tool_use_id", "")
+            content = getattr(result, "content", "")
+            is_error = getattr(result, "is_error", False)
+            block: dict[str, Any] = {
+                "type": "tool_result",
+                "tool_use_id": tool_use_id,
+                "content": content,
+                "is_error": is_error,
+            }
+            blocks.append(block)
+        self._messages.append({"role": "user", "content": blocks})
+
     # ------------------------------------------------------------------
     # Summary / compression helpers
     # ------------------------------------------------------------------
@@ -705,12 +788,37 @@ class ShortTermMemory:
         total_chars = sum(_message_char_length(m) for m in snapshot)
 
         while snapshot and total_chars > budget_chars:
-            # Drop the oldest complete turn (assistant-with-tool-calls + its
-            # tool results are always removed as one atomic block so that no
-            # orphaned tool message reaches the API).
-            snapshot, removed_chars = _drop_oldest_turn(snapshot)
+            # Simulate dropping the oldest turn to see if anything non-system
+            # would remain.  Two invariants are enforced:
+            #
+            # 1. Never produce an empty non-system message list — all providers
+            #    return 400 "at least one message is required".
+            # 2. Never produce a list whose first non-system message is not
+            #    role:"user" — all providers require user-first conversations.
+            #    This occurs when large tool results force the original user
+            #    intent to be trimmed away, leaving an assistant turn first.
+            candidate, removed_chars = _drop_oldest_turn(snapshot)
             if not removed_chars:
                 break  # only system messages remain — nothing more to drop
+            # Guard: never trim past the last *conversational* user message.
+            # A tool_result user message cannot open a conversation — all
+            # providers require the first non-system message to be a real user
+            # turn, not a tool response.  Without this guard, large tool results
+            # (e.g. recursive directory listings) can force trimming to remove
+            # the original user intent, leaving only assistant+tool_result
+            # which providers reject ("messages: at least one message required").
+            if not any(_is_conversational_user(m) for m in candidate):
+                warnings.warn(
+                    f"ShortTermMemory: cannot trim history to fit the token "
+                    f"budget ({budget_chars:,} chars equivalent) without "
+                    f"removing the last conversational user message (current "
+                    f"size: {total_chars:,} chars).  Sending as-is; consider "
+                    "truncating large tool results upstream.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+                break
+            snapshot = candidate
             total_chars -= removed_chars
 
         # Heal any incomplete tool-call sequence at the tail (e.g. an agent
@@ -730,10 +838,20 @@ class ShortTermMemory:
             total_chars = sum(_message_char_length(m) for m in self._messages)
             if total_chars <= budget_chars:
                 break
-            new_msgs, removed_chars = _drop_oldest_turn(self._messages)
+            candidate, removed_chars = _drop_oldest_turn(self._messages)
             if not removed_chars:
                 break  # only system messages remain
-            self._messages = new_msgs
+            if not any(_is_conversational_user(m) for m in candidate):
+                warnings.warn(
+                    f"ShortTermMemory.trim_to_fit: cannot trim to "
+                    f"{budget_chars:,} chars without removing the last "
+                    f"conversational user message (current size: "
+                    f"{total_chars:,} chars).  Keeping as-is.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                break
+            self._messages = candidate
         # Heal dangling tail after mutating the buffer.
         self._messages = _heal_dangling_tail(self._messages)
 

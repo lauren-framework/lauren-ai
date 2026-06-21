@@ -7,6 +7,130 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Memory trim user-anchor guard (prevents assistant-leading histories)
+
+- **`ShortTermMemory.messages()`** and **`trim_to_fit()`** now stop trimming
+  when dropping the next oldest turn would remove the last *conversational*
+  user message, leaving a history that starts with an assistant or tool-result
+  message.  All providers require the first non-system message to have
+  `role:"user"`.  The previous floor guard (PRD-118) only prevented an
+  *empty* message list; it did not prevent an *assistant-leading* list.
+
+  The failure scenario: user sends `"please fix the docs"`, agent makes 3
+  parallel tool calls including `list_directory(recursive=True)`, the
+  consolidated results exceed the 128 KB token budget.  The trim loop dropped
+  the small original user intent (20 chars), leaving
+  `[assistant_3_tools, user_results]` — which Anthropic rejected with
+  `400: messages: at least one message is required`.
+
+- **`_is_conversational_user(message)`** — new helper that distinguishes a
+  real user turn from a `role:"user"` tool-result response.  A message whose
+  content is entirely `tool_result` blocks cannot open a conversation; all
+  other user messages can.  The guard fires only when no conversational user
+  message would remain after the drop.
+
+### Fixed — Streaming tool-use atomicity: closed the full cancellation window
+
+Three bugs were fixed together (prd-streaming-tool-use-atomicity):
+
+**Bug 1 — Cancellation window between `add_assistant` and the inner `try:`**
+
+`_stream_loop` called `memory.add_assistant()` at line 1159, then had four
+`await` calls (ModelCallComplete, on_turn_complete hook, AgentTurnComplete,
+budget check) before the inner `try: ... except BaseException: ensure_valid()`
+block at line 1216.  A `GeneratorExit`, `CancelledError`, or
+`AgentBudgetExceededError` raised at any of those awaits left memory with an
+orphaned `assistant([tool_use])` and no matching `tool_result`.  Fix: moved
+`memory.add_assistant()` inside the `try:` block so `ensure_valid()` is
+guaranteed to fire on any exception or cancellation after the assistant message
+is committed.
+
+**Bug 2 — `ensure_valid()` not called before each `memory.messages()`**
+
+`ShortTermMemory.messages()` returns a healed snapshot but does not persist
+the heal into `self._messages`.  The next `add_user()` call (from the
+following `run_stream()` invocation) appended to the unhealed `_messages`,
+potentially accumulating inconsistency across turns.  Fix: `ensure_valid()`
+is now called at the top of every `_stream_loop` iteration, immediately before
+`memory.messages()`, to persist heals into `_messages` before further
+mutations.
+
+**Bug 3 — `MockTransport._completion_as_stream` never emitted `tool_call_delta` chunks**
+
+`_stream_loop` builds `accumulated_tool_calls` exclusively from
+`chunk.tool_call_delta`.  The previous `_completion_as_stream` only emitted
+a text chunk and a stop-reason chunk — no `tool_call_delta` — so every test
+using `queue_tool_use()` + `stream=True` silently produced
+`accumulated_tool_calls=[]` and never triggered tool execution.  Fix:
+`_completion_as_stream` now emits one `CompletionChunk(tool_call_delta=...)`
+per tool call with the full input JSON as `input_delta`.
+
+### Fixed — Real parallel tool results now consolidated into one message
+
+- **`ShortTermMemory.add_tool_results(results)`** — new batch method that adds
+  all results for a parallel tool-call turn as **one** `role:"user"` message
+  with multiple `tool_result` content blocks.  `_stream_loop` now calls this
+  instead of looping over `add_tool_result`.  Without this, 3 parallel tool
+  calls produced 3 separate user messages; Anthropic checked only the
+  immediately-following message, saw just the first result, and returned
+  `400: tool_use ids found without tool_result blocks immediately after`
+  even though all three tools had completed successfully.
+
+### Fixed — Parallel tool_use healer now produces one consolidated message
+
+- **`_heal_dangling_tail` / `_heal_dangling_tail_unconditional`** now produce
+  a **single** `role:"user"` message containing **all** missing `tool_result`
+  content blocks, instead of N separate messages (one per missing ID).
+  Anthropic requires every `tool_use` in an assistant turn to have its
+  `tool_result` in the *immediately following* user message.  When 7 parallel
+  tool calls were interrupted before any results arrived, the previous healer
+  inserted 7 separate user messages.  Anthropic saw the first one contained
+  only one result, declared the other 6 missing, and returned
+  `400: tool_use ids found without tool_result blocks immediately after`.
+
+### Fixed — `ShortTermMemory` trim floor guard
+
+- **`ShortTermMemory.messages()`** no longer returns an empty list when a
+  single user message exceeds the token budget.  Previously the trim loop
+  (`while snapshot and total_chars > budget_chars`) would drop the only
+  remaining message, resulting in an empty `messages` list that caused
+  Anthropic to return `400: messages: at least one message is required`.
+  This happened in practice when agenthicc prepended large `@mention` file
+  contents to the user intent (e.g. a 200 KB source file).  The fix adds a
+  floor guard: the loop stops before dropping the last non-system turn,
+  and the oversized message is sent as-is.
+
+- **`ShortTermMemory.trim_to_fit()`** has the same floor guard applied.
+
+- Both methods now emit a `UserWarning` when a single message cannot be
+  trimmed to fit the token budget, so callers can detect the situation and
+  consider truncating large payloads upstream.
+
+### Fixed — Anthropic `tool_use` / `tool_result` conversation healing
+
+- **`_heal_dangling_tail` / `_heal_dangling_tail_unconditional`** now produce
+  canonical `role:"user"` / `{"type": "tool_result", "tool_use_id": ...}`
+  synthetic messages instead of the previous OpenAI-only `role:"tool"` /
+  `tool_call_id` format.  Anthropic rejected the old format with
+  `400 — tool_use ids found without tool_result blocks immediately after`,
+  which caused the phase loop to retry until exhaustion and show a misleading
+  "exhausted N attempts" failure.
+
+- **`_message_to_anthropic()`** now converts any legacy `role:"tool"` message
+  (OpenAI-format synthetic result already persisted in memory from an older
+  session) to a valid Anthropic `role:"user"` / `tool_result` content block,
+  preventing the 400 on resuming sessions that were serialised before this fix.
+
+- **`_stream_loop()`** (`_agents/_runner.py`) now wraps tool execution and
+  `memory.add_tool_result()` in a `try/except BaseException` block that calls
+  `memory.ensure_valid()` before re-raising.  This closes the corruption window
+  that existed between `memory.add_assistant()` (tool_use committed) and
+  `memory.add_tool_result()` (tool_result committed): a `GeneratorExit` or
+  `CancelledError` from the caller no longer leaves an orphaned `tool_use` in
+  the conversation history.
+
+
+
 ### Added — MCP integration
 
 - **`AgentMcpServer`** (`lauren_ai.mcp.AgentMcpServer`) — wraps any `@agent`-decorated class

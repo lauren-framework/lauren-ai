@@ -141,6 +141,24 @@ def _message_to_anthropic(message: Any) -> dict[str, Any]:
         role = message.role
         content = message.content
 
+    # Defensive conversion: role:"tool" is OpenAI format for a tool result.
+    # Anthropic rejects this role — convert to role:"user" with a tool_result
+    # content block so that legacy or mis-healed messages don't cause a 400.
+    if role == "tool":
+        tool_use_id: str = (
+            message.get("tool_call_id", "") if isinstance(message, dict) else getattr(message, "tool_call_id", "")
+        )
+        return {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": content if isinstance(content, str) else str(content),
+                }
+            ],
+        }
+
     if isinstance(content, str):
         return {"role": role, "content": content}
     return {

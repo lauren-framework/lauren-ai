@@ -50,6 +50,7 @@ from lauren_ai._transport import (
     Message,
     TokenUsage,
     ToolCall,
+    ToolCallDelta,
     ToolChoice,
     ToolSchema,
 )
@@ -125,18 +126,34 @@ async def _iter_chunks(
 async def _completion_as_stream(
     completion: Completion,
 ) -> AsyncIterator[CompletionChunk]:
-    """Wrap a :class:`~lauren_ai._transport.Completion` as a single-item stream.
+    """Wrap a :class:`~lauren_ai._transport.Completion` as a streaming response.
 
-    Yields two chunks: one with the text content and one with the stop reason
-    and usage.
+    Yields:
+    1. An optional text-content chunk when ``completion.content`` is non-empty.
+    2. One :class:`~lauren_ai._transport.ToolCallDelta` chunk **per tool call**
+       so that ``_stream_loop`` can build ``accumulated_tool_calls`` correctly.
+       Without this, ``queue_tool_use()`` + ``stream=True`` silently produced
+       empty ``accumulated_tool_calls`` and never triggered tool execution.
+    3. A final stop-reason + usage chunk.
 
     :param completion: The completion to stream.
     :type completion: Completion
     :return: Async iterator of :class:`~lauren_ai._transport.CompletionChunk`.
     :rtype: AsyncIterator[CompletionChunk]
     """
+    import json as _json  # noqa: PLC0415
+
     if completion.content:
         yield CompletionChunk(delta=completion.content)
+    # Emit one tool_call_delta chunk per tool call so _stream_loop accumulates them.
+    for tc in completion.tool_calls or []:
+        yield CompletionChunk(
+            tool_call_delta=ToolCallDelta(
+                tool_use_id=tc.tool_use_id,
+                name=tc.name,
+                input_delta=_json.dumps(tc.input or {}),
+            ),
+        )
     # Final chunk with stop reason and usage.
     yield CompletionChunk(
         delta="",
