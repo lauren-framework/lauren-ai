@@ -19,7 +19,7 @@ Decorators are:
 - **Composable**: stack `@require_auth`, `@require_scope("billing")`, and
   `@audit_log` on the same tool just like HTTP guards on a controller.
 - **Reusable**: write once, apply to any function-form or class-form tool.
-- **Context-aware**: `ToolContext.execution_context` carries the same
+- **Context-aware**: `ToolContext.agent_context.execution_context` carries the same
   `ExecutionContext` that guards and controllers use, giving tool decorators
   access to `request.state`, headers, and the full Lauren DI graph.
 
@@ -40,7 +40,7 @@ knowing that name — this helper handles both positional and keyword injection.
 
 ## `ToolContext` and `ExecutionContext`
 
-`ToolContext.execution_context` is the Lauren `ExecutionContext` that flowed
+`ToolContext.agent_context.execution_context` is the Lauren `ExecutionContext` that flowed
 from the HTTP handler through the `AgentRunner.run(..., execution_context=ec)`
 call.  It exposes:
 
@@ -54,11 +54,11 @@ call.  It exposes:
 ```python
 async def run(self, ctx: ToolContext, amount: float) -> dict:
     # Identity set by SignatureGuard before any LLM code ran
-    user_id = ctx.execution_context.request.state.get("user_id")
+    user_id = ctx.agent_context.execution_context.request.state.get("user_id")
 ```
 
 If the agent was invoked outside a web context (scripts, tests), `execution_context`
-is `None`.  Always guard with `if ctx.execution_context is not None:`.
+is `None`.  Always guard with `if ctx.agent_context.execution_context is not None:`.
 
 ## Writing a decorator
 
@@ -74,9 +74,9 @@ def require_auth(fn):
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
         ctx = get_tool_context_from_func_args(*args, **kwargs)
-        if ctx is None or ctx.execution_context is None:
+        if ctx is None or ctx.agent_context.execution_context is None:
             return {"error": "no_context", "message": "Tool called outside a web request"}
-        user_id = ctx.execution_context.request.state.get("user_id")
+        user_id = ctx.agent_context.execution_context.request.state.get("user_id")
         if not user_id:
             return {"error": "unauthenticated", "message": "Authentication required"}
         return await fn(*args, **kwargs)
@@ -89,9 +89,9 @@ def require_auth(fn):
 async def get_account_balance(ctx: ToolContext | None = None) -> dict:
     """Return the authenticated user's account balance.
 
-    Args: (none — identity comes from ctx.execution_context.request.state)
+    Args: (none — identity comes from ctx.agent_context.execution_context.request.state)
     """
-    user_id = ctx.execution_context.request.state.get("user_id")
+    user_id = ctx.agent_context.execution_context.request.state.get("user_id")
     return {"user_id": user_id, "balance_usd": 1234.56}
 ```
 
@@ -110,9 +110,9 @@ def require_auth(fn):
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
         ctx = get_tool_context_from_func_args(*args, **kwargs)
-        if ctx is None or ctx.execution_context is None:
+        if ctx is None or ctx.agent_context.execution_context is None:
             return {"error": "unauthenticated"}
-        user_id = ctx.execution_context.request.state.get("user_id")
+        user_id = ctx.agent_context.execution_context.request.state.get("user_id")
         if not user_id:
             return {"error": "unauthenticated"}
         return await fn(*args, **kwargs)
@@ -133,7 +133,7 @@ class TransferFundsTool:
 
     @require_auth
     async def run(self, ctx: ToolContext, to_user: str, amount: float) -> dict:
-        from_user = ctx.execution_context.request.state.get("user_id")
+        from_user = ctx.agent_context.execution_context.request.state.get("user_id")
         result = await self._db.transfer(from_user=from_user, to_user=to_user, amount=amount)
         return {"tx_id": result.tx_id, "amount": amount}
 ```
@@ -162,9 +162,9 @@ def require_scope(required: Scope):
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
             ctx = get_tool_context_from_func_args(*args, **kwargs)
-            if ctx is None or ctx.execution_context is None:
+            if ctx is None or ctx.agent_context.execution_context is None:
                 return {"error": f"scope_required:{required.value}"}
-            granted_str = ctx.execution_context.request.state.get("scope", "read")
+            granted_str = ctx.agent_context.execution_context.request.state.get("scope", "read")
             granted = Scope(granted_str)
             if _SCOPE_LEVEL[granted] < _SCOPE_LEVEL[required]:
                 return {"error": "forbidden", "required": required.value, "granted": granted.value}
@@ -181,8 +181,8 @@ def audit_log(action: str):
             ctx = get_tool_context_from_func_args(*args, **kwargs)
             result = await fn(*args, **kwargs)
             user_id = (
-                ctx.execution_context.request.state.get("user_id")
-                if ctx and ctx.execution_context
+                ctx.agent_context.execution_context.request.state.get("user_id")
+                if ctx and ctx.agent_context.execution_context
                 else "anonymous"
             )
             print(f"[AUDIT] action={action} user={user_id} result={result}")
@@ -331,8 +331,8 @@ class TestRequireAuth:
 | Building block | Purpose |
 |---|---|
 | `get_tool_context_from_func_args(*args, **kwargs)` | Extract `ToolContext` from any decorator's argument list |
-| `ctx.execution_context.request.state` | Access guard-verified identity and other HTTP state |
-| `ctx.execution_context.request.headers` | Read request headers inside a tool |
+| `ctx.agent_context.execution_context.request.state` | Access guard-verified identity and other HTTP state |
+| `ctx.agent_context.execution_context.request.headers` | Read request headers inside a tool |
 | `ctx.get_metadata(key)` | Read agent-level metadata set by other tools or the runner |
 | `ctx.state` | Per-run mutable state bag for carrying data between tool calls |
 | `@functools.wraps(fn)` | Preserve the original function's signature (required — the tool executor inspects it) |

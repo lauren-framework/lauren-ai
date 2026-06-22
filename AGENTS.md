@@ -72,6 +72,33 @@ async def bad_tool(...): ...
 - Return type should be `dict`, `list`, `str`, `int`, or `float`.
 - Async is required (use `async def`).
 
+**`@tool()` optional kwargs for state and dependencies:**
+
+```python
+@tool(
+    label="Read File",                              # display name (TUI, logs)
+    initial_state=lambda: {"start_ts": None},       # seeded into ctx.state each call
+    initial_tool_state=lambda: {"seen": set()},     # seeded into ctx.tool_state once per run
+    dependency_factory=lambda: {"client": httpx.AsyncClient()},  # ctx.dependencies, once per run
+)
+async def read_file(path: str, ctx: ToolContext) -> dict:
+    ...
+```
+
+**`ToolContext` fields available to tools that declare `ctx: ToolContext`:**
+
+| Field | Scope | Mutable? | Purpose |
+|---|---|---|---|
+| `ctx.state` | Per-call | Yes | Scratch pad; seeded by `initial_state()` each call |
+| `ctx.tool_state` | Per-run, per-tool | Yes | Memory across multiple calls; seeded by `initial_tool_state()` at run start |
+| `ctx.dependencies` | Per-run, per-tool | Convention: no | Singleton deps from `dependency_factory()`; same object all calls |
+| `ctx.extras` | Per-call | Convention: no | Runner-injected per-call context |
+| `ctx.metadata` | Per-call | No | Static `@set_metadata()` key-value pairs |
+| `ctx.agent_context` | Per-call | No | Full `AgentContext`; use `.request`, `.execution_context` here |
+
+> **Removed:** `ctx.request` and `ctx.execution_context` no longer exist on `ToolContext`.
+> Use `ctx.agent_context.request` and `ctx.agent_context.execution_context` instead.
+
 **Class-form tools** (for stateful / DI-injectable tools):
 
 ```python

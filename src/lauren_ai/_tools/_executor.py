@@ -324,15 +324,23 @@ class ToolExecutor:
             logger.debug("lauren_ai.ToolExecutor: cache hit for tool '%s'", name)
             return ToolResult.ok(cached, tool_use_id=tool_use_id)
 
+        # Seed ctx.state from initial_state factory before every dispatch.
+        # The factory produces a fresh dict; caller-set values win via update().
+        if meta.initial_state is not None:
+            seed = meta.initial_state()
+            seed.update(tool_context.state)
+            tool_context.state = seed
+
         # Build ToolCallContext once — shared by before-hooks and the HITL gate.
         hook_ctx = ToolCallContext(
             agent_context=tool_context.agent_context,
             tool_use_id=tool_use_id,
             turn=tool_context.turn,
-            request=tool_context.request,
-            execution_context=tool_context.execution_context,
             metadata=tool_context.metadata,
             state=tool_context.state,
+            tool_state=tool_context.tool_state,
+            dependencies=tool_context.dependencies,
+            extras=tool_context.extras,
             tool_name=name,
             tool_input=tool_input,
         )
@@ -647,10 +655,11 @@ class ToolExecutor:
             agent_context=tool_context.agent_context,
             tool_use_id=tool_use_id,
             turn=tool_context.turn,
-            request=tool_context.request,
-            execution_context=tool_context.execution_context,
             metadata=tool_context.metadata,
             state=tool_context.state,
+            tool_state=tool_context.tool_state,
+            dependencies=tool_context.dependencies,
+            extras=tool_context.extras,
             tool_name=name,
             tool_input=tool_input,
         )

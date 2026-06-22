@@ -457,6 +457,18 @@ class AgentRunnerBase(AgentRunner):
         # Run-scoped sinks: constructor sinks + per-run sinks, immutable tuple.
         _run_sinks: tuple[Any, ...] = (*self._event_sinks, *tuple(event_sinks or ()))
 
+        # Per-run tool state and dependency dicts — reset at every run() call.
+        # tool_state persists across all LLM turns within one run(); it is the
+        # mechanism behind ToolMeta.initial_tool_state.
+        # resolved_dependencies are resolved once per run from dependency_factory.
+        self._tool_states: dict[str, dict[str, object]] = {}
+        self._resolved_dependencies: dict[str, dict[str, object]] = {}
+        for _tn, (_tc, _tm) in meta.tools.items():
+            if _tm.initial_tool_state is not None:
+                self._tool_states[_tn] = _tm.initial_tool_state()
+            if _tm.dependency_factory is not None:
+                self._resolved_dependencies[_tn] = _tm.dependency_factory()
+
         # Resolve per-run state from AgentMeta with per-request overrides.
         # The store / memory live with the agent class (set via @agent(...))
         # so two agents in the same module never share state by default.
@@ -822,6 +834,15 @@ class AgentRunnerBase(AgentRunner):
 
         # Run-scoped sinks for this streaming run.
         _run_sinks: tuple[Any, ...] = (*self._event_sinks, *tuple(event_sinks or ()))
+
+        # Per-run tool state and dependency dicts (same semantics as run()).
+        self._tool_states = {}
+        self._resolved_dependencies = {}
+        for _tn, (_tc, _tm) in meta.tools.items():
+            if _tm.initial_tool_state is not None:
+                self._tool_states[_tn] = _tm.initial_tool_state()
+            if _tm.dependency_factory is not None:
+                self._resolved_dependencies[_tn] = _tm.dependency_factory()
 
         # Resolve per-run state from AgentMeta with per-request overrides.
         # Use explicit ``is None`` checks — ShortTermMemory has ``__len__``
@@ -1437,10 +1458,11 @@ class AgentRunnerBase(AgentRunner):
             agent_context=ctx,
             tool_use_id=tool_call.tool_use_id,
             turn=ctx.turn,
-            request=ctx.request,
-            execution_context=ctx.execution_context,
             metadata=_tool_static_meta,
             state={},
+            tool_state=self._tool_states.setdefault(tool_call.name, {}),
+            dependencies=self._resolved_dependencies.get(tool_call.name, {}),
+            extras={},
         )
 
         await self._emit(

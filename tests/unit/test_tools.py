@@ -386,15 +386,19 @@ class TestExecutionContext:
         )
         assert ctx.execution_context is sentinel
 
-    def test_tool_context_has_execution_context(self):
+    def test_tool_context_execution_context_via_agent_context(self):
+        # execution_context was removed from ToolContext; access via agent_context.
         sentinel = object()
+        from unittest.mock import MagicMock  # noqa: PLC0415
+
+        mock_agent_ctx = MagicMock()
+        mock_agent_ctx.execution_context = sentinel
         tc = ToolContext(
-            agent_context=None,
+            agent_context=mock_agent_ctx,
             tool_use_id="tu1",
             turn=0,
-            execution_context=sentinel,
         )
-        assert tc.execution_context is sentinel
+        assert tc.agent_context.execution_context is sentinel
 
     def test_runner_passes_execution_context_to_agent_context(self):
         """AgentRunner.run(execution_context=x) must store x in the AgentContext."""
@@ -499,7 +503,8 @@ class TestExecutionContext:
         asyncio.run(runner.run(instance, "go", execution_context=sentinel))
 
         assert len(tool_contexts) == 1
-        assert tool_contexts[0].execution_context is sentinel
+        # execution_context is no longer on ToolContext; it lives on agent_context.
+        assert tool_contexts[0].agent_context.execution_context is sentinel
 
 
 class TestTypeToJsonSchema:

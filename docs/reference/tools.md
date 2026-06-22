@@ -53,12 +53,16 @@ Class-form tools automatically receive `@injectable(scope=Scope.SINGLETON)` unle
 |-----------|------|---------|-------------|
 | `name` | `str \| None` | `None` | Override the inferred tool name (default: function/class name in snake_case). |
 | `description` | `str \| None` | `None` | Override the description extracted from the docstring. |
+| `label` | `str` | `""` | Pretty display name for TUI, logs, and `describe()`. When empty, `display_label` title-cases `name`. |
 | `requires_confirmation` | `bool` | `False` | When `True`, emits `ToolPendingApproval` before invoking the tool (human-in-the-loop). |
 | `pre_hook` | `Callable \| None` | `None` | Callable invoked before the tool runs. Receives `(tool_call, ToolContext)`. |
 | `post_hook` | `Callable \| None` | `None` | Callable invoked after a successful run. Receives `(ToolResult, ToolContext)`. |
 | `error_hook` | `Callable \| None` | `None` | Callable invoked when the tool raises an exception. Receives `(exception, ToolContext)`. |
 | `cache_ttl` | `int \| None` | `None` | Cache successful results for this many seconds. Requires a `CacheBackend`. |
 | `cache_key_fn` | `Callable \| None` | `None` | Custom factory that derives a string cache key from the input `dict`. |
+| `initial_state` | `Callable[[], dict] \| None` | `None` | Zero-arg factory called before **every** invocation to seed `ctx.state`. |
+| `initial_tool_state` | `Callable[[], dict] \| None` | `None` | Zero-arg factory called once at `run()` start to seed `ctx.tool_state`. |
+| `dependency_factory` | `Callable[[], dict] \| None` | `None` | Zero-arg factory called once at `run()` start; result exposed as `ctx.dependencies`. |
 
 ---
 
@@ -70,8 +74,11 @@ Metadata stored on the decorated function or class under the `TOOL_META` attribu
 
 | Field | Type | Description |
 |-------|------|-------------|
+| Field | Type | Description |
+|-------|------|-------------|
 | `name` | `str` | Tool name in snake_case. |
 | `description` | `str` | Human-readable description extracted from the docstring first paragraph. |
+| `label` | `str` | Pretty display name. Empty string = use `display_label` property. |
 | `parameters` | `ToolSchema` | JSON Schema for the tool's input parameters. |
 | `is_async` | `bool` | `True` if the entry-point function/method is a coroutine. |
 | `reads_context` | `bool` | `True` when the entry point declares a `ctx: ToolContext` parameter. |
@@ -82,6 +89,13 @@ Metadata stored on the decorated function or class under the `TOOL_META` attribu
 | `error_hook` | `Callable \| None` | Error hook. |
 | `cache_ttl` | `int \| None` | Cache TTL in seconds. |
 | `cache_key_fn` | `Callable \| None` | Custom cache-key factory. |
+| `initial_state` | `Callable[[], dict] \| None` | Factory seeding `ctx.state` before every call. |
+| `initial_tool_state` | `Callable[[], dict] \| None` | Factory seeding `ctx.tool_state` once at run start. |
+| `dependency_factory` | `Callable[[], dict] \| None` | Factory providing `ctx.dependencies` once at run start. |
+
+### `display_label` property
+
+Returns `label` when set; otherwise title-cases `name` (`"read_file"` → `"Read File"`).
 
 ---
 
@@ -106,12 +120,17 @@ async def my_tool(query: str, ctx: ToolContext) -> str:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `agent_context` | `AgentContext` | The owning agent's `AgentContext`. |
+| `agent_context` | `AgentContext` | The owning agent's `AgentContext`. Use `ctx.agent_context.request` and `ctx.agent_context.execution_context` to access HTTP context. |
 | `tool_use_id` | `str` | Provider-assigned tool use identifier for this invocation. |
 | `turn` | `int` | Which agentic loop iteration (0-based) triggered this call. |
-| `request` | `Any \| None` | Originating HTTP request, or `None` outside a web handler. |
-| `execution_context` | `Any \| None` | Lauren `ExecutionContext`, or `None`. |
-| `state` | `dict[str, Any]` | Mutable per-call state bag for tool-local storage. |
+| `state` | `dict[str, object]` | Mutable per-call state bag. Reset before each call; seeded from `initial_state()` when set. |
+| `tool_state` | `dict[str, object]` | Mutable per-run state — same dict for all calls to this tool within one `run()`. Seeded from `initial_tool_state()`. |
+| `dependencies` | `dict[str, object]` | Singleton deps resolved once at run start by `dependency_factory()`. |
+| `extras` | `dict[str, object]` | Per-call context injected by the runner each invocation. |
+| `metadata` | `dict[str, object]` | Static key-value pairs from `@set_metadata()` at decoration time. |
+
+> **Removed fields:** `request` and `execution_context` are no longer on `ToolContext`.
+> Access them via `ctx.agent_context.request` and `ctx.agent_context.execution_context`.
 
 ### Methods
 

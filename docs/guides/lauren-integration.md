@@ -293,10 +293,10 @@ AgentRunner.run(..., execution_context=exec_ctx)
     └─ AgentContext.execution_context   (same ExecutionContext object)
             │
 ToolExecutor._execute_single_tool(...)
-    └─ ToolContext.execution_context    (forwarded from AgentContext)
+    └─ ToolContext.agent_context.execution_context    (forwarded from AgentContext)
             │
 tool.run(ctx: ToolContext, ...)
-    └─ ctx.execution_context.request.state.get("user_id")   ← HERE
+    └─ ctx.agent_context.execution_context.request.state.get("user_id")   ← HERE
 ```
 
 The `_auth_uid` helper in `banking_tools.py` captures this pattern:
@@ -304,7 +304,7 @@ The `_auth_uid` helper in `banking_tools.py` captures this pattern:
 ```python title="app/ai/banking_tools.py"
 def _auth_uid(ctx: ToolContext) -> str:
     """Extract the guard-verified user_id from the execution context."""
-    exec_ctx = ctx.execution_context
+    exec_ctx = ctx.agent_context.execution_context
     if exec_ctx is None:
         return ""
     request = getattr(exec_ctx, "request", None)
@@ -376,7 +376,7 @@ response = await self._runner.run(
 
 > **Never read identity from tool arguments.**  If a tool receives
 > `user_id: str` as an LLM-supplied argument, a prompt injection attack can
-> supply an arbitrary value.  Read from `ctx.execution_context.request.state`
+> supply an arbitrary value.  Read from `ctx.agent_context.execution_context.request.state`
 > exclusively.
 
 ---
@@ -420,7 +420,7 @@ class DelegateToBankingTransfer:
         response = await self._runner.run(
             self._transfer_agent,
             task,
-            execution_context=ctx.execution_context,
+            execution_context=ctx.agent_context.execution_context,
         )
         return {"result": response.content, "stop_reason": response.stop_reason}
 ```
@@ -724,7 +724,7 @@ Before shipping an integration like this, verify:
   annotations are fine, but unresolved forward refs and circular imports still
   break schema generation.
 - [ ] Every privileged tool reads identity from
-  `ctx.execution_context.request.state`, not from LLM-supplied arguments.
+  `ctx.agent_context.execution_context.request.state`, not from LLM-supplied arguments.
 - [ ] Circular DI dependencies are broken via `AgentRunner[TargetAgent]`
   parameterized tokens (registered automatically by `AgentModule.for_root()`),
   not via `__post_init__` hacks or module-level globals.

@@ -56,8 +56,11 @@ class RestAPITool:
         if self._auth_header:
             extra_headers["Authorization"] = self._auth_header
 
-        if ctx is not None and hasattr(ctx, "execution_context") and ctx.execution_context is not None:
-            req = ctx.execution_context.request if hasattr(ctx.execution_context, "request") else None
+        # execution_context lives on agent_context, not ToolContext directly.
+        _agent_ctx = ctx.agent_context if ctx is not None else None
+        _exec_ctx = getattr(_agent_ctx, "execution_context", None) if _agent_ctx is not None else None
+        if _exec_ctx is not None:
+            req = _exec_ctx.request if hasattr(_exec_ctx, "request") else None
             if req and hasattr(req, "headers"):
                 auth = req.headers.get("authorization")
                 if auth:
@@ -277,11 +280,14 @@ class TestRestAPIToolAuth:
 
         import asyncio
 
+        from unittest.mock import MagicMock  # noqa: PLC0415
+
+        mock_agent_ctx = MagicMock()
+        mock_agent_ctx.execution_context = _MockEC("Bearer request-token")
         ctx = ToolContext(
-            agent_context=None,
+            agent_context=mock_agent_ctx,
             tool_use_id="tu1",
             turn=0,
-            execution_context=_MockEC("Bearer request-token"),
         )
         mock_resp = _mock_response(200, "ok")
         mock_client, mock_fn = _make_mock_client("get", mock_resp)

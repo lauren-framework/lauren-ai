@@ -442,9 +442,10 @@ non-identity parameters such as the transfer recipient and amount.
 ```python
 # banking_tools.py — TransferFundsTool.run()
 async def run(self, ctx: ToolContext, to_user: str, amount: float) -> dict:
-    # CORRECT: read the sender from the guard-verified state
-    exec_ctx = ctx.execution_context
-    auth_uid = exec_ctx.request.state.get("user_id")  # set by SignatureGuard
+    # CORRECT: read the sender from the guard-verified state.
+    # execution_context lives on agent_context, not ToolContext directly.
+    exec_ctx = ctx.agent_context.execution_context if ctx.agent_context else None
+    auth_uid = exec_ctx.request.state.get("user_id") if exec_ctx else None  # set by SignatureGuard
     if not auth_uid:
         return {"error": "Security error: no authenticated user in ExecutionContext."}
 
@@ -463,11 +464,14 @@ AgentRunner.run(..., execution_context=ExecutionContext(request=request))
     └─ AgentContext.execution_context  (same ExecutionContext)
             │
 ToolExecutor._execute_single_tool(...)
-    └─ ToolContext.execution_context  (forwarded from AgentContext)
+    └─ ToolContext.agent_context.execution_context  (via agent_context)
             │
 tool.run(ctx: ToolContext, ...)
-    └─ ctx.execution_context.request.state.get("user_id")  ← read here
+    └─ ctx.agent_context.execution_context.request.state.get("user_id")  ← read here
 ```
+
+> **Note:** `ToolContext.execution_context` was removed. Always use
+> `ctx.agent_context.execution_context`.
 
 At no point does the LLM supply or influence the sender identity.
 

@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — ToolMeta & ToolContext extensions
+
+Four new decoration-time fields on `ToolMeta` and three new runtime fields on
+`ToolContext` / `ToolCallContext`, giving function-form tools structured access
+to per-call seeded state, per-run persistent state, singleton dependencies, and
+per-call injected extras.
+
+**New `@tool()` / `ToolMeta` fields (immutable, set at decoration time):**
+
+- **`label: str`** — Pretty display name for TUI, logs, and `describe()`.
+  `ToolMeta.display_label` property returns `label` when set, otherwise
+  title-cases `name` (`"read_file"` → `"Read File"`).
+
+- **`initial_state: Callable[[], dict[str, object]] | None`** — Zero-arg
+  factory called before **every tool invocation** to produce a fresh
+  `ctx.state` seed.  The returned dict is shallow-merged into `ctx.state`
+  before dispatch, so callers can guarantee keys are present without defensive
+  `setdefault` calls.  `None` → `ctx.state` starts empty as before.
+
+- **`initial_tool_state: Callable[[], dict[str, object]] | None`** — Zero-arg
+  factory called **once at `run()` / `run_stream()` start** per tool name.
+  The returned dict becomes `ctx.tool_state` for the entire run; the same
+  dict object is handed to every call within that run so mutations accumulate.
+  `None` → `ctx.tool_state` starts as `{}`.
+
+- **`dependency_factory: Callable[[], dict[str, object]] | None`** — Zero-arg
+  factory called **once at run start** per tool name.  Result exposed as
+  `ctx.dependencies`.  Use for expensive singletons (HTTP clients, DB pools)
+  that should be constructed once and reused.  `None` → `ctx.dependencies`
+  is `{}`.
+
+**New `ToolContext` / `ToolCallContext` fields:**
+
+- **`tool_state: dict[str, object]`** — Per-run, per-tool-name mutable dict.
+  Same object for every call to this tool within one `run()`.  Seeded from
+  `initial_tool_state()`.
+
+- **`dependencies: dict[str, object]`** — Per-run singleton deps resolved from
+  `dependency_factory()`.  Same object for every call.  Treat as read-only.
+
+- **`extras: dict[str, object]`** — Per-call context injected by the runner.
+  Fresh on each invocation.
+
+**Removed from `ToolContext` / `ToolCallContext`:**
+
+- **`request`** and **`execution_context`** — Removed.  Both are accessible
+  via `ctx.agent_context.request` and `ctx.agent_context.execution_context`.
+  Removing them eliminates the redundant two-source-of-truth and decouples the
+  tool system from the lauren HTTP layer.
+
 ### Fixed — Memory trim user-anchor guard (prevents assistant-leading histories)
 
 - **`ShortTermMemory.messages()`** and **`trim_to_fit()`** now stop trimming

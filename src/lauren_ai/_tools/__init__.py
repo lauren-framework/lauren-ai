@@ -85,9 +85,26 @@ class ToolSchema(TypedDict, total=False):
 class ToolContext:
     """Context injected into a tool function when a ``ctx: ToolContext`` param is declared.
 
-    Carries the owning agent context, the current turn number, a mutable
-    state bag for per-call data, and the tool's static metadata (populated
-    from ``@set_metadata`` decorators applied to the tool at definition time).
+    Carries the owning agent context, the current turn number, per-call and
+    per-run state bags, resolved singleton dependencies, per-call extras, and
+    static metadata from ``@set_metadata`` decorators.
+
+    State lifetime summary
+    ----------------------
+    * **state** — fresh every call; seeded from ``ToolMeta.initial_state()``.
+      Use for within-call audit trails and hook communication.
+    * **tool_state** — same dict object for every call to this tool within one
+      ``run()`` / ``run_stream()`` invocation; seeded once from
+      ``ToolMeta.initial_tool_state()``.  Use to accumulate memory across turns.
+    * **dependencies** — resolved once at run start by
+      ``ToolMeta.dependency_factory()``; same object for every call.
+      Use for expensive singletons (HTTP client, DB pool).
+    * **extras** — injected fresh per call by the runner.
+      Use for per-call runner-level context (workspace root, user ID).
+
+    ``request`` and ``execution_context`` were removed in this release.
+    Access them via ``ctx.agent_context.request`` and
+    ``ctx.agent_context.execution_context`` respectively.
 
     :param agent_context: The ``AgentContext`` of the running agent (typed as
         ``Any`` to avoid a circular import; at runtime it is an ``AgentContext``
@@ -98,25 +115,35 @@ class ToolContext:
     :type tool_use_id: str
     :param turn: Which agentic-loop iteration (0-based) triggered this call.
     :type turn: int
-    :param request: The originating HTTP ``Request``, if the agent was invoked
-        from a web handler.  ``None`` otherwise.
-    :type request: Any | None
     :param metadata: Static metadata attached to this tool via
         ``@set_metadata(key, value)`` at decoration time.  Readable via
         :meth:`get_metadata`.
-    :type metadata: dict[str, Any]
-    :param state: Mutable per-call state bag for tool-local storage.
-    :type state: dict[str, Any]
+    :type metadata: dict[str, object]
+    :param state: Mutable per-call state bag.  Reset before every invocation
+        and pre-seeded from ``ToolMeta.initial_state()`` when that factory is set.
+    :type state: dict[str, object]
+    :param tool_state: Mutable per-run state bag shared across **all** calls to
+        this tool within one ``run()`` invocation.  Pre-seeded once from
+        ``ToolMeta.initial_tool_state()`` at run start.
+    :type tool_state: dict[str, object]
+    :param dependencies: Singleton dependency dict resolved once per run by
+        ``ToolMeta.dependency_factory()``.  Same object for every call.
+        Treat as read-only; mutations are visible to subsequent calls.
+    :type dependencies: dict[str, object]
+    :param extras: Per-call context injected by the runner each invocation.
+        Treat as read-only; the runner re-populates it on every call.
+    :type extras: dict[str, object]
     """
 
     agent_context: Any
     tool_use_id: str
     turn: int
-    request: Any | None = None
-    execution_context: Any | None = None  # lauren ExecutionContext, or None
-    metadata: dict[str, Any] = field(default_factory=dict)
-    state: dict[str, Any] = field(default_factory=dict)
-    tool_name: str = ""  # populated by _execute_single_tool at call time
+    metadata: dict[str, object] = field(default_factory=dict)
+    state: dict[str, object] = field(default_factory=dict)
+    tool_state: dict[str, object] = field(default_factory=dict)
+    dependencies: dict[str, object] = field(default_factory=dict)
+    extras: dict[str, object] = field(default_factory=dict)
+    tool_name: str = ""  # populated by _execute_single_tool
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
         """Return metadata by *key*, checking tool-level then agent-level.
@@ -186,10 +213,11 @@ def get_tool_context_from_func_args(*args: Any, **kwargs: Any) -> ToolContext | 
                 ctx = get_tool_context_from_func_args(*args, **kwargs)
                 if ctx is None:
                     raise RuntimeError("require_auth: ToolContext not found in arguments")
-                exec_ctx = ctx.execution_context
-                if exec_ctx is None or exec_ctx.request is None:
+                exec_ctx = ctx.agent_context.execution_context if ctx.agent_context else None
+                request = ctx.agent_context.request if ctx.agent_context else None
+                if exec_ctx is None or request is None:
                     return {"error": "Authentication required — no request context"}
-                user_id = exec_ctx.request.state.get("user_id")
+                user_id = request.state.get("user_id")
                 if not user_id:
                     return {"error": "Authentication required"}
                 return await fn(*args, **kwargs)
@@ -199,7 +227,7 @@ def get_tool_context_from_func_args(*args: Any, **kwargs: Any) -> ToolContext | 
         class MyTool:
             @require_auth
             async def run(self, ctx: ToolContext, query: str) -> dict:
-                return {"result": query, "user": ctx.execution_context.request.state.user_id}
+                return {"result": query, "user": ctx.agent_context.execution_context.request.state.user_id}
 
     :param args: Positional arguments forwarded from the wrapping function.
     :param kwargs: Keyword arguments forwarded from the wrapping function.
@@ -413,6 +441,41 @@ class ToolMeta:
     #: after DI resolution.  Empty tuple until the module is built.
     resolved_hooks: tuple[Any, ...] = field(default_factory=tuple)
 
+    # ── decoration-time extensions ────────────────────────────────────────────
+    #: Optional pretty display name shown in TUI, logs, and ``describe()``.
+    #: When empty, :attr:`display_label` computes a title-cased version of
+    #: :attr:`name`.
+    label: str = ""
+
+    #: Zero-arg factory called **before every tool invocation** to produce a
+    #: fresh ``ctx.state`` seed.  The seed is shallow-merged into ``ctx.state``
+    #: so any values already set by hooks are preserved.  ``None`` → ``ctx.state``
+    #: starts as an empty dict.
+    initial_state: Callable[[], dict[str, object]] | None = None
+
+    #: Zero-arg factory called **once at run start** for this tool name to
+    #: initialise ``ctx.tool_state``.  The same dict object is handed to every
+    #: call within the run.  ``None`` → ``ctx.tool_state`` starts as ``{}``.
+    initial_tool_state: Callable[[], dict[str, object]] | None = None
+
+    #: Zero-arg factory called **once at run start** to resolve singleton
+    #: dependencies exposed as ``ctx.dependencies``.  The same object is
+    #: returned for every call within the run.  ``None`` → ``ctx.dependencies``
+    #: is ``{}``.
+    dependency_factory: Callable[[], dict[str, object]] | None = None
+
+    @property
+    def display_label(self) -> str:
+        """Human-readable display name for this tool.
+
+        Returns :attr:`label` when explicitly set; otherwise computes a
+        title-cased version of :attr:`name` (``"read_file"`` → ``"Read File"``).
+
+        :return: Display label string.
+        :rtype: str
+        """
+        return self.label or self.name.replace("_", " ").title()
+
 
 # ---------------------------------------------------------------------------
 # Sentinel attribute name
@@ -505,6 +568,10 @@ def _build_meta(
     error_hook: Callable[..., Any] | None,
     cache_ttl: int | None,
     cache_key_fn: Callable[..., Any] | None,
+    label: str = "",
+    initial_state: Callable[[], dict[str, object]] | None = None,
+    initial_tool_state: Callable[[], dict[str, object]] | None = None,
+    dependency_factory: Callable[[], dict[str, object]] | None = None,
 ) -> ToolMeta:
     """Build a ``ToolMeta`` for *fn_or_cls*.
 
@@ -590,6 +657,10 @@ def _build_meta(
         cache_ttl=cache_ttl,
         cache_key_fn=cache_key_fn,
         hook_classes=hook_classes,
+        label=label,
+        initial_state=initial_state,
+        initial_tool_state=initial_tool_state,
+        dependency_factory=dependency_factory,
     )
 
 
@@ -605,6 +676,10 @@ def tool(
     error_hook: Callable[..., Any] | None = None,
     cache_ttl: int | None = None,
     cache_key_fn: Callable[..., Any] | None = None,
+    label: str = "",
+    initial_state: Callable[[], dict[str, object]] | None = None,
+    initial_tool_state: Callable[[], dict[str, object]] | None = None,
+    dependency_factory: Callable[[], dict[str, object]] | None = None,
 ) -> Callable[[_T], _T]:
     """Decorator that marks a function or class as a tool for AI agents.
 
@@ -683,6 +758,10 @@ def tool(
             error_hook=error_hook,
             cache_ttl=cache_ttl,
             cache_key_fn=cache_key_fn,
+            label=label,
+            initial_state=initial_state,
+            initial_tool_state=initial_tool_state,
+            dependency_factory=dependency_factory,
         )
 
         # For class-form tools: auto-apply @injectable(scope=SINGLETON) so the

@@ -486,7 +486,7 @@ Usage::
 | `execution_context` | `Any | None` | The lauren `ExecutionContext` (route
 metadata, handler class/func, authenticated user via
 `request.state`) when invoked from a route handler.  Threaded
-into `ToolContext.execution_context` for every tool call. |
+into `ToolContext.agent_context.execution_context` for every tool call. |
 | `run_id` | `str | None` | Optional explicit run identifier. |
 | `conversation_store` | `Any | None` | Per-request override of the agent's
 conversation store.  Wins over `meta.conversation_store`. |

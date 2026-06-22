@@ -897,7 +897,7 @@ class TestSSEStreaming:
         assert done_events[0]["data"] == "end_turn"
 
     def test_run_stream_threads_execution_context_to_tools(self):
-        """run_stream(..., execution_context=...) reaches ToolContext.execution_context."""
+        """run_stream(..., execution_context=...) reaches agent_context.execution_context."""
         from lauren_ai._tools import ToolContext
 
         seen: list = []
@@ -907,7 +907,8 @@ class TestSSEStreaming:
             """Read the user_id from the verified server-side context."""
 
             async def run(self, ctx: ToolContext) -> dict:
-                ec = ctx.execution_context
+                # execution_context lives on agent_context, not ToolContext directly.
+                ec = ctx.agent_context.execution_context if ctx.agent_context else None
                 uid = ec.request.state.get("user_id") if ec else None
                 seen.append(uid)
                 return {"user_id": uid}
