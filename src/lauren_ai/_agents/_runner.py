@@ -22,6 +22,7 @@ __all__ = [
 ]
 
 import asyncio
+import dataclasses
 import logging
 import time
 import uuid
@@ -1468,6 +1469,13 @@ class AgentRunnerBase(AgentRunner):
         if _ledger is not None:
             _replayed = _ledger.lookup(tool_call.name, tool_call.input)
             if _replayed is not None:
+                # Rekey to the CURRENT tool_use_id.  The model issues a fresh id
+                # on every attempt, so the recorded id must not leak into the new
+                # message — a tool_result whose tool_use_id has no matching
+                # tool_use block in the preceding assistant message is a hard
+                # provider 400 ("tool_result ... must have a corresponding
+                # tool_use block").
+                _replayed = dataclasses.replace(_replayed, tool_use_id=tool_call.tool_use_id)
                 await self._emit(
                     "ToolCallComplete",
                     run_sinks,
