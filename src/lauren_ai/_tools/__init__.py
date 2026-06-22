@@ -31,6 +31,7 @@ __all__ = [
     "TOOL_META",
     "TOOL_METADATA",
     "USE_HOOKS_META",
+    "IdempotencyLedger",
     "ToolContext",
     "ToolMeta",
     "ToolResult",
@@ -43,6 +44,7 @@ __all__ = [
     "use_hooks",
 ]
 
+from lauren_ai._tools._idempotency import IdempotencyLedger  # noqa: E402
 from lauren_ai._tools._unified import ToolContextAdapter, UnifiedToolContext  # noqa: E402
 
 # Sentinel attribute used by @set_metadata to attach static key-value pairs to

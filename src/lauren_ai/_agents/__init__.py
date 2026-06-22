@@ -199,6 +199,12 @@ class AgentContext:
     signals: Any | None = None
     runner: Any | None = None
     message_bus: AgentMessageBus | None = None
+    # PRD-129 Phase 1: turn-scoped tool idempotency ledger.  When set, a tool
+    # call whose (name, input) matches a previously-recorded successful result
+    # replays that result instead of re-executing — making whole-turn retries
+    # idempotent for side-effecting tools.  ``IdempotencyLedger | None`` (Any to
+    # avoid a parse-time import cycle, matching the surrounding fields).
+    idempotency_ledger: Any | None = None
 
     @property
     def agent_name(self) -> str:

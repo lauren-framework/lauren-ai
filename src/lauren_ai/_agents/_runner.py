@@ -36,7 +36,7 @@ from lauren_ai._exceptions import (
 )
 from lauren_ai._memory import ShortTermMemory
 from lauren_ai._messaging import AgentMessageBus
-from lauren_ai._tools import TOOL_METADATA, ToolContext, ToolResult
+from lauren_ai._tools import TOOL_METADATA, IdempotencyLedger, ToolContext, ToolResult
 from lauren_ai._tools._executor import CacheBackend, ToolExecutor, ToolPendingApprovalSignal
 from lauren_ai._tools._executor import ToolCall as ExecutorToolCall
 from lauren_ai._transport import Completion, CompletionChunk, Message, TokenUsage, ToolCall
@@ -397,6 +397,7 @@ class AgentRunnerBase(AgentRunner):
         config_override: AgentConfig | None = None,
         model_override: str | None = None,
         event_sinks: list[Any] | None = None,
+        idempotency_ledger: IdempotencyLedger | None = None,
     ) -> AgentResponse:
         """Run an ``@agent()``-decorated instance through the agentic loop.
 
@@ -531,6 +532,7 @@ class AgentRunnerBase(AgentRunner):
             signals=self._signals,
             runner=self,
             message_bus=self._message_bus,
+            idempotency_ledger=idempotency_ledger,
         )
         if self._message_bus is not None:
             await self._message_bus.register_agent(
@@ -776,6 +778,7 @@ class AgentRunnerBase(AgentRunner):
         config_override: AgentConfig | None = None,
         model_override: str | None = None,
         event_sinks: list[Any] | None = None,
+        idempotency_ledger: IdempotencyLedger | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         """Run an agent with streaming output.
 
@@ -901,6 +904,7 @@ class AgentRunnerBase(AgentRunner):
             signals=self._signals,
             runner=self,
             message_bus=self._message_bus,
+            idempotency_ledger=idempotency_ledger,
         )
         if self._message_bus is not None:
             await self._message_bus.register_agent(
@@ -1454,6 +1458,29 @@ class AgentRunnerBase(AgentRunner):
             _callable, _ = _tool_entry
             _tool_static_meta = dict(getattr(_callable, TOOL_METADATA, {}))
 
+        # PRD-129 Phase 1: idempotency replay.  If this exact (name, input) call
+        # already produced a successful result earlier in this turn — i.e. a
+        # prior transport-retry attempt ran it before the turn was rolled back —
+        # replay that result instead of re-executing.  This is checked BEFORE the
+        # HITL gate and dispatch, so a tool the user already approved (and whose
+        # side effect already happened) is not re-run or re-prompted.
+        _ledger: IdempotencyLedger | None = ctx.idempotency_ledger
+        if _ledger is not None:
+            _replayed = _ledger.lookup(tool_call.name, tool_call.input)
+            if _replayed is not None:
+                await self._emit(
+                    "ToolCallComplete",
+                    run_sinks,
+                    tool_name=tool_call.name,
+                    tool_use_id=tool_call.tool_use_id,
+                    agent_id=ctx.agent_run_id,
+                    duration_ms=0.0,
+                    success=not _replayed.is_error,
+                    error=None,
+                    replayed=True,
+                )
+                return _replayed
+
         tool_context = ToolContext(
             agent_context=ctx,
             tool_use_id=tool_call.tool_use_id,
@@ -1613,6 +1640,13 @@ class AgentRunnerBase(AgentRunner):
         hook_result = await self._call_hook_with_return(agent, "on_tool_result", result, ctx)
         if hook_result is not None and isinstance(hook_result, ToolResult):
             result = hook_result
+
+        # PRD-129 Phase 1: record only successful results so a later
+        # transport-retry attempt replays them instead of re-executing the tool.
+        # Errors are intentionally NOT recorded — a genuinely failed tool is free
+        # to run again on the next attempt.
+        if _ledger is not None and not result.is_error:
+            _ledger.record(tool_call.name, tool_call.input, result)
 
         return result
 

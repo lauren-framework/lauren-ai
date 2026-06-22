@@ -93,6 +93,7 @@ __all__ = [
     "ToolContextAdapter",
     "ToolCallContext",
     "ToolResult",
+    "IdempotencyLedger",
     "ToolHook",
     "BeforeToolHookDecision",
     "AfterToolHookDecision",
@@ -520,6 +521,7 @@ from lauren_ai._teams import (
     team,
 )
 from lauren_ai._tools import (
+    IdempotencyLedger,
     ToolContext,
     ToolContextAdapter,
     ToolResult,
