@@ -18,6 +18,7 @@ Key types
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -43,6 +44,8 @@ __all__ = [
     "ToolChoice",
     # Protocol
     "Transport",
+    # Token estimation
+    "estimate_message_tokens",
 ]
 
 # ---------------------------------------------------------------------------
@@ -792,3 +795,87 @@ class Transport(Protocol):
         :rtype: int
         """
         ...
+
+
+# ---------------------------------------------------------------------------
+# Heuristic token estimation (shared fallback)
+# ---------------------------------------------------------------------------
+
+_HEURISTIC_CHARS_PER_TOKEN: int = 4
+
+
+def _block_field(block: object, name: str) -> Any:
+    """Read *name* from a content block in either dict or dataclass form."""
+    if isinstance(block, dict):
+        return block.get(name)
+    return getattr(block, name, None)
+
+
+def _tool_chars(tool: object) -> int:
+    """Character length of a tool schema in either dict or :class:`ToolSchema` form.
+
+    The runner passes tool schemas as plain JSON dicts (``{"name", "description",
+    "input_schema"}``), while direct transport callers pass :class:`ToolSchema`
+    dataclasses — both must be supported here.
+    """
+    if isinstance(tool, dict):
+        name = tool.get("name", "") or ""
+        desc = tool.get("description", "") or ""
+        schema = tool.get("input_schema", tool.get("parameters", {})) or {}
+    else:
+        name = getattr(tool, "name", "") or ""
+        desc = getattr(tool, "description", "") or ""
+        schema = getattr(tool, "input_schema", {}) or {}
+    return len(name) + len(desc) + len(json.dumps(schema, default=str))
+
+
+def estimate_message_tokens(
+    messages: list[Any],
+    system: str | None = None,
+    tools: list[ToolSchema] | None = None,
+) -> int:
+    """Estimate the token count of a request using the 4-chars-per-token rule.
+
+    This is the shared fallback used by every transport's ``count_tokens`` when
+    no exact provider endpoint is available.  Unlike the provider SDKs it is
+    tolerant of **both** message representations the codebase uses: the
+    dataclass :class:`Message` / :class:`ContentBlock` form *and* the plain
+    ``{"role": ..., "content": ...}`` dict form produced by
+    :class:`~lauren_ai._memory.ShortTermMemory`.  The runner counts dict
+    messages directly, so a dict-blind estimator would raise ``AttributeError``
+    on exactly the non-native-endpoint path that needs the guard most.
+
+    :param messages: Conversation messages (dicts or :class:`Message`).
+    :type messages: list[Any]
+    :param system: Optional system prompt.
+    :type system: str | None
+    :param tools: Optional tool schemas included in the request.
+    :type tools: list[ToolSchema] | None
+    :return: Estimated token count.
+    :rtype: int
+    """
+    cpt = _HEURISTIC_CHARS_PER_TOKEN
+    total = 0
+    if system:
+        total += max(1, len(system) // cpt)
+    if tools:
+        for t in tools:
+            total += max(1, _tool_chars(t) // cpt)
+    for msg in messages:
+        content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+        if isinstance(content, str):
+            total += max(1, len(content) // cpt)
+        elif isinstance(content, list):
+            for block in content:
+                text = _block_field(block, "text")
+                inp = _block_field(block, "input")
+                bcontent = _block_field(block, "content")
+                if text:
+                    total += max(1, len(text) // cpt)
+                if inp:
+                    total += max(1, len(json.dumps(inp, default=str)) // cpt)
+                if isinstance(bcontent, str):
+                    total += max(1, len(bcontent) // cpt)
+                elif isinstance(bcontent, list):
+                    total += max(1, len(json.dumps(bcontent, default=str)) // cpt)
+    return total

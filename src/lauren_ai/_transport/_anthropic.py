@@ -37,6 +37,7 @@ from lauren_ai._transport import (
     ToolCallDelta,
     ToolChoice,
     ToolSchema,
+    estimate_message_tokens,
 )
 
 if TYPE_CHECKING:
@@ -165,6 +166,27 @@ def _message_to_anthropic(message: Any) -> dict[str, Any]:
         "role": role,
         "content": [_content_block_to_anthropic(b) for b in content],
     }
+
+
+def _apply_conversation_cache(messages: list[dict[str, Any]]) -> None:
+    """Mark the conversation prefix as a prompt-cache breakpoint (PRD-132 L0).
+
+    Adds ``cache_control: ephemeral`` to the last content block of the last
+    message, so the provider serves the (file-heavy) history prefix from cache
+    on the next turn instead of re-billing it at full input price.  String
+    content is normalised to a single text block so the marker can attach.
+
+    Mutates *messages* in place.  No-op on an empty list.
+    """
+    if not messages:
+        return
+    last = messages[-1]
+    content = last.get("content")
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
+        last["content"] = content
+    if isinstance(content, list) and content and isinstance(content[-1], dict):
+        content[-1]["cache_control"] = {"type": "ephemeral"}
 
 
 def _tool_schema_to_anthropic(
@@ -560,6 +582,8 @@ class AnthropicTransport:
         """
         client = self._get_client()
         anthropic_messages = [_message_to_anthropic(m) for m in messages]
+        if self._config.cache_conversation:
+            _apply_conversation_cache(anthropic_messages)
         built_system = self._build_system(system)
         built_tools = self._build_tools(tools)
 
@@ -897,7 +921,12 @@ def _heuristic_count(
     system: str | None,
     tools: list[ToolSchema] | None,
 ) -> int:
-    """Estimate token count using the 4-chars-per-token heuristic.
+    """Estimate token count using the shared 4-chars-per-token heuristic.
+
+    Delegates to :func:`~lauren_ai._transport.estimate_message_tokens`, which
+    tolerates both :class:`Message` dataclasses and the plain dict messages the
+    runner passes — so the fallback never raises ``AttributeError`` when the
+    Anthropic count-tokens endpoint is unavailable (e.g. a proxied gateway).
 
     :param messages: Conversation messages.
     :type messages: list[Message]
@@ -908,23 +937,4 @@ def _heuristic_count(
     :return: Estimated token count.
     :rtype: int
     """
-    total = 0
-    if system:
-        total += max(1, len(system) // 4)
-    if tools:
-        for t in tools:
-            total += max(1, (len(t.name) + len(t.description) + len(json.dumps(t.input_schema))) // 4)
-    for msg in messages:
-        if isinstance(msg.content, str):
-            total += max(1, len(msg.content) // 4)
-        else:
-            for block in msg.content:
-                if block.text:
-                    total += max(1, len(block.text) // 4)
-                if block.input:
-                    total += max(1, len(json.dumps(block.input)) // 4)
-                if isinstance(block.content, str):
-                    total += max(1, len(block.content) // 4)
-                elif isinstance(block.content, list):
-                    total += max(1, len(json.dumps(block.content)) // 4)
-    return total
+    return estimate_message_tokens(messages, system, tools)

@@ -12,12 +12,12 @@ from lauren_ai._transport import (
     Message,
     TokenUsage,
     ToolSchema,
+    estimate_message_tokens,
 )
 from lauren_ai._transport._mock import (
     MockTransport,
     _aggregate_chunks,
     _completion_as_stream,
-    _heuristic_token_count,
     _iter_chunks,
     _messages_token_count,
 )
@@ -27,17 +27,33 @@ from lauren_ai._transport._mock import (
 # ---------------------------------------------------------------------------
 
 
-class TestHeuristicTokenCount:
-    def test_basic(self):
-        assert _heuristic_token_count("hello") == 1  # 5 // 4 = 1
-        assert _heuristic_token_count("hello world") == 2  # 11 // 4 = 2
+class TestEstimateMessageTokens:
+    """The shared dict-safe heuristic that every transport's count_tokens uses."""
 
-    def test_empty_string(self):
-        assert _heuristic_token_count("") == 1  # max(1, 0) = 1
+    def test_basic_message(self):
+        # 4-chars-per-token: a 400-char user message ≈ 100 tokens.
+        assert estimate_message_tokens([{"role": "user", "content": "a" * 400}]) == 100
 
-    def test_long_string(self):
-        text = "a" * 400
-        assert _heuristic_token_count(text) == 100
+    def test_dict_and_dataclass_agree(self):
+        from lauren_ai._transport import ContentBlock
+
+        text = "hello there friend"
+        as_dict = [{"role": "user", "content": text}]
+        as_obj = [Message(role="user", content=[ContentBlock(type="text", text=text)])]
+        assert estimate_message_tokens(as_dict) == estimate_message_tokens(as_obj)
+
+    def test_counts_tool_use_input(self):
+        # tool_use input must be counted (it is part of the billed request) even
+        # though it is never truncated.
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "f", "input": {"blob": "Z" * 4000}},
+                ],
+            }
+        ]
+        assert estimate_message_tokens(msgs) >= 1000  # ~4000 chars / 4
 
 
 class TestMessagesTokenCount:

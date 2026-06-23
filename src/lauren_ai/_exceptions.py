@@ -15,6 +15,7 @@ from the built-in :class:`Exception`.  The hierarchy is:
     ├── AgentMaxTurnsError
     ├── AgentBudgetExceededError
     ├── AgentConfigError
+    ├── AgentContextOverflowError
     ├── DecoratorUsageError
     ├── EmptyQueueError
     ├── ToolConfirmationRejectedError
@@ -37,6 +38,7 @@ __all__ = [
     "AgentMaxTurnsError",
     "AgentBudgetExceededError",
     "AgentConfigError",
+    "AgentContextOverflowError",
     "DecoratorUsageError",
     "EmptyQueueError",
     "ToolConfirmationRejectedError",
@@ -432,6 +434,47 @@ class AgentConfigError(LaurenAIError):
     def __str__(self) -> str:
         agent_name = self.agent_class.__name__ if self.agent_class is not None else "unknown"
         return f"Agent config error for {agent_name!r}: {self.message}"
+
+
+class AgentContextOverflowError(LaurenAIError):
+    """Raised when an assembled request cannot be reduced to fit the model window.
+
+    The runner truncates oversized tool-result / text blocks before each
+    provider call so a request can never exceed the model's usable context
+    budget.  When even maximal truncation leaves the request over budget — an
+    irreducible mandatory item such as a single huge tool-call ``input`` or the
+    user's own message — this is raised with an actionable message instead of
+    letting the provider reject the call with an opaque context-length ``400``.
+
+    :param message: Human-readable, actionable description.
+    :type message: str
+    :param required_tokens: Measured token count of the irreducible request.
+    :type required_tokens: int
+    :param budget_tokens: The model's usable input-token budget.
+    :type budget_tokens: int
+    :param model: The model identifier the request targeted.
+    :type model: str
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        required_tokens: int,
+        budget_tokens: int,
+        model: str,
+    ) -> None:
+        super().__init__(message)
+        self.required_tokens: int = required_tokens
+        self.budget_tokens: int = budget_tokens
+        self.model: str = model
+
+    def __str__(self) -> str:
+        return (
+            f"Context overflow for model {self.model!r}: request needs "
+            f"~{self.required_tokens} input tokens but the usable budget is "
+            f"{self.budget_tokens}. {self.message}"
+        )
 
 
 # ---------------------------------------------------------------------------

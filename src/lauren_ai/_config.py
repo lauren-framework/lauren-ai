@@ -26,10 +26,79 @@ from typing import TYPE_CHECKING, Any, Literal
 __all__ = [
     "LLMConfig",
     "AgentConfig",
+    "MODEL_CONTEXT_WINDOWS",
+    "DEFAULT_CONTEXT_WINDOW",
+    "context_window_for",
 ]
 
 if TYPE_CHECKING:
     from lauren_ai._transport._mock import MockTransport
+
+
+# ---------------------------------------------------------------------------
+# Model context windows
+# ---------------------------------------------------------------------------
+#
+# Total token capacity (input + output) of each model.  Used to derive a hard
+# pre-send budget so a request can never exceed the model's window — see
+# :attr:`AgentConfig.usable_context_budget` and the runner's pre-send guard.
+#
+# Keys are matched as substrings of the (lower-cased) model id, longest key
+# wins, so a family prefix (``"claude-opus-4"``) covers every point release
+# (``"claude-opus-4-8"``).  Unknown / proxied models fall back to
+# :data:`DEFAULT_CONTEXT_WINDOW`; callers that front a non-standard endpoint
+# should set an explicit override instead of relying on the default.
+
+DEFAULT_CONTEXT_WINDOW: int = 200_000
+
+MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    # Anthropic Claude — the 4.x Opus/Sonnet tiers expose a 1M-token window.
+    "claude-opus-4": 1_000_000,
+    "claude-sonnet-4": 1_000_000,
+    "claude-haiku-4": 200_000,
+    "claude-3-5": 200_000,
+    "claude-3": 200_000,
+    # OpenAI
+    "gpt-4.1": 1_000_000,
+    "gpt-4o": 128_000,
+    "gpt-4-turbo": 128_000,
+    "gpt-4": 8_192,
+    "gpt-3.5": 16_385,
+    "o1": 200_000,
+    "o3": 200_000,
+    # Ollama / local (conservative defaults)
+    "llama3.1": 128_000,
+    "llama3.2": 128_000,
+    "llama3": 8_192,
+    "mistral": 32_768,
+    "qwen": 32_768,
+}
+
+
+def context_window_for(model: str) -> int:
+    """Return the total context-window size (in tokens) for *model*.
+
+    Matches the longest :data:`MODEL_CONTEXT_WINDOWS` key contained in the
+    lower-cased model id, so family prefixes cover point releases.  Falls back
+    to :data:`DEFAULT_CONTEXT_WINDOW` for unknown / proxied models.
+
+    :param model: The model identifier, e.g. ``"claude-opus-4-8"``.
+    :type model: str
+    :return: Context-window size in tokens.
+    :rtype: int
+    """
+    needle = model.lower()
+    best_key = ""
+    for key in MODEL_CONTEXT_WINDOWS:
+        if key in needle and len(key) > len(best_key):
+            best_key = key
+    return MODEL_CONTEXT_WINDOWS[best_key] if best_key else DEFAULT_CONTEXT_WINDOW
+
+
+# Minimum head-room reserved on top of the requested completion size to absorb
+# token-count inaccuracy (count_tokens vs. the real tokeniser) and per-request
+# framing overhead.  The reserve scales with the window (see usable budget).
+_CONTEXT_RESERVE_MIN: int = 4_000
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +156,10 @@ class LLMConfig:
     # Prompt caching (Anthropic only — silently ignored elsewhere)
     cache_system_prompt: bool = field(default=False)
     cache_tools: bool = field(default=False)
+    # Incremental conversation caching: mark the last message as a cache
+    # breakpoint each turn so the file-heavy history prefix is served from
+    # cache instead of re-billed at full input price (PRD-132 L0).
+    cache_conversation: bool = field(default=False)
     # Embeddings
     embed_model: str | None = field(default=None)
     embed_dimensions: int | None = field(default=None)
@@ -291,6 +364,13 @@ class AgentConfig:
         main model for reasoning.  ``None`` (the default) reuses the same
         model as the agent.
     :type summary_model: str | None
+    :param context_window: Total context-window size of the model in tokens.
+        Drives the hard pre-send guard (:attr:`usable_context_budget`): before
+        every provider call the runner measures the assembled request and
+        truncates it to fit.  ``0`` (the default) disables the guard — used
+        when the window is unknown.  Callers normally populate this from
+        :func:`context_window_for` or an explicit override.
+    :type context_window: int
     """
 
     system_prompt: str = field(default="You are a helpful assistant.")
@@ -310,3 +390,23 @@ class AgentConfig:
     # Context-window summarisation (opt-in)
     summarize_at: float | None = field(default=None)
     summary_model: str | None = field(default=None)
+    # Hard pre-send context-window guard (0 → disabled / window unknown)
+    context_window: int = field(default=0)
+
+    @property
+    def usable_context_budget(self) -> int:
+        """Maximum input tokens a request may contain for this model.
+
+        Derived from the full :attr:`context_window` minus the completion
+        reservation (:attr:`max_tokens_per_turn`) and a window-scaled head-room
+        reserve (``max(4_000, window // 25)``) that absorbs token-count
+        inaccuracy and per-request framing overhead.  Returns ``0`` when
+        :attr:`context_window` is ``0`` (guard disabled).
+
+        :return: Input-token budget, or ``0`` when the guard is disabled.
+        :rtype: int
+        """
+        if self.context_window <= 0:
+            return 0
+        reserve = max(_CONTEXT_RESERVE_MIN, self.context_window // 25)
+        return max(0, self.context_window - self.max_tokens_per_turn - reserve)

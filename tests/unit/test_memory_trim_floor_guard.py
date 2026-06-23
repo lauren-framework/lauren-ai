@@ -8,10 +8,7 @@ empty messages list that caused API errors:
 
 from __future__ import annotations
 
-import pytest
-
 from lauren_ai._memory import ShortTermMemory
-
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -38,21 +35,29 @@ def _system(content: str = "You are helpful.") -> dict:
 
 class TestMessagesFloorGuard:
     def test_single_oversized_message_not_dropped(self) -> None:
-        """A single user message that exceeds the budget must not be dropped."""
+        """A single user message that exceeds the budget must not be dropped.
+
+        (PRD-133 Layer C: it is *kept* — non-empty, role preserved — but its
+        content is truncated to fit the context budget rather than returned
+        oversized.)
+        """
         mem = ShortTermMemory(max_tokens=100)  # budget = 400 chars
         big = _big_message(1000)  # 1000 chars > 400 budget
         mem.add_user(big)
         msgs = mem.messages()
         assert len(msgs) >= 1, "messages() must not return an empty list"
-        assert msgs[-1]["content"] == big
+        assert msgs[-1]["role"] == "user"
+        assert msgs[-1]["content"], "the user message survives (non-empty)"
 
-    def test_single_oversized_message_returns_it_as_is(self) -> None:
-        """The oversized message is returned unchanged."""
-        mem = ShortTermMemory(max_tokens=10)  # budget = 40 chars
-        big = "A" * 500
+    def test_single_oversized_message_truncated_to_fit(self) -> None:
+        """The oversized message is kept but truncated to fit (PRD-133 Layer C)."""
+        mem = ShortTermMemory(max_tokens=1000)  # 4000 char budget (above MIN_KEEP)
+        big = "A" * 100_000
         mem.add_user(big)
         result = mem.messages()
-        assert result[0]["content"] == big
+        assert len(result) == 1 and result[0]["role"] == "user"
+        assert len(result[0]["content"]) < len(big), "content truncated to fit budget"
+        assert "truncated" in result[0]["content"]
 
     def test_multi_turn_trims_old_turns_but_keeps_last(self) -> None:
         """Old turns are still trimmed; the last (current) turn is kept."""
@@ -63,10 +68,9 @@ class TestMessagesFloorGuard:
         # Turn 2: oversized current request
         mem.add_user(_big_message(500))
         msgs = mem.messages()
-        # The oversized current user message must survive
-        assert any(m.get("content", "") == _big_message(500) for m in msgs), (
-            "The oversized current turn must not be dropped"
-        )
+        # The current user turn survives (possibly truncated) — not dropped.
+        assert msgs, "messages() must not return an empty list"
+        assert any(m.get("role") == "user" for m in msgs), "The current turn must not be dropped"
 
     def test_old_turns_dropped_when_current_fits(self) -> None:
         """Normal trimming still works when current turn fits the budget."""
@@ -159,13 +163,14 @@ class TestTrimToFitFloorGuard:
 
 
 class TestOversizedGuard:
-    def test_messages_returns_oversized_message_as_is(self) -> None:
-        """messages() returns the over-budget message intact rather than dropping it."""
+    def test_messages_keeps_oversized_message(self) -> None:
+        """messages() keeps the over-budget message (truncated) rather than dropping it."""
         mem = ShortTermMemory(max_tokens=10)  # budget = 40 chars
         mem.add_user(_big_message(500))
         msgs = mem.messages()
         assert len(msgs) == 1
         assert msgs[0]["role"] == "user"
+        assert msgs[0]["content"], "message survives (non-empty)"
 
     def test_trim_to_fit_preserves_single_user_message(self) -> None:
         """trim_to_fit() keeps the user message when dropping it would leave nothing."""

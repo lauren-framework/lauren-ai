@@ -53,20 +53,10 @@ from lauren_ai._transport import (
     ToolCallDelta,
     ToolChoice,
     ToolSchema,
+    estimate_message_tokens,
 )
 
 __all__ = ["MockTransport"]
-
-
-def _heuristic_token_count(text: str) -> int:
-    """Estimate token count using the 4-chars-per-token heuristic.
-
-    :param text: Input text to estimate.
-    :type text: str
-    :return: Estimated token count (minimum 1).
-    :rtype: int
-    """
-    return max(1, len(text) // 4)
 
 
 def _messages_token_count(
@@ -85,28 +75,7 @@ def _messages_token_count(
     :return: Estimated token count.
     :rtype: int
     """
-    total = 0
-    if system:
-        total += _heuristic_token_count(system)
-    if tools:
-        for tool in tools:
-            total += _heuristic_token_count(tool.name)
-            total += _heuristic_token_count(tool.description)
-            total += _heuristic_token_count(json.dumps(tool.input_schema))
-    for msg in messages:
-        if isinstance(msg.content, str):
-            total += _heuristic_token_count(msg.content)
-        else:
-            for block in msg.content:
-                if block.text:
-                    total += _heuristic_token_count(block.text)
-                if block.input:
-                    total += _heuristic_token_count(json.dumps(block.input))
-                if isinstance(block.content, str):
-                    total += _heuristic_token_count(block.content)
-                elif isinstance(block.content, list):
-                    total += _heuristic_token_count(json.dumps(block.content))
-    return total
+    return estimate_message_tokens(messages, system, tools)
 
 
 async def _iter_chunks(

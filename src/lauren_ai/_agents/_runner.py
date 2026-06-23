@@ -23,6 +23,7 @@ __all__ = [
 
 import asyncio
 import dataclasses
+import json
 import logging
 import time
 import uuid
@@ -34,13 +35,23 @@ from lauren_ai._config import AgentConfig
 from lauren_ai._exceptions import (
     AgentBudgetExceededError,
     AgentConfigError,
+    AgentContextOverflowError,
 )
-from lauren_ai._memory import ShortTermMemory
+from lauren_ai._memory import ShortTermMemory, _enforce_char_budget, _message_char_length
 from lauren_ai._messaging import AgentMessageBus
 from lauren_ai._tools import TOOL_METADATA, IdempotencyLedger, ToolContext, ToolResult
 from lauren_ai._tools._executor import CacheBackend, ToolExecutor, ToolPendingApprovalSignal
 from lauren_ai._tools._executor import ToolCall as ExecutorToolCall
-from lauren_ai._transport import Completion, CompletionChunk, Message, TokenUsage, ToolCall
+from lauren_ai._transport import (
+    Completion,
+    CompletionChunk,
+    Message,
+    TokenUsage,
+    ToolCall,
+    ToolSchema,
+    Transport,
+    estimate_message_tokens,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +150,111 @@ async def _summarize_memory(
     if summary_text:
         memory.trim_to_recent(keep_recent)
         memory.set_summary(summary_text)
+
+
+# ── Pre-send context-window guard (PRD-133 D/E) ──────────────────────────────
+# Before every provider call the assembled request is measured and, when it
+# would exceed the model's usable input budget, oversized block contents are
+# truncated until it fits.  This is the hard invariant: a request can never be
+# sent that overflows the model context window (an opaque provider 400).
+#
+# Two-stage to keep the common turn free of a network round-trip:
+#   1. a cheap, conservative local estimate gates the exact check — if even an
+#      over-counting estimate sits comfortably under budget, skip count_tokens;
+#   2. otherwise the transport's exact ``count_tokens`` drives truncation, and
+#      a request that cannot be reduced below the window raises
+#      :class:`AgentContextOverflowError` with an actionable message (PRD-133 E)
+#      instead of letting the provider reject it.
+_CONTEXT_PRECHECK_FRACTION: float = 0.85
+_CONTEXT_FIT_MAX_ITERS: int = 4
+_CONTEXT_FIT_UNDERSHOOT: float = 0.9
+# estimate_message_tokens uses 4 chars/token; rescale to a denser 3.5 chars/token
+# for a deliberately conservative (over-)estimate at the cheap gate.
+_HEURISTIC_CHARS_PER_TOKEN: float = 4.0
+_LOCAL_CHARS_PER_TOKEN: float = 3.5
+
+
+def _cheap_token_estimate(
+    messages: list[Any],
+    system: str | None,
+    tools: list[ToolSchema] | None,
+) -> int:
+    """Conservative local token estimate — no network round-trip.
+
+    Built on :func:`~lauren_ai._transport.estimate_message_tokens` (the shared
+    dict-safe 4-chars/token heuristic) so it counts *everything* a request
+    contains — crucially ``tool_use`` inputs, which the memory char-length
+    helper deliberately treats as zero (they must never be truncated).  The
+    4-chars base is then scaled to ~3.5 chars/token so code- and JSON-heavy
+    content is *over*-counted, biasing the gate toward running the exact check
+    rather than skipping it.
+
+    :param messages: Conversation messages (dict or :class:`Message` form).
+    :param system: System prompt included in the request.
+    :param tools: Tool schemas included in the request.
+    :return: A conservative token estimate.
+    :rtype: int
+    """
+    base = estimate_message_tokens(messages, system, tools)
+    return int(base * _HEURISTIC_CHARS_PER_TOKEN / _LOCAL_CHARS_PER_TOKEN)
+
+
+async def _fit_to_context(
+    transport: Transport,
+    messages: list[Any],
+    *,
+    model: str,
+    system: str | None,
+    tools: list[ToolSchema] | None,
+    budget: int,
+) -> list[Any]:
+    """Return *messages* truncated so the request fits *budget* input tokens.
+
+    :param transport: The transport used to count tokens exactly.
+    :param messages: The assembled request messages (dict form from memory).
+    :param model: Target model identifier.
+    :param system: System prompt sent with the request.
+    :param tools: Tool schemas sent with the request.
+    :param budget: Maximum allowed input tokens; ``0`` disables the guard.
+    :return: The original list when within budget, else a truncated copy.
+    :rtype: list[Any]
+    :raises AgentContextOverflowError: When the request cannot be reduced below
+        *budget* even after maximal truncation (an irreducible mandatory item).
+    """
+    if budget <= 0:
+        return messages  # guard disabled — window unknown
+    # Stage 1 — cheap gate.  Comfortably under budget → skip the exact count.
+    if _cheap_token_estimate(messages, system, tools) <= int(budget * _CONTEXT_PRECHECK_FRACTION):
+        return messages
+    # Stage 2 — exact count drives truncation.
+    count = await transport.count_tokens(messages, model=model, system=system, tools=tools)
+    if count <= budget:
+        return messages
+    work = messages
+    for _ in range(_CONTEXT_FIT_MAX_ITERS):
+        total_chars = sum(_message_char_length(m) for m in work)
+        if total_chars <= 0 or count <= 0:
+            break
+        # Scale the char budget by the measured chars/token ratio, undershooting
+        # so a single pass usually converges; re-measure exactly afterwards.
+        target_chars = max(1, int(total_chars * (budget / count) * _CONTEXT_FIT_UNDERSHOOT))
+        shrunk = _enforce_char_budget(work, target_chars)
+        if sum(_message_char_length(m) for m in shrunk) >= total_chars:
+            break  # nothing left to truncate (blocks at floor / tool_use inputs)
+        work = shrunk
+        count = await transport.count_tokens(work, model=model, system=system, tools=tools)
+        if count <= budget:
+            return work
+    if count > budget:
+        raise AgentContextOverflowError(
+            "The conversation or a single tool result is too large to fit even "
+            "after truncation. Narrow the tool query (e.g. a sub-path or pattern), "
+            "split the request into smaller steps, or compact the conversation.",
+            required_tokens=count,
+            budget_tokens=budget,
+            model=model,
+        )
+    return work
 
 
 # Module-level cache for ``AgentRunner[X]`` parameterizations.  Hoisted out
@@ -586,6 +702,16 @@ class AgentRunnerBase(AgentRunner):
                     system_prompt = _build_system_prompt(meta.system or effective_config.system_prompt, memory)
 
                 messages = memory.messages()
+                # Hard pre-send guard: never hand the provider a request that
+                # exceeds the model's usable context window (PRD-133 D/E).
+                messages = await _fit_to_context(
+                    self._transport,
+                    messages,
+                    model=model,
+                    system=system_prompt,
+                    tools=tool_schemas if tool_schemas else None,
+                    budget=effective_config.usable_context_budget,
+                )
 
                 t0 = time.monotonic()
                 completion = await self._transport.complete(
@@ -1072,6 +1198,16 @@ class AgentRunnerBase(AgentRunner):
                 # build on a consistent history.
                 memory.ensure_valid()
                 messages = memory.messages()
+                # Hard pre-send guard: never hand the provider a request that
+                # exceeds the model's usable context window (PRD-133 D/E).
+                messages = await _fit_to_context(
+                    self._transport,
+                    messages,
+                    model=model,
+                    system=system_prompt,
+                    tools=_tool_schemas_arg,
+                    budget=effective_config.usable_context_budget,
+                )
 
                 t0 = time.monotonic()
                 stream = await self._transport.complete(
@@ -1158,8 +1294,6 @@ class AgentRunnerBase(AgentRunner):
                 # This covers phantom entries created when the transport generates a
                 # temporary random ID for a blank first delta and then updates the
                 # real ID/name in a subsequent delta.
-                import json  # noqa: PLC0415
-
                 for tid, input_json in partial_tool_inputs.items():
                     name = partial_tool_names.get(tid, "")
                     if not name:

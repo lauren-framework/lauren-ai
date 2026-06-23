@@ -48,6 +48,7 @@ from lauren_ai._transport import (
     ToolCallDelta,
     ToolChoice,
     ToolSchema,
+    estimate_message_tokens,
 )
 
 __all__ = ["OllamaTransport"]
@@ -629,23 +630,4 @@ class OllamaTransport:
         :return: Estimated token count.
         :rtype: int
         """
-        total = 0
-        if system:
-            total += max(1, len(system) // 4)
-        if tools:
-            for t in tools:
-                total += max(1, (len(t.name) + len(t.description) + len(json.dumps(t.input_schema))) // 4)
-        for msg in messages:
-            if isinstance(msg.content, str):
-                total += max(1, len(msg.content) // 4)
-            else:
-                for block in msg.content:
-                    if block.text:
-                        total += max(1, len(block.text) // 4)
-                    if block.input:
-                        total += max(1, len(json.dumps(block.input)) // 4)
-                    if isinstance(block.content, str):
-                        total += max(1, len(block.content) // 4)
-                    elif isinstance(block.content, list):
-                        total += max(1, len(json.dumps(block.content)) // 4)
-        return total
+        return estimate_message_tokens(messages, system, tools)

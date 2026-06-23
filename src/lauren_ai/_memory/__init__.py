@@ -557,6 +557,111 @@ def _get_role(message: Any) -> str:
     return getattr(message, "role", "")
 
 
+# ---------------------------------------------------------------------------
+# Hard context-budget enforcement (PRD-133 Layer C)
+# ---------------------------------------------------------------------------
+#: Minimum characters kept when a single block is truncated to fit budget.
+_TRUNCATION_MIN_KEEP: int = 400
+
+
+def _truncate_str(text: str, target: int) -> str:
+    """Shorten *text* to ~*target* chars, keeping a head + tail with a marker."""
+    if target <= 0:
+        return ""
+    if len(text) <= target:
+        return text
+    marker = f"\n…[truncated {len(text) - target} chars to fit context budget]…\n"
+    keep = max(_TRUNCATION_MIN_KEEP, target - len(marker))
+    head = (keep * 2) // 3
+    tail = keep - head
+    return text[:head] + marker + (text[-tail:] if tail else "")
+
+
+def _block_text_field(block: Any) -> tuple[str | None, int]:
+    """Return ``(field_name, length)`` of a block's truncatable text, or (None, 0).
+
+    Only the ``text`` / ``content`` *string* fields are truncatable; ``tool_use``
+    inputs and ids are left intact so the call stays valid.
+    """
+    if isinstance(block, dict):
+        if isinstance(block.get("text"), str):
+            return "text", len(block["text"])
+        if isinstance(block.get("content"), str):
+            return "content", len(block["content"])
+    return None, 0
+
+
+def _shrink_message(message: Any, target_chars: int) -> Any:
+    """Return a copy of *message* whose content is truncated to ~*target_chars*.
+
+    Block structure is preserved (no block is removed) so ``tool_use`` /
+    ``tool_result`` pairing stays valid — only text/content strings shrink.
+    Only ``dict`` messages (the runtime ShortTermMemory format) are shrunk.
+    """
+    if not isinstance(message, dict):
+        return message
+    content = message.get("content", "")
+    if isinstance(content, str):
+        if len(content) <= target_chars:
+            return message
+        return {**message, "content": _truncate_str(content, target_chars)}
+    if isinstance(content, list):
+        cur = _estimate_content_length(content)
+        if cur <= target_chars:
+            return message
+        excess = cur - target_chars
+        new_blocks = [dict(b) if isinstance(b, dict) else b for b in content]
+        order = sorted(
+            range(len(new_blocks)),
+            key=lambda i: _block_text_field(new_blocks[i])[1],
+            reverse=True,
+        )
+        for i in order:
+            if excess <= 0:
+                break
+            field, blen = _block_text_field(new_blocks[i])
+            if field is None or blen <= _TRUNCATION_MIN_KEEP:
+                continue
+            cut = min(blen - _TRUNCATION_MIN_KEEP, excess)
+            new_blocks[i][field] = _truncate_str(new_blocks[i][field], blen - cut)
+            excess -= cut
+        return {**message, "content": new_blocks}
+    return message
+
+
+def _enforce_char_budget(messages: list[Any], budget_chars: int) -> list[Any]:
+    """Hard-cap *messages* to *budget_chars* by truncating block contents.
+
+    The sliding-window trim in :meth:`ShortTermMemory.messages` can leave the
+    list over budget when a single un-droppable turn is itself too large (e.g. a
+    recursive directory listing or a huge file read).  This shrinks block
+    contents — never removing blocks — until the total fits, so the request is
+    guaranteed to stay within budget instead of overflowing the model context
+    window.
+    """
+    if budget_chars <= 0:
+        return messages
+    total = sum(_message_char_length(m) for m in messages)
+    if total <= budget_chars:
+        return messages
+    result = list(messages)
+    excess = total - budget_chars
+    order = sorted(
+        range(len(result)),
+        key=lambda i: _message_char_length(result[i]),
+        reverse=True,
+    )
+    for i in order:
+        if excess <= 0:
+            break
+        cur = _message_char_length(result[i])
+        if cur <= _TRUNCATION_MIN_KEEP:
+            continue
+        result[i] = _shrink_message(result[i], max(_TRUNCATION_MIN_KEEP, cur - excess))
+        excess -= cur - _message_char_length(result[i])
+    return result
+
+
 class ShortTermMemory:
     """Sliding-window conversation buffer for a single agent run.
 
@@ -813,7 +918,13 @@ class ShortTermMemory:
 
         # Heal any incomplete tool-call sequence at the tail (e.g. an agent
         # turn interrupted before all parallel tool results arrived).
-        return _heal_dangling_tail(snapshot)
+        snapshot = _heal_dangling_tail(snapshot)
+        # PRD-133 Layer C: hard budget guarantee.  The sliding-window trim above
+        # never drops past the last conversational user message, so a single
+        # oversized turn (huge tool result) can still exceed the window.  Truncate
+        # block contents so the returned list is *always* within budget — the
+        # request can never overflow the model context window.
+        return _enforce_char_budget(snapshot, budget_chars)
 
     def trim_to_fit(self, max_tokens: int) -> None:
         """Drop oldest non-system messages until the token estimate fits.

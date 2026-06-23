@@ -48,6 +48,9 @@ __all__ = [
     # Config
     "LLMConfig",
     "AgentConfig",
+    "MODEL_CONTEXT_WINDOWS",
+    "DEFAULT_CONTEXT_WINDOW",
+    "context_window_for",
     # Transport types
     "Message",
     "Completion",
@@ -70,6 +73,7 @@ __all__ = [
     "AgentMaxTurnsError",
     "AgentBudgetExceededError",
     "AgentConfigError",
+    "AgentContextOverflowError",
     "DecoratorUsageError",
     "ToolExecutionError",
     "MessageBusError",
@@ -296,7 +300,13 @@ from lauren_ai._agents._runner import AgentRunner, AgentRunnerBase
 # Chains
 # ---------------------------------------------------------------------------
 from lauren_ai._chains import Chain, Runnable, RunnableLambda, chain
-from lauren_ai._config import AgentConfig, LLMConfig
+from lauren_ai._config import (
+    DEFAULT_CONTEXT_WINDOW,
+    MODEL_CONTEXT_WINDOWS,
+    AgentConfig,
+    LLMConfig,
+    context_window_for,
+)
 
 # ---------------------------------------------------------------------------
 # Cost & rate tracking (Section 40)
@@ -321,6 +331,7 @@ from lauren_ai._cost import (
 from lauren_ai._exceptions import (
     AgentBudgetExceededError,
     AgentConfigError,
+    AgentContextOverflowError,
     AgentMaxTurnsError,
     DecoratorUsageError,
     LaurenAIError,
