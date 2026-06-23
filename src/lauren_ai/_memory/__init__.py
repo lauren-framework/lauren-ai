@@ -690,6 +690,19 @@ class ShortTermMemory:
         self._messages: list[Any] = []
         self._summary: str | None = None
 
+    @property
+    def max_tokens(self) -> int:
+        """The live-window token budget that :meth:`messages` trims to.
+
+        This is the budget the proactive compaction ladder defends: when the
+        full buffer's exact token count approaches it, older turns are
+        LLM-summarised rather than lossily truncated.
+
+        :return: The configured token budget.
+        :rtype: int
+        """
+        return self._max_tokens
+
     # ------------------------------------------------------------------
     # Mutation helpers
     # ------------------------------------------------------------------
@@ -840,21 +853,47 @@ class ShortTermMemory:
         """
         self._summary = text
 
+    def _safe_keep_recent(self, keep_recent: int) -> int:
+        """Adjust *keep_recent* so the recent window opens on a valid anchor.
+
+        The summary boundary must never split an assistant ``tool_use`` from its
+        following ``tool_result``: if the first *kept* message were a
+        ``tool_result`` whose ``tool_use`` got summarised away, the provider
+        would reject the request (orphan tool_result / non-user first message).
+        This grows the kept count until the first kept non-system message is a
+        conversational anchor (text user message or assistant turn), capping at
+        "keep everything" (which simply means nothing is summarised this round).
+
+        :param keep_recent: The requested number of recent messages to keep.
+        :return: An adjusted count whose recent window starts on a safe anchor.
+        :rtype: int
+        """
+        non_system = [m for m in self._messages if _get_role(m) != "system"]
+        n = len(non_system)
+        k = max(0, min(keep_recent, n))
+        # non_system[n - k] is the first kept message when keeping the last k.
+        while 0 < k < n and _is_tool_result(non_system[n - k]):
+            k += 1
+        return k
+
     def messages_to_summarize(self, keep_recent: int = 6) -> list[Any]:
         """Return the slice of messages that should be compressed.
 
-        Returns the oldest ``(total - keep_recent)`` non-system messages.
-        System messages are excluded because they are already managed
-        separately (they are never dropped by ``messages()`` either).
+        Returns the oldest non-system messages outside the (boundary-safe)
+        recent window.  System messages are excluded because they are already
+        managed separately (they are never dropped by ``messages()`` either).
 
         :param keep_recent: Number of most-recent non-system messages to
-            preserve verbatim.  Defaults to 6 (≈ 3 user/assistant pairs).
+            preserve verbatim.  Defaults to 6 (≈ 3 user/assistant pairs).  The
+            boundary is snapped so a ``tool_use``/``tool_result`` pair is never
+            split (see :meth:`_safe_keep_recent`).
         :type keep_recent: int
         :return: List of messages to feed to the summarisation LLM call.
         :rtype: list[Any]
         """
         non_system = [m for m in self._messages if _get_role(m) != "system"]
-        to_compress = non_system[:-keep_recent] if len(non_system) > keep_recent else []
+        k = self._safe_keep_recent(keep_recent)
+        to_compress = non_system[:-k] if k and len(non_system) > k else (non_system if k == 0 else [])
         return list(to_compress)
 
     def trim_to_recent(self, keep_recent: int = 6) -> None:
@@ -862,7 +901,8 @@ class ShortTermMemory:
 
         Called by the runner after the summarisation call so the buffer
         only holds recent turns while the older context lives in
-        ``self._summary``.
+        ``self._summary``.  The boundary is snapped so a ``tool_use``/
+        ``tool_result`` pair is never split (see :meth:`_safe_keep_recent`).
 
         :param keep_recent: Number of most-recent non-system messages to
             keep.  Defaults to 6.
@@ -870,7 +910,8 @@ class ShortTermMemory:
         """
         system_msgs = [m for m in self._messages if _get_role(m) == "system"]
         non_system = [m for m in self._messages if _get_role(m) != "system"]
-        kept = non_system[-keep_recent:] if non_system else []
+        k = self._safe_keep_recent(keep_recent)
+        kept = non_system[-k:] if k else []
         self._messages = system_msgs + kept
 
     # ------------------------------------------------------------------

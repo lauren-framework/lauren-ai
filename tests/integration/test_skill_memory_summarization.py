@@ -17,7 +17,12 @@ from __future__ import annotations
 import pytest
 
 from lauren_ai import AgentConfig, agent
-from lauren_ai._agents._runner import AgentRunnerBase, _should_summarize, _summarize_memory
+from lauren_ai._agents._runner import (
+    AgentRunnerBase,
+    _maybe_compact,
+    _summarize_memory,
+    _summarize_text,
+)
 from lauren_ai._memory import ShortTermMemory
 from lauren_ai._memory._stores import InMemoryConversationStore
 from lauren_ai._transport import Completion, TokenUsage
@@ -49,35 +54,80 @@ def _make_runner(mock: MockTransport) -> AgentRunnerBase:
 
 
 # ---------------------------------------------------------------------------
-# Unit-level: _should_summarize helper
+# Unit-level: _maybe_compact (exact-count trigger, PRD-135 A)
 # ---------------------------------------------------------------------------
 
 
-class TestShouldSummarize:
-    def test_returns_false_when_summarize_at_is_none(self):
+class TestMaybeCompact:
+    @pytest.mark.asyncio
+    async def test_disabled_when_summarize_at_none(self):
+        mock = MockTransport()
         mem = ShortTermMemory(max_tokens=100)
-        mem.add_user("hello " * 100)
-        cfg = AgentConfig(memory_window_tokens=100, summarize_at=None)
-        assert _should_summarize(mem, cfg) is False
+        mem.add_user("x" * 100_000)
+        cfg = AgentConfig(summarize_at=None)
+        assert await _maybe_compact(mem, mock, model="m", system=None, tools=None, config=cfg) is False
+        assert len(mock._calls) == 0
 
-    def test_returns_false_below_threshold(self):
-        mem = ShortTermMemory(max_tokens=1000)
-        mem.add_user("hi")  # very small
-        cfg = AgentConfig(memory_window_tokens=1000, summarize_at=0.8)
-        assert _should_summarize(mem, cfg) is False
+    @pytest.mark.asyncio
+    async def test_no_compaction_below_trigger(self):
+        # Cheap gate short-circuits — not even a count_tokens round-trip.
+        mock = MockTransport()
+        mem = ShortTermMemory(max_tokens=2000)  # trigger@0.5 = 1000 tok
+        mem.add_user("hi")
+        cfg = AgentConfig(summarize_at=0.5)
+        assert await _maybe_compact(mem, mock, model="m", system=None, tools=None, config=cfg) is False
+        assert len(mock._calls) == 0
 
-    def test_returns_true_at_threshold(self):
-        mem = ShortTermMemory(max_tokens=100)
-        # Fill to exactly 80% of 100 tokens = 80 tokens = 320 chars
-        mem.add_user("x" * 320)
-        cfg = AgentConfig(memory_window_tokens=100, summarize_at=0.8)
-        assert _should_summarize(mem, cfg) is True
+    @pytest.mark.asyncio
+    async def test_compacts_when_buffer_exceeds_live_window(self):
+        mock = MockTransport()
+        mock.queue_response(_compl("ROLLING SUMMARY of older turns"))
+        mem = ShortTermMemory(max_tokens=2000)  # trigger@0.5 = 1000 tok ≈ 4000 chars
+        for _ in range(8):
+            mem.add_user("x" * 1000)
+            mem.add_assistant(_compl("ok"))  # ~8000 chars > trigger
+        cfg = AgentConfig(summarize_at=0.5, context_window=200_000)
+        did = await _maybe_compact(mem, mock, model="m", system="sys", tools=None, config=cfg)
+        assert did is True
+        assert mem.summary == "ROLLING SUMMARY of older turns"
+        assert len(mem._messages) <= 6  # trimmed to keep_recent
 
-    def test_returns_true_above_threshold(self):
-        mem = ShortTermMemory(max_tokens=100)
-        mem.add_user("x" * 500)  # >> 80% of 100 tokens
-        cfg = AgentConfig(memory_window_tokens=100, summarize_at=0.8)
-        assert _should_summarize(mem, cfg) is True
+    @pytest.mark.asyncio
+    async def test_triggers_on_full_buffer_not_trimmed_view(self):
+        # messages() would trim to the (small) live window; the trigger must see
+        # the FULL buffer so a conversation that has outgrown the window compacts.
+        mock = MockTransport()
+        mock.queue_response(_compl("summary"))
+        mem = ShortTermMemory(max_tokens=1500)  # messages() would cap ~1500 tok
+        for _ in range(10):
+            mem.add_user("y" * 1000)
+            mem.add_assistant(_compl("ok"))
+        cfg = AgentConfig(summarize_at=0.5, context_window=200_000)
+        assert await _maybe_compact(mem, mock, model="m", system="s", tools=None, config=cfg) is True
+
+
+class TestMapReduceSummary:
+    @pytest.mark.asyncio
+    async def test_chunks_so_no_call_exceeds_budget(self):
+        # A transcript several times the chunk budget must summarise via multiple
+        # bounded calls (map-reduce), never one over-budget call.
+        mock = MockTransport()
+        for _ in range(50):
+            mock.queue_response(_compl("partial summary"))
+        text = "A" * 60_000
+        out = await _summarize_text(mock, text, model="m", max_input_chars=10_000)
+        assert out
+        assert len(mock._calls) > 1  # mapped into chunks
+        biggest = max(len(c.messages[0].content) for c in mock._calls)
+        assert biggest < 11_000  # every call's input stayed near the chunk budget
+
+    @pytest.mark.asyncio
+    async def test_single_call_when_within_budget(self):
+        mock = MockTransport()
+        mock.queue_response(_compl("one summary"))
+        out = await _summarize_text(mock, "short text", model="m", max_input_chars=100_000)
+        assert out == "one summary"
+        assert len(mock._calls) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -398,3 +448,97 @@ class TestSummarizationPersistence:
         system = call.system or ""
         assert "[Earlier conversation summary]" in system
         assert "Saved summary: user asked about Python." in system
+
+
+# ---------------------------------------------------------------------------
+# Boundary safety: the keep_recent split must never orphan a tool_result
+# ---------------------------------------------------------------------------
+
+
+class TestKeepRecentBoundary:
+    def _mem_with_tool_pair_at_boundary(self) -> ShortTermMemory:
+        mem = ShortTermMemory(max_tokens=10_000)
+        # 4 plain turns, then a tool_use → tool_result pair as the most recent 2.
+        for i in range(4):
+            mem.add_user(f"q{i}")
+            mem.add_assistant(_compl(f"a{i}"))
+        mem._messages.append(
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "f", "input": {}}]}
+        )
+        mem._messages.append(
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}
+        )
+        return mem
+
+    def test_trim_to_recent_does_not_orphan_tool_result(self):
+        mem = self._mem_with_tool_pair_at_boundary()
+        # keep_recent=1 would naively keep only the tool_result (orphan).
+        mem.trim_to_recent(keep_recent=1)
+        first_kept = mem._messages[0]
+        # The boundary snapped back to include the tool_use (or a conversational
+        # anchor) — the kept window never *opens* on a bare tool_result.
+        content = first_kept.get("content")
+        is_tool_result = isinstance(content, list) and any(
+            isinstance(b, dict) and b.get("type") == "tool_result" for b in content
+        )
+        assert not is_tool_result
+
+    def test_messages_to_summarize_matches_trim_boundary(self):
+        mem = self._mem_with_tool_pair_at_boundary()
+        to_compress = mem.messages_to_summarize(keep_recent=1)
+        # The tool_use must be summarised together with (or after) — never split
+        # from — its tool_result.  Since the boundary snaps to keep the pair, the
+        # compressed slice ends before the tool_use.
+        assert all(
+            not (
+                isinstance(m.get("content"), list)
+                and any(isinstance(b, dict) and b.get("type") == "tool_use" for b in m["content"])
+            )
+            for m in to_compress
+        ) or all(
+            not (
+                isinstance(m.get("content"), list)
+                and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in m["content"])
+            )
+            for m in to_compress
+        )
+
+
+# ---------------------------------------------------------------------------
+# run_stream surfaces a compaction status notice (PRD-135 D)
+# ---------------------------------------------------------------------------
+
+
+class TestRunStreamCompactionNotice:
+    @pytest.mark.asyncio
+    async def test_emits_system_notice_chunk_on_compaction(self):
+        mock = MockTransport()
+        mock.queue_response(_compl("ROLLING SUMMARY"))  # consumed by summariser
+        mock.queue_response(_compl("done"))  # the streamed agent turn
+
+        @agent(model="mock-model", system="S")
+        class StreamAgent:
+            pass
+
+        StreamAgent.__lauren_ai_agent__.tools = {}
+        StreamAgent.__lauren_ai_agent__.model = "mock-model"
+        runner = AgentRunnerBase(transport=mock)
+
+        mem = ShortTermMemory(max_tokens=2000)  # trigger@0.5 ≈ 1000 tok
+        for _ in range(8):
+            mem.add_user("x" * 1000)
+            mem.add_assistant(_compl("ok"))
+
+        notices: list[str] = []
+        stream = await runner.run_stream(
+            StreamAgent(),
+            "final question",
+            memory=mem,
+            config_override=AgentConfig(summarize_at=0.5, context_window=200_000, max_turns=1),
+        )
+        async for chunk in stream:
+            if chunk.system_notice:
+                notices.append(chunk.system_notice)
+
+        assert any("Compacting" in n for n in notices)
+        assert mem.summary == "ROLLING SUMMARY"

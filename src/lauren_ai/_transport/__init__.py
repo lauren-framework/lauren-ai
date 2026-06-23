@@ -523,6 +523,11 @@ class CompletionChunk:
         normal chunks have been yielded.  Callers should replace the
         accumulated streaming text with this value.
     :type guardrail_override: str | None
+    :param system_notice: An out-of-band, user-facing status line (e.g.
+        ``"⎋ Compacting conversation…"``).  Emitted as a sentinel chunk with no
+        other field populated; callers surface it to the user but must NOT add
+        it to the assistant's accumulated content.
+    :type system_notice: str | None
     """
 
     delta: str = ""
@@ -532,6 +537,7 @@ class CompletionChunk:
     usage: TokenUsage | None = None
     pending_approval: PendingApproval | None = None
     guardrail_override: str | None = None
+    system_notice: str | None = None
 
 
 # ---------------------------------------------------------------------------

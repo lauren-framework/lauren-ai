@@ -77,15 +77,113 @@ def _build_system_prompt(base: str, memory: ShortTermMemory) -> str:
     return f"{base}\n\n[Earlier conversation summary]\n{summary}"
 
 
-def _should_summarize(
-    memory: ShortTermMemory,
-    config: AgentConfig,
-) -> bool:
-    """Return ``True`` when a summarisation call should be triggered."""
-    if config.summarize_at is None:
-        return False
-    threshold = config.memory_window_tokens * config.summarize_at
-    return memory.token_estimate >= threshold
+# Summarisation call parameters.  The system prompt mirrors agenthicc's manual
+# compactor so the two share one voice; max_tokens is generous enough for a dense
+# rolling summary that preserves facts/decisions/paths across many turns.
+_SUMMARY_SYSTEM = (
+    "You are a conversation summariser. Compress the conversation into a single "
+    "dense summary that preserves all key facts, decisions, file paths, code "
+    "changes, tool results, and outstanding tasks. Nothing omitted can be "
+    "recovered — be precise."
+)
+_SUMMARY_MAX_TOKENS: int = 1024
+# Map-reduce guards: never let the summariser's *own* input exceed the window.
+_SUMMARY_MAP_REDUCE_MAX_DEPTH: int = 4
+_SUMMARY_MIN_CHUNK_CHARS: int = 2_000
+_SUMMARY_INPUT_CHARS_PER_TOKEN: float = 3.0  # conservative chars→tokens for chunk sizing
+
+
+def _format_turns_for_summary(messages: list[Any], prior_summary: str | None) -> str:
+    """Render *messages* (plus any *prior_summary*) as a transcript for the LLM.
+
+    The prior rolling summary is prepended so each compaction *accumulates* —
+    older context is folded into the new summary rather than discarded.  Tool
+    calls and tool results are included (previewed) so the summary records what
+    actions were taken, not just prose.
+    """
+    parts: list[str] = []
+    if prior_summary:
+        parts.append(f"[EARLIER SUMMARY]\n{prior_summary}")
+    for msg in messages:
+        role = msg.get("role", "unknown") if isinstance(msg, dict) else getattr(msg, "role", "unknown")
+        content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+        if isinstance(content, list):
+            chunks: list[str] = []
+            for block in content:
+                if not isinstance(block, dict):
+                    chunks.append(str(block))
+                    continue
+                btype = block.get("type", "")
+                if btype == "tool_use":
+                    chunks.append(f"[tool_call:{block.get('name', '')}({json.dumps(block.get('input', {}))[:200]})]")
+                elif btype == "tool_result":
+                    raw = str(block.get("content", ""))
+                    chunks.append(f"[tool_result:{raw[:500]}{'…' if len(raw) > 500 else ''}]")
+                else:
+                    chunks.append(block.get("text") or block.get("content") or "")
+            content = " ".join(c for c in chunks if c)
+        text = str(content).strip()
+        if text:
+            parts.append(f"{role.upper()}: {text}")
+    return "\n\n".join(parts)
+
+
+async def _one_summary_call(transport: Any, text: str, *, model: str) -> str:
+    """Run a single summarisation completion, returning ""? on any failure."""
+    try:
+        result = await transport.complete(
+            [Message.user(_SUMMARISATION_PROMPT_TEMPLATE.format(turns=text))],
+            model=model,
+            system=_SUMMARY_SYSTEM,
+            max_tokens=_SUMMARY_MAX_TOKENS,
+            temperature=0.0,
+            stream=False,
+        )
+        return (getattr(result, "content", "") or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        # Summarisation failing must never break the agent run — log and skip.
+        logger.warning("lauren_ai: summarisation call failed: %s", exc)
+        return ""
+
+
+async def _summarize_text(
+    transport: Any,
+    text: str,
+    *,
+    model: str,
+    max_input_chars: int,
+    _depth: int = 0,
+) -> str:
+    """Summarise *text*, **map-reducing** so no single call exceeds the window.
+
+    When *text* fits a single call (``len ≤ max_input_chars``, or the budget is
+    unknown) it is summarised directly.  Otherwise it is split into
+    window-sized chunks, each summarised (map), and the concatenated partials
+    summarised again (reduce) — recursing until a single call suffices.  This is
+    what lets auto-compaction compress a history several times the context
+    window without the compaction call itself overflowing.
+    """
+    text = text.strip()
+    if not text:
+        return ""
+    if max_input_chars <= 0 or len(text) <= max_input_chars or _depth >= _SUMMARY_MAP_REDUCE_MAX_DEPTH:
+        return await _one_summary_call(transport, text, model=model)
+    # Map: summarise each window-sized chunk.
+    partials: list[str] = []
+    for i in range(0, len(text), max_input_chars):
+        piece = await _one_summary_call(transport, text[i : i + max_input_chars], model=model)
+        if piece:
+            partials.append(piece)
+    if not partials:
+        return ""
+    # Reduce: summarise the concatenated partials (recurse until it fits).
+    return await _summarize_text(
+        transport,
+        "\n\n".join(partials),
+        model=model,
+        max_input_chars=max_input_chars,
+        _depth=_depth + 1,
+    )
 
 
 async def _summarize_memory(
@@ -94,62 +192,47 @@ async def _summarize_memory(
     *,
     model: str,
     keep_recent: int = 6,
-) -> None:
-    """Compress older conversation turns into a summary stored on *memory*.
+    max_input_tokens: int = 0,
+) -> bool:
+    """Compress older conversation turns into a rolling summary on *memory*.
 
-    The ``keep_recent`` most-recent non-system messages are preserved verbatim;
-    everything older is distilled into a single text block via a cheap LLM call.
-    The summary is injected into the system prompt by ``_build_system_prompt``
-    so it is always visible to the model and cannot be dropped by the sliding
-    window.
+    The ``keep_recent`` most-recent non-system messages (boundary-snapped so a
+    ``tool_use``/``tool_result`` pair is never split) are preserved verbatim;
+    everything older — *plus the existing summary* — is distilled into a dense
+    summary stored on ``memory`` and injected into the system prompt by
+    ``_build_system_prompt``.  The summarisation call itself is bounded by
+    ``max_input_tokens`` via map-reduce so it can never overflow the window.
 
     :param memory: The short-term memory buffer to compress.
     :param transport: The LLM transport used to generate the summary.
     :param model: Model identifier for the summarisation call.
-    :param keep_recent: Number of most-recent non-system messages to keep
-        verbatim.  Defaults to 6 (≈ 3 user/assistant pairs).
+    :param keep_recent: Number of most-recent non-system messages to keep.
+    :param max_input_tokens: Token budget bounding each summarisation call's
+        input (0 → unbounded single call).
+    :return: ``True`` when a summary was produced and applied.
+    :rtype: bool
     """
     to_compress = memory.messages_to_summarize(keep_recent)
     if not to_compress:
-        return
+        return False
 
-    # Format the turns into a readable transcript for the summarisation prompt.
-    transcript_parts: list[str] = []
-    for msg in to_compress:
-        role = msg.get("role", "unknown") if isinstance(msg, dict) else getattr(msg, "role", "unknown")
-        content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
-        if isinstance(content, list):
-            # Extract text portions from structured content blocks
-            texts = []
-            for block in content:
-                if isinstance(block, dict):
-                    texts.append(block.get("text") or block.get("content") or "")
-                else:
-                    texts.append(str(block))
-            content = " ".join(t for t in texts if t)
-        transcript_parts.append(f"{role.upper()}: {content}")
+    transcript = _format_turns_for_summary(to_compress, memory.summary)
+    max_input_chars = 0
+    if max_input_tokens > 0:
+        usable = max_input_tokens - _SUMMARY_MAX_TOKENS - 2_000  # leave room for prompt + output
+        max_input_chars = max(_SUMMARY_MIN_CHUNK_CHARS, int(usable * _SUMMARY_INPUT_CHARS_PER_TOKEN))
+    summary_text = await _summarize_text(transport, transcript, model=model, max_input_chars=max_input_chars)
+    if not summary_text:
+        return False
 
-    transcript = "\n\n".join(transcript_parts)
-    summary_prompt = _SUMMARISATION_PROMPT_TEMPLATE.format(turns=transcript)
-
-    try:
-        result = await transport.complete(
-            [Message.user(summary_prompt)],
-            model=model,
-            system="You are a conversation summariser. Be concise and factual.",
-            max_tokens=512,
-            temperature=0.0,
-            stream=False,
-        )
-        summary_text = result.content or ""
-    except Exception as exc:  # noqa: BLE001
-        # Summarisation failing must never break the agent run — log and skip.
-        logger.warning("lauren_ai: context-window summarisation failed: %s", exc)
-        return
-
-    if summary_text:
-        memory.trim_to_recent(keep_recent)
-        memory.set_summary(summary_text)
+    memory.trim_to_recent(keep_recent)
+    memory.set_summary(summary_text)
+    # Keep a durable journal (if any) in sync with the in-place buffer reset —
+    # mirrors the agenthicc compactor's journal_reset hook (PRD-129).
+    journal_reset = getattr(memory, "journal_reset", None)
+    if callable(journal_reset):
+        journal_reset()
+    return True
 
 
 # ── Pre-send context-window guard (PRD-133 D/E) ──────────────────────────────
@@ -255,6 +338,61 @@ async def _fit_to_context(
             model=model,
         )
     return work
+
+
+async def _maybe_compact(
+    memory: ShortTermMemory,
+    transport: Transport,
+    *,
+    model: str,
+    system: str | None,
+    tools: list[ToolSchema] | None,
+    config: AgentConfig,
+    keep_recent: int = 6,
+) -> bool:
+    """Proactively LLM-compact older turns when the live window fills up.
+
+    This is the **first** rung of the compaction ladder (PRD-135).  It fires at
+    ``summarize_at × memory.max_tokens`` — the live-window budget that
+    :meth:`ShortTermMemory.messages` would otherwise *lossily truncate* to — and
+    measures the **full buffer** (not ``messages()``, which is already trimmed)
+    with the *exact* ``count_tokens``, cheap-estimate-gated to avoid a round-trip
+    on small turns.  Because it runs before the request is assembled, older turns
+    are folded into a meaning-preserving rolling summary instead of having their
+    characters deleted by the hard guard.
+
+    The summariser's own call is sized to the model's window
+    (``usable_context_budget``) via map-reduce, so it can never overflow.
+
+    :return: ``True`` when a summarisation pass ran (caller rebuilds the system
+        prompt and surfaces a status notice).
+    :rtype: bool
+    """
+    if config.summarize_at is None:
+        return False
+    window = memory.max_tokens
+    if window <= 0:
+        return False
+    full = memory._messages
+    if not full:
+        return False
+    trigger = int(window * config.summarize_at)
+    # Cheap gate: _cheap_token_estimate *over*-counts, so being below the trigger
+    # is a safe skip.  Measures the full untrimmed buffer.
+    if _cheap_token_estimate(full, system, tools) < trigger:
+        return False
+    count = await transport.count_tokens(full, model=model, system=system, tools=tools)
+    if count < trigger:
+        return False
+    # The summariser LLM call may use the whole model window when it is known.
+    chunk_budget = config.usable_context_budget if config.usable_context_budget > 0 else window
+    return await _summarize_memory(
+        memory,
+        transport,
+        model=config.summary_model or model,
+        keep_recent=keep_recent,
+        max_input_tokens=chunk_budget,
+    )
 
 
 # Module-level cache for ``AgentRunner[X]`` parameterizations.  Hoisted out
@@ -691,19 +829,22 @@ class AgentRunnerBase(AgentRunner):
             for _turn in range(effective_config.max_turns):
                 ctx.turn = _turn
 
-                # ── Context-window summarisation (opt-in) ─────────────────
-                if _should_summarize(memory, effective_config):
-                    await _summarize_memory(
-                        memory=memory,
-                        transport=self._transport,
-                        model=effective_config.summary_model or model,
-                    )
-                    # Rebuild system prompt with new summary
+                # ── Compaction ladder rung 1: proactive LLM compaction ────
+                # Exact-count-triggered, meaning-preserving — runs *before* the
+                # hard guard would resort to lossy truncation (PRD-135).
+                if await _maybe_compact(
+                    memory,
+                    self._transport,
+                    model=model,
+                    system=system_prompt,
+                    tools=tool_schemas if tool_schemas else None,
+                    config=effective_config,
+                ):
                     system_prompt = _build_system_prompt(meta.system or effective_config.system_prompt, memory)
 
                 messages = memory.messages()
-                # Hard pre-send guard: never hand the provider a request that
-                # exceeds the model's usable context window (PRD-133 D/E).
+                # Hard pre-send guard (rungs 2-3): drop oldest → truncate → error,
+                # so the request never exceeds the model's window (PRD-133 D/E).
                 messages = await _fit_to_context(
                     self._transport,
                     messages,
@@ -1181,16 +1322,22 @@ class AgentRunnerBase(AgentRunner):
             for _turn in range(effective_config.max_turns):
                 ctx.turn = _turn
 
-                # ── Context-window summarisation (opt-in) ─────────────────
-                if _may_summarize and _should_summarize(memory, effective_config):
-                    await _summarize_memory(
-                        memory=memory,
-                        transport=self._transport,
-                        model=effective_config.summary_model or model,
-                    )
+                # ── Compaction ladder rung 1: proactive LLM compaction ────
+                # Exact-count-triggered, meaning-preserving — runs *before* the
+                # hard guard would resort to lossy truncation (PRD-135).  A
+                # status notice is surfaced to the caller so the user sees it.
+                if _may_summarize and await _maybe_compact(
+                    memory,
+                    self._transport,
+                    model=model,
+                    system=system_prompt,
+                    tools=_tool_schemas_arg,
+                    config=effective_config,
+                ):
                     system_prompt = _build_system_prompt(
                         meta_for_stream.system or effective_config.system_prompt, memory
                     )
+                    yield CompletionChunk(system_notice="⎋ Compacting conversation to fit the context window…")
 
                 # Heal any orphaned tool_use left by a prior interrupted turn
                 # before assembling the message list.  This persists the heal
@@ -1198,8 +1345,8 @@ class AgentRunnerBase(AgentRunner):
                 # build on a consistent history.
                 memory.ensure_valid()
                 messages = memory.messages()
-                # Hard pre-send guard: never hand the provider a request that
-                # exceeds the model's usable context window (PRD-133 D/E).
+                # Hard pre-send guard (rungs 2-3): drop oldest → truncate → error,
+                # so the request never exceeds the model's window (PRD-133 D/E).
                 messages = await _fit_to_context(
                     self._transport,
                     messages,
