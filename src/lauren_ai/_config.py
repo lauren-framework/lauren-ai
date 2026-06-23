@@ -75,16 +75,21 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
 }
 
 
-def context_window_for(model: str) -> int:
+def context_window_for(model: str, default: int = DEFAULT_CONTEXT_WINDOW) -> int:
     """Return the total context-window size (in tokens) for *model*.
 
     Matches the longest :data:`MODEL_CONTEXT_WINDOWS` key contained in the
-    lower-cased model id, so family prefixes cover point releases.  Falls back
-    to :data:`DEFAULT_CONTEXT_WINDOW` for unknown / proxied models.
+    lower-cased model id, so family prefixes cover point releases.  Returns
+    *default* for unknown / proxied models — pass ``default=0`` to let callers
+    distinguish "the registry knows this model" from "fell back" (e.g. so a
+    user-supplied catch-all can take over only for genuinely-unknown models).
 
     :param model: The model identifier, e.g. ``"claude-opus-4-8"``.
     :type model: str
-    :return: Context-window size in tokens.
+    :param default: Value returned when no registry key matches the model.
+        Defaults to :data:`DEFAULT_CONTEXT_WINDOW`.
+    :type default: int
+    :return: Context-window size in tokens, or *default* when unknown.
     :rtype: int
     """
     needle = model.lower()
@@ -92,7 +97,7 @@ def context_window_for(model: str) -> int:
     for key in MODEL_CONTEXT_WINDOWS:
         if key in needle and len(key) > len(best_key):
             best_key = key
-    return MODEL_CONTEXT_WINDOWS[best_key] if best_key else DEFAULT_CONTEXT_WINDOW
+    return MODEL_CONTEXT_WINDOWS[best_key] if best_key else default
 
 
 # Minimum head-room reserved on top of the requested completion size to absorb

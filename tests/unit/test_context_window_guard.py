@@ -64,6 +64,12 @@ class TestContextWindowRegistry:
         assert context_window_for("deepseek-v4-flash") == DEFAULT_CONTEXT_WINDOW
         assert context_window_for("some-random-model") == DEFAULT_CONTEXT_WINDOW
 
+    def test_custom_default_signals_unknown(self) -> None:
+        # PRD-136: callers pass default=0 to tell "registry knew it" from "fell
+        # back", so a user catch-all only applies to genuinely-unknown models.
+        assert context_window_for("some-random-model", default=0) == 0
+        assert context_window_for("gpt-4o", default=0) == 128_000  # known → real value
+
     def test_case_insensitive(self) -> None:
         assert context_window_for("Claude-Opus-4-8") == 1_000_000
 
