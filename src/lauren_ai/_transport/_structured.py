@@ -68,6 +68,16 @@ class StructuredLLM(Generic[T]):
         :rtype: T
         """
         from lauren_ai._output_parsers._base import OutputParserError
+
+        native_parser = getattr(self._llm, "structured_complete", None)
+        if native_parser is not None:
+            try:
+                return await native_parser(messages, self._model_cls)
+            except NotImplementedError:
+                # The portable synthetic-tool fallback remains available for
+                # OpenAI-compatible gateways and older SDK versions.
+                pass
+
         from lauren_ai._transport import Completion, ToolChoice, ToolSchema
 
         model_name = self._model_cls.__name__

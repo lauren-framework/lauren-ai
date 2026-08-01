@@ -29,7 +29,7 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Literal
 
 from lauren_ai._config import LLMConfig
@@ -39,6 +39,7 @@ from lauren_ai._transport import (
     CompletionChunk,
     Embedding,
     Message,
+    RequestOptions,
     TokenUsage,
     ToolCall,
     ToolCallDelta,
@@ -89,13 +90,31 @@ def _content_block_to_openai(block: Any) -> dict[str, Any]:
     :return: OpenAI-compatible content dict.
     :rtype: dict[str, Any]
     """
+    if not isinstance(block, (dict,)) and not hasattr(block, "type"):
+        from lauren_ai._transport._multimodal import (  # noqa: PLC0415
+            AudioContent,
+            DocumentContent,
+            ImageContent,
+            UnsupportedContentError,
+        )
+
+        if isinstance(block, (ImageContent, AudioContent)):
+            return block.to_openai_block()
+        if isinstance(block, DocumentContent):
+            raise UnsupportedContentError("OpenAI Chat Completions does not support DocumentContent")
     block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", "")
     if block_type == "text":
         text = block.get("text", "") if isinstance(block, dict) else (block.text or "")
         return {"type": "text", "text": text}
     if block_type == "image":
         source = block.get("source", {}) if isinstance(block, dict) else (block.source or {})
+        if not isinstance(source, dict) and hasattr(source, "to_openai_block"):
+            return source.to_openai_block()
         return {"type": "image_url", "image_url": source}
+    if block_type == "audio":
+        source = block.get("audio") if isinstance(block, dict) else getattr(block, "audio", None)
+        if source is not None and hasattr(source, "to_openai_block"):
+            return source.to_openai_block()
     if block_type == "tool_result":
         # Tool results are handled as separate messages in OpenAI's format.
         content = block.get("content", "") if isinstance(block, dict) else block.content
@@ -229,10 +248,24 @@ def _tool_schema_to_openai(schema: Any) -> dict[str, Any]:
         name = schema.get("name", "")
         description = schema.get("description", "")
         input_schema = schema.get("input_schema", {})
+        kind = schema.get("kind", "function")
+        provider_options = schema.get("provider_options", {})
     else:
         name = schema.name
         description = schema.description
         input_schema = schema.input_schema
+        kind = schema.kind
+        provider_options = schema.provider_options
+    if kind != "function":
+        result = dict(provider_options)
+        result.setdefault("type", kind)
+        if name:
+            result.setdefault("name", name)
+        if description:
+            result.setdefault("description", description)
+        if input_schema:
+            result.setdefault("parameters", input_schema)
+        return result
     return {
         "type": "function",
         "function": {
@@ -308,7 +341,9 @@ class OpenAITransport:
         self,
         config: LLMConfig,
         *,
-        reasoning_effort: Literal["low", "medium", "high"] | None = None,
+        reasoning_effort: str | None = None,
+        client: Any | None = None,
+        client_factory: Callable[[], Any] | None = None,
     ) -> None:
         """Initialise the transport.  The SDK client is created lazily.
 
@@ -319,7 +354,9 @@ class OpenAITransport:
         """
         self._config = config
         self._reasoning_effort = reasoning_effort
-        self._client: Any = None
+        self._client: Any = client
+        self._client_factory = client_factory
+        self._owns_client = client is None and client_factory is None
 
     def _get_client(self) -> Any:
         """Return the cached async ``openai.AsyncOpenAI`` client.
@@ -328,17 +365,44 @@ class OpenAITransport:
         :raises ImportError: If ``openai`` is not installed.
         """
         if self._client is None:
+            if self._client_factory is not None:
+                self._client = self._client_factory()
+                return self._client
             openai = _require_openai()
-            kwargs: dict[str, Any] = {
-                "max_retries": 0,
-                "timeout": self._config.timeout,
-            }
+            kwargs: dict[str, Any] = dict(self._config.client_options or {})
+            kwargs.setdefault("max_retries", 0)
+            kwargs.setdefault("timeout", self._config.timeout)
             if self._config.api_key is not None:
-                kwargs["api_key"] = self._config.api_key
+                kwargs.setdefault("api_key", self._config.api_key)
             if self._config.base_url is not None:
-                kwargs["base_url"] = self._config.base_url
+                kwargs.setdefault("base_url", self._config.base_url)
+            if self._config.default_headers is not None:
+                kwargs.setdefault("default_headers", dict(self._config.default_headers))
+            if self._config.default_query is not None:
+                kwargs.setdefault("default_query", dict(self._config.default_query))
             self._client = openai.AsyncOpenAI(**kwargs)
         return self._client
+
+    def get_client(self) -> Any:
+        """Return the underlying async client, creating it lazily."""
+
+        return self._get_client()
+
+    async def close(self) -> None:
+        """Close a Lauren-owned async client.
+
+        Caller-supplied clients and factory-produced clients are not closed;
+        their lifecycle remains with the caller.
+        """
+
+        if self._client is None or not self._owns_client:
+            return
+        close = getattr(self._client, "close", None)
+        if close is not None:
+            result = close()
+            if isinstance(result, Awaitable):
+                await result
+        self._client = None
 
     def _classify_exception(self, exc: Exception) -> TransportError | None:
         """Classify an OpenAI SDK exception into a transport error.
@@ -406,6 +470,9 @@ class OpenAITransport:
         temperature: float,
         stop_sequences: list[str] | None,
         stream: bool,
+        top_p: float | None = None,
+        max_completion_tokens: int | None = None,
+        request_options: RequestOptions | None = None,
     ) -> dict[str, Any]:
         """Build the keyword arguments dict for the OpenAI chat completions API.
 
@@ -423,9 +490,12 @@ class OpenAITransport:
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages_raw,
-            "max_tokens": max_tokens,
             "stream": stream,
         }
+        if max_completion_tokens is not None:
+            kwargs["max_completion_tokens"] = max_completion_tokens
+        else:
+            kwargs["max_tokens"] = max_tokens
         if stream:
             # Request usage in the final streaming chunk so token counts are
             # available to callers without a separate non-streaming call.
@@ -434,18 +504,38 @@ class OpenAITransport:
         is_reasoning_model = any(model.startswith(m) for m in _NO_TEMPERATURE_MODELS)
         if not is_reasoning_model:
             kwargs["temperature"] = temperature
-        else:
-            # reasoning_effort for o1/o3.
-            effort = self._reasoning_effort
-            if effort is not None:
-                kwargs["reasoning_effort"] = effort
+        effort = self._reasoning_effort
+        if effort is not None:
+            kwargs["reasoning_effort"] = effort
+        if top_p is not None:
+            kwargs["top_p"] = top_p
 
         if tools:
             kwargs["tools"] = [_tool_schema_to_openai(t) for t in tools]
         if tool_choice is not None and tools:
             kwargs["tool_choice"] = _tool_choice_to_openai(tool_choice)
-        if stop_sequences:
+        if stop_sequences is not None:
             kwargs["stop"] = stop_sequences
+        if request_options is not None:
+            provider_options = dict(request_options.provider or {})
+            for key, value in provider_options.items():
+                if key in kwargs:
+                    raise ValueError(f"Duplicate OpenAI request option {key!r}")
+                if request_options.extra_body and key in request_options.extra_body:
+                    raise ValueError(f"Duplicate OpenAI request option {key!r} in provider and extra_body")
+                kwargs[key] = value
+            if request_options.extra_headers:
+                kwargs["extra_headers"] = dict(request_options.extra_headers)
+            if request_options.extra_query:
+                kwargs["extra_query"] = dict(request_options.extra_query)
+            if request_options.extra_body:
+                duplicate_keys = set(request_options.extra_body).intersection(kwargs)
+                if duplicate_keys:
+                    names = ", ".join(sorted(duplicate_keys))
+                    raise ValueError(f"Duplicate OpenAI request option(s) in extra_body: {names}")
+                kwargs["extra_body"] = dict(request_options.extra_body)
+            if request_options.timeout is not None:
+                kwargs["timeout"] = request_options.timeout
         return kwargs
 
     async def complete(
@@ -462,6 +552,9 @@ class OpenAITransport:
         stream: bool = False,
         thinking: bool = False,
         thinking_budget_tokens: int = 8000,
+        top_p: float | None = None,
+        max_completion_tokens: int | None = None,
+        request_options: RequestOptions | None = None,
     ) -> Completion | AsyncIterator[CompletionChunk]:
         """Send messages to OpenAI and return the completion.
 
@@ -503,6 +596,7 @@ class OpenAITransport:
         for msg in messages:
             openai_messages.extend(_message_to_openai(msg))
 
+        effective_options = (self._config.request_options or RequestOptions()).merged(request_options)
         call_kwargs = self._build_call_kwargs(
             openai_messages,
             model=model,
@@ -512,12 +606,27 @@ class OpenAITransport:
             temperature=temperature,
             stop_sequences=stop_sequences,
             stream=stream,
+            top_p=top_p,
+            max_completion_tokens=max_completion_tokens,
+            request_options=effective_options,
         )
 
         if stream:
-            return self._stream(client, call_kwargs, model=model)
+            return self._stream(
+                client,
+                call_kwargs,
+                model=model,
+                include_raw_response=effective_options.include_raw_response,
+            )
         else:
-            return await self._complete_sync(client, call_kwargs, model=model)
+            retries = effective_options.max_retries
+            return await self._complete_sync(
+                client,
+                call_kwargs,
+                model=model,
+                max_retries=retries,
+                include_raw_response=effective_options.include_raw_response,
+            )
 
     async def _complete_sync(
         self,
@@ -525,6 +634,8 @@ class OpenAITransport:
         call_kwargs: dict[str, Any],
         *,
         model: str,
+        max_retries: int | None = None,
+        include_raw_response: bool = False,
     ) -> Completion:
         """Non-streaming completion with retry.
 
@@ -534,13 +645,17 @@ class OpenAITransport:
         :return: :class:`~lauren_ai._transport.Completion`.
         :rtype: Completion
         """
-        max_retries = max(0, self._config.max_retries)
+        max_retries = max(0, self._config.max_retries if max_retries is None else max_retries)
         last_exc: Exception | None = None
 
         for attempt in range(max_retries + 1):
             try:
                 response = await client.chat.completions.create(**call_kwargs)
-                return self._response_to_completion(response, model=model)
+                return self._response_to_completion(
+                    response,
+                    model=model,
+                    include_raw_response=include_raw_response,
+                )
             except Exception as exc:  # noqa: BLE001
                 classified = self._classify_exception(exc)
                 if classified is not None:
@@ -556,7 +671,13 @@ class OpenAITransport:
             raise last_exc
         raise TransportError("Unexpected retry loop exit", provider="openai")
 
-    def _response_to_completion(self, response: Any, *, model: str) -> Completion:
+    def _response_to_completion(
+        self,
+        response: Any,
+        *,
+        model: str,
+        include_raw_response: bool = False,
+    ) -> Completion:
         """Convert an OpenAI chat completion response to a
         :class:`~lauren_ai._transport.Completion`.
 
@@ -566,9 +687,16 @@ class OpenAITransport:
         :rtype: Completion
         """
         usage_obj = getattr(response, "usage", None)
+        prompt_details = getattr(usage_obj, "prompt_tokens_details", None) if usage_obj else None
+        completion_details = getattr(usage_obj, "completion_tokens_details", None) if usage_obj else None
         usage = TokenUsage(
             input_tokens=getattr(usage_obj, "prompt_tokens", 0) if usage_obj else 0,
             output_tokens=getattr(usage_obj, "completion_tokens", 0) if usage_obj else 0,
+            cache_read_tokens=getattr(prompt_details, "cached_tokens", 0) if prompt_details else 0,
+            reasoning_tokens=getattr(completion_details, "reasoning_tokens", 0) if completion_details else 0,
+            audio_input_tokens=getattr(prompt_details, "audio_tokens", 0) if prompt_details else 0,
+            audio_output_tokens=getattr(completion_details, "audio_tokens", 0) if completion_details else 0,
+            provider_metadata={"estimated": usage_obj is None} if usage_obj is not None else {"estimated": True},
         )
 
         choices = getattr(response, "choices", [])
@@ -580,6 +708,10 @@ class OpenAITransport:
                 tool_calls=[],
                 stop_reason="end_turn",
                 usage=usage,
+                provider="openai",
+                request_id=getattr(response, "id", None),
+                provider_metadata=self._response_metadata(response),
+                raw_response=response if include_raw_response else None,
             )
 
         choice = choices[0]
@@ -617,7 +749,22 @@ class OpenAITransport:
             tool_calls=tool_calls,
             stop_reason=stop_reason,
             usage=usage,
+            provider="openai",
+            request_id=getattr(response, "id", None),
+            provider_metadata=self._response_metadata(response),
+            raw_response=response if include_raw_response else None,
         )
+
+    @staticmethod
+    def _response_metadata(response: Any) -> dict[str, Any]:
+        """Return safe scalar metadata from an OpenAI response."""
+
+        metadata: dict[str, Any] = {}
+        for name in ("model", "system_fingerprint", "service_tier"):
+            value = getattr(response, name, None)
+            if value is not None:
+                metadata[name] = value
+        return metadata
 
     async def _stream(
         self,
@@ -625,6 +772,7 @@ class OpenAITransport:
         call_kwargs: dict[str, Any],
         *,
         model: str,
+        include_raw_response: bool = False,
     ) -> AsyncIterator[CompletionChunk]:
         """Perform a streaming completion and yield
         :class:`~lauren_ai._transport.CompletionChunk` objects.
@@ -650,7 +798,11 @@ class OpenAITransport:
                             input_tokens=getattr(usage_obj, "prompt_tokens", 0),
                             output_tokens=getattr(usage_obj, "completion_tokens", 0),
                         )
-                        yield CompletionChunk(usage=usage)
+                        yield CompletionChunk(
+                            usage=usage,
+                            provider_metadata={"provider": "openai"},
+                            raw_event=chunk if include_raw_response else None,
+                        )
                         continue
 
                     if not choices:
@@ -664,7 +816,11 @@ class OpenAITransport:
                         # Text delta.
                         content = getattr(delta, "content", None)
                         if content:
-                            yield CompletionChunk(delta=content)
+                            yield CompletionChunk(
+                                delta=content,
+                                provider_metadata={"provider": "openai"},
+                                raw_event=chunk if include_raw_response else None,
+                            )
 
                         # Tool call deltas.
                         raw_tc_deltas = getattr(delta, "tool_calls", None) or []
@@ -806,6 +962,43 @@ class OpenAITransport:
             if classified is not None:
                 raise classified from exc
             raise
+
+    async def structured_complete(
+        self,
+        messages: list[Message],
+        *,
+        model: str,
+        model_cls: type[Any],
+    ) -> Any:
+        """Use Chat Completions native Pydantic parsing when available."""
+
+        client = self._get_client()
+        parse = getattr(getattr(client, "chat", None), "completions", None)
+        parse = getattr(parse, "parse", None)
+        if parse is None:
+            raise NotImplementedError("The installed OpenAI SDK does not expose chat.completions.parse")
+
+        openai_messages: list[dict[str, Any]] = []
+        for message in messages:
+            openai_messages.extend(_message_to_openai(message))
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": openai_messages,
+            "max_tokens": self._config.max_tokens,
+            "response_format": model_cls,
+        }
+        if not any(model.startswith(prefix) for prefix in _NO_TEMPERATURE_MODELS):
+            kwargs["temperature"] = self._config.temperature
+        result = await parse(**kwargs)
+        choices = getattr(result, "choices", [])
+        if not choices:
+            raise ValueError("OpenAI structured response contained no choices")
+        parsed_message = getattr(choices[0], "message", None)
+        parsed = getattr(parsed_message, "parsed", None)
+        if parsed is None:
+            refusal = getattr(parsed_message, "refusal", None)
+            raise ValueError(f"OpenAI structured response was not parsed: {refusal or 'no parsed value'}")
+        return parsed
 
     async def count_tokens(
         self,

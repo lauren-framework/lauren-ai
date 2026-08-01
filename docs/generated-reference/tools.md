@@ -5,7 +5,7 @@ The `@tool()` decorator and runtime context.
 ### `tool`
 
 ```python
-def tool(args: Any = (), name: str | None = None, description: str | None = None, requires_confirmation: bool = False, pre_hook: Callable[..., Any] | None = None, post_hook: Callable[..., Any] | None = None, error_hook: Callable[..., Any] | None = None, cache_ttl: int | None = None, cache_key_fn: Callable[..., Any] | None = None) -> Callable[[_T], _T]
+def tool(args: Any = (), name: str | None = None, description: str | None = None, requires_confirmation: bool = False, confirmation_policy: Callable[..., Any] | None = None, confirmation_policy_error_default: bool = True, pre_hook: Callable[..., Any] | None = None, post_hook: Callable[..., Any] | None = None, error_hook: Callable[..., Any] | None = None, cache_ttl: int | None = None, cache_key_fn: Callable[..., Any] | None = None, label: str = '', initial_state: Callable[[], dict[str, object]] | None = None, initial_tool_state: Callable[[], dict[str, object]] | None = None, dependency_factory: Callable[[], dict[str, object]] | None = None) -> Callable[[_T], _T]
 ```
 
 Decorator that marks a function or class as a tool for AI agents.
@@ -70,14 +70,31 @@ a `CacheBackend` in the executor. |
 ### `ToolContext`
 
 ```python
-class ToolContext(agent_context: Any, tool_use_id: str, turn: int, request: Any | None = None, execution_context: Any | None = None, metadata: dict[str, Any] = dict(), state: dict[str, Any] = dict())
+class ToolContext(agent_context: Any, tool_use_id: str, turn: int, metadata: dict[str, object] = dict(), state: dict[str, object] = dict(), tool_state: dict[str, object] = dict(), dependencies: dict[str, object] = dict(), extras: dict[str, object] = dict(), tool_name: str = '')
 ```
 
 Context injected into a tool function when a `ctx: ToolContext` param is declared.
 
-Carries the owning agent context, the current turn number, a mutable
-state bag for per-call data, and the tool's static metadata (populated
-from `@set_metadata` decorators applied to the tool at definition time).
+Carries the owning agent context, the current turn number, per-call and
+per-run state bags, resolved singleton dependencies, per-call extras, and
+static metadata from `@set_metadata` decorators.
+
+State lifetime summary
+----------------------
+* **state** — fresh every call; seeded from `ToolMeta.initial_state()`.
+  Use for within-call audit trails and hook communication.
+* **tool_state** — same dict object for every call to this tool within one
+  `run()` / `run_stream()` invocation; seeded once from
+  `ToolMeta.initial_tool_state()`.  Use to accumulate memory across turns.
+* **dependencies** — resolved once at run start by
+  `ToolMeta.dependency_factory()`; same object for every call.
+  Use for expensive singletons (HTTP client, DB pool).
+* **extras** — injected fresh per call by the runner.
+  Use for per-call runner-level context (workspace root, user ID).
+
+`request` and `execution_context` were removed in this release.
+Access them via `ctx.agent_context.request` and
+`ctx.agent_context.execution_context` respectively.
 
 **Parameters:**
 
@@ -89,12 +106,19 @@ instance). |
 | `tool_use_id` | `str` | The provider-assigned tool use identifier for this
 specific invocation. |
 | `turn` | `int` | Which agentic-loop iteration (0-based) triggered this call. |
-| `request` | `Any | None` | The originating HTTP `Request`, if the agent was invoked
-from a web handler.  `None` otherwise. |
-| `metadata` | `dict[str, Any]` | Static metadata attached to this tool via
+| `metadata` | `dict[str, object]` | Static metadata attached to this tool via
 `@set_metadata(key, value)` at decoration time.  Readable via
 `get_metadata()`. |
-| `state` | `dict[str, Any]` | Mutable per-call state bag for tool-local storage. |
+| `state` | `dict[str, object]` | Mutable per-call state bag.  Reset before every invocation
+and pre-seeded from `ToolMeta.initial_state()` when that factory is set. |
+| `tool_state` | `dict[str, object]` | Mutable per-run state bag shared across **all** calls to
+this tool within one `run()` invocation.  Pre-seeded once from
+`ToolMeta.initial_tool_state()` at run start. |
+| `dependencies` | `dict[str, object]` | Singleton dependency dict resolved once per run by
+`ToolMeta.dependency_factory()`.  Same object for every call.
+Treat as read-only; mutations are visible to subsequent calls. |
+| `extras` | `dict[str, object]` | Per-call context injected by the runner each invocation.
+Treat as read-only; the runner re-populates it on every call. |
 
 #### `ToolContext.get_metadata`
 

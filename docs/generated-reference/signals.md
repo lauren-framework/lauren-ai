@@ -56,11 +56,13 @@ unchanged.
 def emit(self, event: Any) -> None
 ```
 
-Emit *event* to all registered handlers for its type.
+Emit *event* to all registered handlers for its type, then to
+wildcard handlers registered via `on_any()`.
 
 Handlers are called concurrently via `asyncio.gather()`.
-Individual handler exceptions are caught, printed to `stderr`,
-and suppressed.
+Typed handlers precede wildcard handlers in argument order so
+invocation *start* order is deterministic.  Individual handler
+exceptions are caught, printed to `stderr`, and suppressed.
 
 **Parameters:**
 
@@ -85,6 +87,57 @@ A no-op if *handler* is not registered for *event_type*.
 | `event_type` | `type` | The event type the handler was registered for. |
 | `handler` | `Callable[..., Awaitable[None]]` | The handler to unregister. |
 
+#### `SignalBus.on_any`
+
+```python
+def on_any(self, handler: Callable[..., Awaitable[None]]) -> Callable[..., Awaitable[None]]
+```
+
+Register *handler* for **every** emitted event, regardless of type.
+
+Usable directly or as a bare decorator::
+
+    @bus.on_any
+    async def audit(event: Any) -> None:
+        log.info("signal %s", type(event).__name__)
+
+Wildcard handlers are called via the same `asyncio.gather()` as
+typed handlers for the event, **after** them in argument order, so
+invocation start order is typed → wildcard.  Returns *handler*
+unchanged.
+
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `handler` | `Callable[..., Awaitable[None]]` | Async callable accepting a single event argument. |
+
+**Returns:** `Callable` — *handler* unchanged (enables use as a decorator).
+
+#### `SignalBus.off_any`
+
+```python
+def off_any(self, handler: Callable[..., Awaitable[None]]) -> None
+```
+
+Unregister a wildcard handler.  No-op when not registered.
+
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `handler` | `Callable[..., Awaitable[None]]` | The handler to remove. |
+
+#### `SignalBus.any_handler_count`
+
+```python
+def any_handler_count(self) -> int
+```
+
+Return the number of registered wildcard handlers.
+
+**Returns:** `int` — Wildcard handler count.
+
 #### `SignalBus.clear`
 
 ```python
@@ -93,13 +146,17 @@ def clear(self, event_type: type | None = None) -> None
 
 Remove all handlers, optionally scoped to a specific *event_type*.
 
+When *event_type* is `None`, both typed and wildcard handlers are
+cleared.  When a type is provided, only handlers for that type are
+removed (wildcard handlers are untouched).
+
 **Parameters:**
 
 | Name | Type | Description |
 |---|---|---|
 | `event_type` | `type | None` | When provided, only handlers for this event type
-are removed.  When `None`, all handlers across all types are
-cleared. |
+are removed.  When `None`, all handlers across all types and
+all wildcard handlers are cleared. |
 
 #### `SignalBus.handler_count`
 
@@ -108,6 +165,8 @@ def handler_count(self, event_type: type) -> int
 ```
 
 Return the number of handlers registered for *event_type*.
+
+Does **not** include wildcard handlers.  See `any_handler_count()`.
 
 **Parameters:**
 

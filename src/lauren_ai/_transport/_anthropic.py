@@ -20,7 +20,7 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from lauren_ai._config import LLMConfig
@@ -31,6 +31,7 @@ from lauren_ai._transport import (
     Embedding,
     Message,
     RedactedThinkingBlock,
+    RequestOptions,
     ThinkingBlock,
     TokenUsage,
     ToolCall,
@@ -83,6 +84,18 @@ def _content_block_to_anthropic(block: Any) -> dict[str, Any]:
     :return: Anthropic-compatible dict.
     :rtype: dict[str, Any]
     """
+    if not isinstance(block, (dict,)) and not hasattr(block, "type"):
+        from lauren_ai._transport._multimodal import (  # noqa: PLC0415
+            AudioContent,
+            DocumentContent,
+            ImageContent,
+            UnsupportedContentError,
+        )
+
+        if isinstance(block, (ImageContent, DocumentContent)):
+            return block.to_anthropic_block()
+        if isinstance(block, AudioContent):
+            raise UnsupportedContentError("Anthropic Messages does not support AudioContent")
     block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", "")
     if block_type == "text":
         text = block.get("text", "") if isinstance(block, dict) else (block.text or "")
@@ -120,7 +133,32 @@ def _content_block_to_anthropic(block: Any) -> dict[str, Any]:
         return result
     if block_type == "image":
         source = block.get("source", {}) if isinstance(block, dict) else (block.source or {})
+        if not isinstance(source, dict) and hasattr(source, "to_anthropic_block"):
+            return source.to_anthropic_block()
         return {"type": "image", "source": source}
+    if block_type == "document":
+        source = block.get("source", {}) if isinstance(block, dict) else getattr(block, "source", {})
+        if hasattr(source, "to_anthropic_block"):
+            return source.to_anthropic_block()
+        return {"type": "document", "source": source}
+    if block_type == "thinking":
+        # Extended-thinking block: thinking text + signature must be sent back
+        # verbatim (Anthropic verifies the signature against the exact text).
+        if isinstance(block, dict):
+            return {
+                "type": "thinking",
+                "thinking": block.get("thinking", ""),
+                "signature": block.get("signature", ""),
+            }
+        return {
+            "type": "thinking",
+            "thinking": getattr(block, "thinking", ""),
+            "signature": getattr(block, "signature", ""),
+        }
+    if block_type == "redacted_thinking":
+        if isinstance(block, dict):
+            return {"type": "redacted_thinking", "data": block.get("data", "")}
+        return {"type": "redacted_thinking", "data": getattr(block, "data", "")}
     raise ValueError(f"Unknown ContentBlock type: {block_type!r}")
 
 
@@ -209,10 +247,24 @@ def _tool_schema_to_anthropic(
         name = schema.get("name", "")
         description = schema.get("description", "")
         input_schema = schema.get("input_schema", {})
+        kind = schema.get("kind", "function")
+        provider_options = schema.get("provider_options", {})
     else:
         name = schema.name
         description = schema.description
         input_schema = schema.input_schema
+        kind = schema.kind
+        provider_options = schema.provider_options
+    if kind != "function":
+        provider_result = dict(provider_options)
+        provider_result.setdefault("type", kind)
+        if name:
+            provider_result.setdefault("name", name)
+        if description:
+            provider_result.setdefault("description", description)
+        if input_schema:
+            provider_result.setdefault("input_schema", input_schema)
+        return provider_result
     result: dict[str, Any] = {
         "name": name,
         "description": description,
@@ -343,14 +395,22 @@ class AnthropicTransport:
     :type config: LLMConfig
     """
 
-    def __init__(self, config: LLMConfig) -> None:
+    def __init__(
+        self,
+        config: LLMConfig,
+        *,
+        client: Any | None = None,
+        client_factory: Callable[[], Any] | None = None,
+    ) -> None:
         """Initialise the transport.  The SDK client is created lazily.
 
         :param config: LLM configuration.
         :type config: LLMConfig
         """
         self._config = config
-        self._client: Any = None  # created lazily in _get_client()
+        self._client: Any = client  # created lazily in _get_client()
+        self._client_factory = client_factory
+        self._owns_client = client is None and client_factory is None
 
     def _get_client(self) -> Any:
         """Return the cached async ``anthropic.AsyncAnthropic`` client.
@@ -361,17 +421,40 @@ class AnthropicTransport:
         :raises ImportError: If ``anthropic`` is not installed.
         """
         if self._client is None:
+            if self._client_factory is not None:
+                self._client = self._client_factory()
+                return self._client
             anthropic = _require_anthropic()
-            kwargs: dict[str, Any] = {
-                "max_retries": 0,  # We handle retries ourselves.
-                "timeout": self._config.timeout,
-            }
+            kwargs: dict[str, Any] = dict(self._config.client_options or {})
+            kwargs.setdefault("max_retries", 0)  # We handle retries ourselves.
+            kwargs.setdefault("timeout", self._config.timeout)
             if self._config.api_key is not None:
-                kwargs["api_key"] = self._config.api_key
+                kwargs.setdefault("api_key", self._config.api_key)
             if self._config.base_url is not None:
-                kwargs["base_url"] = self._config.base_url
+                kwargs.setdefault("base_url", self._config.base_url)
+            if self._config.default_headers is not None:
+                kwargs.setdefault("default_headers", dict(self._config.default_headers))
+            if self._config.default_query is not None:
+                kwargs.setdefault("default_query", dict(self._config.default_query))
             self._client = anthropic.AsyncAnthropic(**kwargs)
         return self._client
+
+    def get_client(self) -> Any:
+        """Return the underlying async client, creating it lazily."""
+
+        return self._get_client()
+
+    async def close(self) -> None:
+        """Close a Lauren-owned async client, if it has been created."""
+
+        if self._client is None or not self._owns_client:
+            return
+        close = getattr(self._client, "close", None)
+        if close is not None:
+            result = close()
+            if isinstance(result, Awaitable):
+                await result
+        self._client = None
 
     def _build_system(self, system: str | None) -> Any:
         """Build the system prompt parameter for the Anthropic API.
@@ -548,6 +631,9 @@ class AnthropicTransport:
         stream: bool = False,
         thinking: bool = False,
         thinking_budget_tokens: int = 8000,
+        top_p: float | None = None,
+        max_completion_tokens: int | None = None,
+        request_options: RequestOptions | None = None,
     ) -> Completion | AsyncIterator[CompletionChunk]:
         """Send messages to Anthropic and return the completion.
 
@@ -588,31 +674,68 @@ class AnthropicTransport:
         built_tools = self._build_tools(tools)
 
         # Build the kwargs dict to pass to the API.
+        effective_options = (self._config.request_options or RequestOptions()).merged(request_options)
         call_kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
             "messages": anthropic_messages,
         }
+        if max_completion_tokens is not None:
+            call_kwargs["max_tokens"] = max_completion_tokens
         if built_system is not None:
             call_kwargs["system"] = built_system
         if built_tools is not None:
             call_kwargs["tools"] = built_tools
         if tool_choice is not None:
             call_kwargs["tool_choice"] = _tool_choice_to_anthropic(tool_choice)
-        if stop_sequences:
+        if stop_sequences is not None:
             call_kwargs["stop_sequences"] = stop_sequences
+        provider_options = dict(effective_options.provider or {})
+        if thinking and "thinking" in provider_options:
+            raise ValueError("Duplicate Anthropic request option 'thinking'")
         if thinking:
             call_kwargs["thinking"] = {
                 "type": "enabled",
                 "budget_tokens": thinking_budget_tokens,
             }
+        elif "thinking" in provider_options:
+            call_kwargs["thinking"] = provider_options.pop("thinking")
         else:
             call_kwargs["temperature"] = temperature
 
+        for key, value in provider_options.items():
+            if key in call_kwargs and call_kwargs[key] != value:
+                raise ValueError(f"Duplicate Anthropic request option {key!r}")
+            if effective_options.extra_body and key in effective_options.extra_body:
+                raise ValueError(f"Duplicate Anthropic request option {key!r} in provider and extra_body")
+            call_kwargs[key] = value
+        if top_p is not None:
+            if "top_p" in call_kwargs:
+                raise ValueError("Duplicate Anthropic request option 'top_p'")
+            call_kwargs["top_p"] = top_p
+        if effective_options.extra_headers:
+            call_kwargs["extra_headers"] = dict(effective_options.extra_headers)
+        if effective_options.extra_query:
+            call_kwargs["extra_query"] = dict(effective_options.extra_query)
+        if effective_options.extra_body:
+            duplicate_keys = set(effective_options.extra_body).intersection(call_kwargs)
+            if duplicate_keys:
+                names = ", ".join(sorted(duplicate_keys))
+                raise ValueError(f"Duplicate Anthropic request option(s) in extra_body: {names}")
+            call_kwargs["extra_body"] = dict(effective_options.extra_body)
+        if effective_options.timeout is not None:
+            call_kwargs["timeout"] = effective_options.timeout
+
         if stream:
-            return self._stream(client, call_kwargs)
+            return self._stream(client, call_kwargs, include_raw_response=effective_options.include_raw_response)
         else:
-            return await self._complete_sync(client, call_kwargs, model=model)
+            return await self._complete_sync(
+                client,
+                call_kwargs,
+                model=model,
+                max_retries=effective_options.max_retries,
+                include_raw_response=effective_options.include_raw_response,
+            )
 
     async def _complete_sync(
         self,
@@ -620,6 +743,8 @@ class AnthropicTransport:
         call_kwargs: dict[str, Any],
         *,
         model: str,
+        max_retries: int | None = None,
+        include_raw_response: bool = False,
     ) -> Completion:
         """Non-streaming completion with retry.
 
@@ -629,13 +754,17 @@ class AnthropicTransport:
         :return: A :class:`~lauren_ai._transport.Completion`.
         :rtype: Completion
         """
-        max_retries = max(0, self._config.max_retries)
+        max_retries = max(0, self._config.max_retries if max_retries is None else max_retries)
         last_exc: Exception | None = None
 
         for attempt in range(max_retries + 1):
             try:
                 response = await client.messages.create(**call_kwargs)
-                return self._response_to_completion(response, model=model)
+                return self._response_to_completion(
+                    response,
+                    model=model,
+                    include_raw_response=include_raw_response,
+                )
             except Exception as exc:  # noqa: BLE001
                 classified = self._classify_exception(exc)
                 if classified is not None:
@@ -651,7 +780,13 @@ class AnthropicTransport:
             raise last_exc
         raise TransportError("Unexpected retry loop exit", provider="anthropic")
 
-    def _response_to_completion(self, response: Any, *, model: str) -> Completion:
+    def _response_to_completion(
+        self,
+        response: Any,
+        *,
+        model: str,
+        include_raw_response: bool = False,
+    ) -> Completion:
         """Convert an Anthropic SDK ``Message`` response to a
         :class:`~lauren_ai._transport.Completion`.
 
@@ -666,6 +801,7 @@ class AnthropicTransport:
             output_tokens=getattr(usage_obj, "output_tokens", 0),
             cache_read_tokens=getattr(usage_obj, "cache_read_input_tokens", 0) or 0,
             cache_write_tokens=getattr(usage_obj, "cache_creation_input_tokens", 0) or 0,
+            provider_metadata={"estimated": usage_obj is None} if usage_obj is not None else {"estimated": True},
         )
         content_blocks = getattr(response, "content", [])
         text = _extract_text_from_response(content_blocks)
@@ -680,12 +816,27 @@ class AnthropicTransport:
             stop_reason=stop_reason,  # type: ignore[arg-type]
             usage=usage,
             thinking_blocks=thinking_blocks,
+            provider="anthropic",
+            request_id=getattr(response, "id", None),
+            provider_metadata=self._response_metadata(response),
+            raw_response=response if include_raw_response else None,
         )
+
+    @staticmethod
+    def _response_metadata(response: Any) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
+        for name in ("model", "stop_reason", "stop_sequence", "container"):
+            value = getattr(response, name, None)
+            if value is not None:
+                metadata[name] = value
+        return metadata
 
     async def _stream(
         self,
         client: Any,
         call_kwargs: dict[str, Any],
+        *,
+        include_raw_response: bool = False,
     ) -> AsyncIterator[CompletionChunk]:
         """Perform a streaming completion and yield
         :class:`~lauren_ai._transport.CompletionChunk` objects.
@@ -715,10 +866,27 @@ class AnthropicTransport:
                         delta_type = getattr(delta, "type", None)
 
                         if delta_type == "text_delta":
-                            yield CompletionChunk(delta=getattr(delta, "text", ""))
+                            yield CompletionChunk(
+                                delta=getattr(delta, "text", ""),
+                                provider_metadata={"provider": "anthropic"},
+                                raw_event=event if include_raw_response else None,
+                            )
 
                         elif delta_type == "thinking_delta":
-                            yield CompletionChunk(thinking_delta=getattr(delta, "thinking", ""))
+                            yield CompletionChunk(
+                                thinking_delta=getattr(delta, "thinking", ""),
+                                provider_metadata={"provider": "anthropic"},
+                                raw_event=event if include_raw_response else None,
+                            )
+
+                        elif delta_type == "signature_delta":
+                            # Finalises the current thinking block: its signature
+                            # must be round-tripped verbatim (PRD-137 A).
+                            yield CompletionChunk(
+                                thinking_signature=getattr(delta, "signature", ""),
+                                provider_metadata={"provider": "anthropic"},
+                                raw_event=event if include_raw_response else None,
+                            )
 
                         elif delta_type == "input_json_delta" and _current_tool_use_id is not None:
                             yield CompletionChunk(
@@ -734,7 +902,15 @@ class AnthropicTransport:
                         if block is None:
                             continue
                         block_type = getattr(block, "type", None)
-                        if block_type == "tool_use":
+                        if block_type == "redacted_thinking":
+                            # Delivered whole (opaque data, no deltas).  Preserve
+                            # verbatim for passback (PRD-137 A).
+                            yield CompletionChunk(
+                                redacted_thinking_data=getattr(block, "data", ""),
+                                provider_metadata={"provider": "anthropic"},
+                                raw_event=event if include_raw_response else None,
+                            )
+                        elif block_type == "tool_use":
                             tc_id = getattr(block, "id", None)
                             tc_name = getattr(block, "name", None) or ""
                             if tc_id:
@@ -804,6 +980,8 @@ class AnthropicTransport:
                         yield CompletionChunk(
                             stop_reason=stop_reason,
                             usage=usage,
+                            provider_metadata={"provider": "anthropic"},
+                            raw_event=event if include_raw_response else None,
                         )
 
         except Exception as exc:  # noqa: BLE001
@@ -857,6 +1035,35 @@ class AnthropicTransport:
                 raise classified from exc
             raise
 
+    async def structured_complete(
+        self,
+        messages: list[Message],
+        *,
+        model: str,
+        model_cls: type[Any],
+    ) -> Any:
+        """Use Anthropic native structured parsing when available."""
+
+        client = self._get_client()
+        parse = getattr(getattr(client, "messages", None), "parse", None)
+        if parse is None:
+            raise NotImplementedError("The installed Anthropic SDK does not expose messages.parse")
+        anthropic_messages = [_message_to_anthropic(message) for message in messages]
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": self._config.max_tokens,
+            "messages": anthropic_messages,
+            "output_format": model_cls,
+        }
+        result = await parse(**kwargs)
+        if isinstance(result, model_cls):
+            return result
+        for name in ("parsed_output", "parsed", "output"):
+            parsed = getattr(result, name, None)
+            if isinstance(parsed, model_cls):
+                return parsed
+        raise ValueError("Anthropic structured response did not contain a parsed output")
+
     async def count_tokens(
         self,
         messages: list[Message],
@@ -895,10 +1102,14 @@ class AnthropicTransport:
         if built_tools is not None:
             call_kwargs["tools"] = built_tools
 
-        # Try the official token counting endpoint.
-        beta_client = getattr(client, "beta", None)
-        messages_client = getattr(beta_client, "messages", None) if beta_client else None
+        # Prefer the stable endpoint. Older SDKs exposed the same operation
+        # below beta.messages, so keep that as a compatibility fallback.
+        messages_client = getattr(client, "messages", None)
         count_fn = getattr(messages_client, "count_tokens", None) if messages_client else None
+        if count_fn is None:
+            beta_client = getattr(client, "beta", None)
+            messages_client = getattr(beta_client, "messages", None) if beta_client else None
+            count_fn = getattr(messages_client, "count_tokens", None) if messages_client else None
 
         if count_fn is not None:
             try:

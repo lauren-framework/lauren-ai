@@ -80,6 +80,33 @@ Accepts a `ToolResult` dataclass or a plain dict.
 |---|---|---|
 | `result` | `Any` | A `ToolResult` object or dict. |
 
+#### `ShortTermMemory.add_tool_results`
+
+```python
+def add_tool_results(self, results: list[Any]) -> None
+```
+
+Append multiple tool results as a **single** consolidated message.
+
+Anthropic requires all `tool_result` blocks for a given assistant
+turn to appear in the *same* immediately-following user message.
+Calling `add_tool_result` in a loop creates N separate messages,
+which causes Anthropic to report that only the first ID is answered
+and the rest are missing (400 error).
+
+This method consolidates all results into one `role:"user"` message
+with multiple content blocks, satisfying Anthropic's constraint while
+remaining compatible with OpenAI (the transport converts each block to
+a separate `role:"tool"` message as needed).
+
+For a single result, delegates to `add_tool_result` unchanged.
+
+**Parameters:**
+
+| Name | Type | Description |
+|---|---|---|
+| `results` | `list[Any]` | List of `ToolResult` objects or dicts to add. |
+
 #### `ShortTermMemory.set_summary`
 
 ```python
@@ -106,16 +133,18 @@ def messages_to_summarize(self, keep_recent: int = 6) -> list[Any]
 
 Return the slice of messages that should be compressed.
 
-Returns the oldest `(total - keep_recent)` non-system messages.
-System messages are excluded because they are already managed
-separately (they are never dropped by `messages()` either).
+Returns the oldest non-system messages outside the (boundary-safe)
+recent window.  System messages are excluded because they are already
+managed separately (they are never dropped by `messages()` either).
 
 **Parameters:**
 
 | Name | Type | Description |
 |---|---|---|
 | `keep_recent` | `int` | Number of most-recent non-system messages to
-preserve verbatim.  Defaults to 6 (≈ 3 user/assistant pairs). |
+preserve verbatim.  Defaults to 6 (≈ 3 user/assistant pairs).  The
+boundary is snapped so a `tool_use`/`tool_result` pair is never
+split (see `_safe_keep_recent()`). |
 
 **Returns:** `list[Any]` — List of messages to feed to the summarisation LLM call.
 
@@ -129,7 +158,8 @@ Drop all but the most-recent *keep_recent* non-system messages.
 
 Called by the runner after the summarisation call so the buffer
 only holds recent turns while the older context lives in
-`self._summary`.
+`self._summary`.  The boundary is snapped so a `tool_use`/
+`tool_result` pair is never split (see `_safe_keep_recent()`).
 
 **Parameters:**
 
@@ -166,6 +196,24 @@ Unlike `messages()` this *mutates* the internal buffer.
 | Name | Type | Description |
 |---|---|---|
 | `max_tokens` | `int` | Target token budget. |
+
+#### `ShortTermMemory.ensure_valid`
+
+```python
+def ensure_valid(self) -> None
+```
+
+Heal dangling tool_calls in-place before making an API request.
+
+Unlike `messages()` (which has a `has_moved_on` guard to avoid
+healing mid-flight tool calls) this method heals *unconditionally*.
+It should be called once immediately before each `run_stream()` /
+`run()` invocation to handle cases where a previous agent turn was
+interrupted while a tool was suspended — e.g. when the user cancels
+a plan-approval overlay after the LLM has already called the approval
+tool for a second time.
+
+The method is idempotent — calling it multiple times is safe.
 
 #### `ShortTermMemory.clear`
 

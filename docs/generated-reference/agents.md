@@ -7,7 +7,7 @@ Decorators and types for building AI agents.
 ### `agent`
 
 ```python
-def agent(args: Any = (), name: str | None = None, model: str | None = None, system: str | None = None, max_turns: int | None = None, temperature: float | None = None, memory: Any | None = None, conversation_store: Any | None = None, config_kwargs: Any = {}) -> Callable[[type[C]], type[C]]
+def agent(args: Any = (), name: str | None = None, model: str | None = None, system: str | None = None, max_turns: int | None = None, temperature: float | None = None, memory: Any | None = None, conversation_store: Any | None = None, config: AgentConfig | None = None, config_kwargs: Any = {}) -> Callable[[type[C]], type[C]]
 ```
 
 Decorator that marks a class as an AI agent.
@@ -64,6 +64,9 @@ turn.  Per-call `runner.run(agent, …, memory=…)` always wins. |
 `InMemoryConversationStore` and writes
 it back to AgentMeta.  Per-call `runner.run(agent, …,
 conversation_store=…)` always wins. |
+| `config` | `AgentConfig | None` | Optional base `AgentConfig`.
+Explicit decorator settings such as `max_turns` and
+`temperature` override fields on this base configuration. |
 | `config_kwargs` | `Any` | Additional keyword arguments forwarded to
 `AgentConfig`. |
 
@@ -163,7 +166,7 @@ not declared at module level.
 ### `AgentMeta`
 
 ```python
-class AgentMeta(model: str | None, system: str | None, config: AgentConfig, tool_classes: tuple[Any, ...] = tuple(), name: str = '', memory: Any | None = None, conversation_store: Any | None = None, knowledge_source_filter: tuple[str, ...] | None = None, runner_class: type | None = None, tools: dict[str, Any] = dict())
+class AgentMeta(model: str | None, system: str | None, config: AgentConfig, tool_classes: tuple[Any, ...] = tuple(), name: str = '', memory: Any | None = None, conversation_store: Any | None = None, knowledge_source_filter: tuple[str, ...] | None = None, runner_class: type | None = None, tools: dict[str, Any] = dict(), allowed_mcp_aliases: frozenset[str] | None = None)
 ```
 
 Metadata attached to a class decorated with `@agent()`.
@@ -210,7 +213,7 @@ subset of the module's tool dict this agent is allowed to use (via
 ### `AgentContext`
 
 ```python
-class AgentContext(agent_id: str, agent_run_id: str, agent_class: type, config: AgentConfig, memory: Any, turn: int, metadata: dict[str, Any], request: Any | None = None, execution_context: Any | None = None, signals: Any | None = None)
+class AgentContext(agent_id: str, agent_run_id: str, agent_class: type, config: AgentConfig, memory: Any, turn: int, metadata: dict[str, Any], request: Any | None = None, execution_context: Any | None = None, conversation_id: str | None = None, signals: Any | None = None, runner: Any | None = None, message_bus: AgentMessageBus | None = None, idempotency_ledger: Any | None = None)
 ```
 
 Runtime context for a single agent run.
@@ -241,8 +244,12 @@ arguments. |
 (carries `request`, `handler_class`, `handler_func`,
 `route_template`, and `metadata`) when the agent is invoked
 from a route handler.  `None` otherwise. |
+| `conversation_id` | `str | None` | Optional session/conversation scope for this run. |
 | `signals` | `Any | None` | Signal bus for emitting lifecycle events.  `None` in
 environments where no `SignalBus` is registered. |
+| `runner` | `Any | None` | The active runner driving this agent invocation. |
+| `message_bus` | `AgentMessageBus | None` | Optional inter-agent message bus wired by
+`AgentModule`. |
 
 #### `AgentContext.get_metadata`
 
@@ -357,13 +364,13 @@ Runtime DI resolution is unaffected.
 #### `AgentRunner.run`
 
 ```python
-def run(self, agent: Any, message: str, conversation_id: str | None = None, metadata: dict[str, Any] | None = None, request: Any | None = None, execution_context: Any | None = None, run_id: str | None = None) -> AgentResponse
+def run(self, agent: Any, message: str, conversation_id: str | None = None, metadata: dict[str, Any] | None = None, request: Any | None = None, execution_context: Any | None = None, run_id: str | None = None, config_override: AgentConfig | None = None, model_override: str | None = None) -> AgentResponse
 ```
 
 #### `AgentRunner.run_stream`
 
 ```python
-def run_stream(self, agent: Any, message: str, conversation_id: str | None = None, metadata: dict[str, Any] | None = None, request: Any | None = None, execution_context: Any | None = None, run_id: str | None = None) -> AsyncIterator[CompletionChunk]
+def run_stream(self, agent: Any, message: str, conversation_id: str | None = None, metadata: dict[str, Any] | None = None, request: Any | None = None, execution_context: Any | None = None, run_id: str | None = None, config_override: AgentConfig | None = None, model_override: str | None = None) -> AsyncIterator[CompletionChunk]
 ```
 
 #### `AgentRunner.approve_tool`
@@ -381,7 +388,7 @@ def reject_tool(self, agent_run_id: str, tool_use_id: str, reason: str = '') -> 
 ### `AgentRunnerBase`
 
 ```python
-class AgentRunnerBase(transport: Any, signals: Any | None = None, cache_backend: CacheBackend | None = None)
+class AgentRunnerBase(transport: Any, signals: Any | None = None, cache_backend: CacheBackend | None = None, global_hooks: list[Any] | None = None, message_bus: AgentMessageBus | None = None, event_sinks: list[Any] | None = None)
 ```
 
 Concrete implementation of the `AgentRunner` Protocol.
@@ -403,7 +410,7 @@ dispatches tool calls, and aggregates results into an
 #### `AgentRunnerBase.run`
 
 ```python
-def run(self, agent: Any, message: str, conversation_id: str | None = None, metadata: dict[str, Any] | None = None, request: Any | None = None, execution_context: Any | None = None, run_id: str | None = None, conversation_store: Any | None = None, memory: Any | None = None) -> AgentResponse
+def run(self, agent: Any, message: str, conversation_id: str | None = None, metadata: dict[str, Any] | None = None, request: Any | None = None, execution_context: Any | None = None, run_id: str | None = None, conversation_store: Any | None = None, memory: Any | None = None, config_override: AgentConfig | None = None, model_override: str | None = None, event_sinks: list[Any] | None = None, idempotency_ledger: IdempotencyLedger | None = None) -> AgentResponse
 ```
 
 Run an `@agent()`-decorated instance through the agentic loop.
@@ -436,6 +443,11 @@ conversation store.  Wins over `meta.conversation_store`. |
 Wins over `meta.memory`.  When neither is supplied, a fresh
 `ShortTermMemory` is constructed for
 this turn. |
+| `config_override` | `AgentConfig | None` | Optional effective config for this specific
+run. When provided, it replaces the agent's default runtime
+config without mutating the decorated class metadata. |
+| `model_override` | `str | None` | Optional model override for this specific run.
+When provided, it replaces the model configured on `@agent()`. |
 
 **Returns:** `AgentResponse` — The aggregated result of the agentic run.
 
@@ -453,7 +465,7 @@ crossed mid-run. |
 #### `AgentRunnerBase.run_stream`
 
 ```python
-def run_stream(self, agent: Any, message: str, conversation_id: str | None = None, metadata: dict[str, Any] | None = None, request: Any | None = None, execution_context: Any | None = None, run_id: str | None = None, conversation_store: Any | None = None, memory: Any | None = None) -> AsyncIterator[CompletionChunk]
+def run_stream(self, agent: Any, message: str, conversation_id: str | None = None, metadata: dict[str, Any] | None = None, request: Any | None = None, execution_context: Any | None = None, run_id: str | None = None, conversation_store: Any | None = None, memory: Any | None = None, config_override: AgentConfig | None = None, model_override: str | None = None, event_sinks: list[Any] | None = None, idempotency_ledger: IdempotencyLedger | None = None) -> AsyncIterator[CompletionChunk]
 ```
 
 Run an agent with streaming output.
@@ -486,12 +498,16 @@ Usage::
 | `execution_context` | `Any | None` | The lauren `ExecutionContext` (route
 metadata, handler class/func, authenticated user via
 `request.state`) when invoked from a route handler.  Threaded
-into `ToolContext.agent_context.execution_context` for every tool call. |
+into `ToolContext.execution_context` for every tool call. |
 | `run_id` | `str | None` | Optional explicit run identifier. |
 | `conversation_store` | `Any | None` | Per-request override of the agent's
 conversation store.  Wins over `meta.conversation_store`. |
 | `memory` | `Any | None` | Per-request override of the agent's memory instance.
 Wins over `meta.memory`. |
+| `config_override` | `AgentConfig | None` | Optional effective config for this specific
+run. When provided, it replaces the agent's default runtime
+config without mutating the decorated class metadata. |
+| `model_override` | `str | None` | Optional model override for this specific run. |
 
 **Returns:** `AsyncIterator[CompletionChunk]` — An async iterator of completion chunks.
 
@@ -502,6 +518,9 @@ def approve_tool(self, agent_run_id: str, tool_use_id: str) -> None
 ```
 
 Approve a pending HITL tool call.
+
+Synchronous and thread-safe — may be called from any context,
+including from a signal handler or a TUI key-press callback.
 
 **Parameters:**
 
@@ -519,10 +538,15 @@ def reject_tool(self, agent_run_id: str, tool_use_id: str, reason: str = '') -> 
 
 Reject a pending HITL tool call.
 
+Synchronous and thread-safe — may be called from any context.
+Uses `set_result(False)` so the suspension handler branches on
+a bool rather than catching a specific exception type.
+
 **Parameters:**
 
 | Name | Type | Description |
 |---|---|---|
 | `agent_run_id` | `str` | The run identifier. |
 | `tool_use_id` | `str` | The tool call identifier to reject. |
-| `reason` | `str` | Optional human-readable rejection reason. |
+| `reason` | `str` | Optional human-readable rejection reason logged via
+the `ToolApprovalResolved` signal. |

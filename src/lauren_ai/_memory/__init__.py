@@ -557,6 +557,25 @@ def _get_role(message: Any) -> str:
     return getattr(message, "role", "")
 
 
+def _thinking_block_to_dict(block: Any) -> dict[str, Any]:
+    """Serialise a thinking / redacted-thinking block to its dict form (PRD-137).
+
+    Accepts the ``ThinkingBlock`` / ``RedactedThinkingBlock`` dataclasses or an
+    already-dict block (idempotent — so re-stored assistant turns are stable).
+    The dict round-trips through snapshot/restore + the request serializer with
+    the signature intact, which Anthropic requires when passing thinking back.
+    """
+    if isinstance(block, dict):
+        return block
+    if getattr(block, "type", "") == "redacted_thinking":
+        return {"type": "redacted_thinking", "data": getattr(block, "data", "")}
+    return {
+        "type": "thinking",
+        "thinking": getattr(block, "thinking", ""),
+        "signature": getattr(block, "signature", ""),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Hard context-budget enforcement (PRD-133 Layer C)
 # ---------------------------------------------------------------------------
@@ -581,9 +600,14 @@ def _block_text_field(block: Any) -> tuple[str | None, int]:
     """Return ``(field_name, length)`` of a block's truncatable text, or (None, 0).
 
     Only the ``text`` / ``content`` *string* fields are truncatable; ``tool_use``
-    inputs and ids are left intact so the call stays valid.
+    inputs and ids are left intact so the call stays valid.  ``thinking`` /
+    ``redacted_thinking`` blocks are **never** truncatable — their signature is
+    verified against the exact thinking text, so any edit invalidates it and the
+    provider rejects the request (PRD-137 E).
     """
     if isinstance(block, dict):
+        if block.get("type") in ("thinking", "redacted_thinking"):
+            return None, 0
         if isinstance(block.get("text"), str):
             return "text", len(block["text"])
         if isinstance(block.get("content"), str):
@@ -733,10 +757,14 @@ class ShortTermMemory:
         # Dataclass / object form
         content = getattr(completion, "content", "")
         tool_calls = getattr(completion, "tool_calls", [])
+        thinking_blocks = getattr(completion, "thinking_blocks", []) or []
 
-        if tool_calls:
-            # Build a content list with text + tool_use blocks
-            blocks: list[Any] = []
+        if tool_calls or thinking_blocks:
+            # Build a content list.  Anthropic extended thinking requires the
+            # thinking / redacted_thinking blocks to appear FIRST — before text
+            # and tool_use — and to be sent back verbatim with their signatures
+            # (PRD-137 C).  Order: thinking → text → tool_use.
+            blocks: list[Any] = [_thinking_block_to_dict(tb) for tb in thinking_blocks]
             if content:
                 blocks.append({"type": "text", "text": content})
             for tc in tool_calls:

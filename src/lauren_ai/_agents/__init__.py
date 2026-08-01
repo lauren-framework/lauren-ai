@@ -305,6 +305,7 @@ def agent(
     temperature: float | None = None,
     memory: Any | None = None,
     conversation_store: Any | None = None,
+    config: AgentConfig | None = None,
     **config_kwargs: Any,
 ) -> Callable[[type[C]], type[C]]:
     """Decorator that marks a class as an AI agent.
@@ -364,6 +365,10 @@ def agent(
         it back to AgentMeta.  Per-call ``runner.run(agent, …,
         conversation_store=…)`` always wins.
     :type conversation_store: Any | None
+    :param config: Optional base :class:`~lauren_ai._config.AgentConfig`.
+        Explicit decorator settings such as ``max_turns`` and
+        ``temperature`` override fields on this base configuration.
+    :type config: AgentConfig | None
     :param config_kwargs: Additional keyword arguments forwarded to
         :class:`~lauren_ai._config.AgentConfig`.
     :return: A class decorator.
@@ -400,7 +405,12 @@ def agent(
         # Resolve agent name: explicit > class __name__.
         effective_name: str = name if name is not None else cls.__name__
 
-        cfg = AgentConfig(**agent_config_kwargs)
+        if config is None:
+            cfg = AgentConfig(**agent_config_kwargs)
+        else:
+            from dataclasses import replace  # noqa: PLC0415
+
+            cfg = replace(config, **agent_config_kwargs)
 
         # Gather tool classes registered by @use_tools() on this class.
         raw_tools: tuple[Any, ...] = getattr(cls, USE_TOOLS_META, ())

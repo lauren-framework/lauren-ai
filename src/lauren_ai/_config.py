@@ -20,8 +20,12 @@ Example usage::
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
+
+from lauren_ai._transport._options import RequestOptions
 
 __all__ = [
     "LLMConfig",
@@ -127,10 +131,25 @@ class LLMConfig:
     :param base_url: Override the provider's default base URL.  Useful for
         proxies, self-hosted deployments, or Ollama.
     :type base_url: str | None
+    :param default_headers: Headers sent with every provider request.  Useful
+        for gateways and OpenAI-compatible deployments with custom auth.
+    :type default_headers: Mapping[str, str] | None
+    :param default_query: Query parameters sent with every provider request.
+    :type default_query: Mapping[str, Any] | None
+    :param client_options: Additional validated options for the official async
+        provider client, such as a custom HTTP client.
+    :type client_options: Mapping[str, Any] | None
+    :param request_options: Default per-request provider options.
+    :type request_options: RequestOptions | None
     :param max_tokens: Maximum tokens to generate per completion call.
     :type max_tokens: int
     :param temperature: Sampling temperature (0.0–2.0 for most providers).
     :type temperature: float
+    :param top_p: Optional nucleus-sampling value.
+    :type top_p: float | None
+    :param max_completion_tokens: Provider-native output limit where distinct
+        from legacy max_tokens.
+    :type max_completion_tokens: int | None
     :param timeout: HTTP request timeout in seconds.
     :type timeout: float
     :param max_retries: Maximum number of automatic retries on transient
@@ -154,8 +173,14 @@ class LLMConfig:
     model: str
     api_key: str | None = field(default=None)
     base_url: str | None = field(default=None)
+    default_headers: Mapping[str, str] | None = field(default=None)
+    default_query: Mapping[str, Any] | None = field(default=None)
+    client_options: Mapping[str, Any] | None = field(default=None)
+    request_options: RequestOptions | None = field(default=None)
     max_tokens: int = field(default=4096)
     temperature: float = field(default=1.0)
+    top_p: float | None = field(default=None)
+    max_completion_tokens: int | None = field(default=None)
     timeout: float = field(default=60.0)
     max_retries: int = field(default=3)
     # Prompt caching (Anthropic only — silently ignored elsewhere)
@@ -168,6 +193,29 @@ class LLMConfig:
     # Embeddings
     embed_model: str | None = field(default=None)
     embed_dimensions: int | None = field(default=None)
+
+    def __post_init__(self) -> None:
+        """Validate and snapshot mapping-valued configuration.
+
+        Frozen dataclasses only protect attribute assignment; copying the
+        mappings prevents a caller from mutating provider defaults after a
+        module has been constructed.
+        """
+        defaults = RequestOptions(
+            extra_headers=self.default_headers,
+            extra_query=self.default_query,
+        )
+        object.__setattr__(self, "default_headers", defaults.extra_headers)
+        object.__setattr__(self, "default_query", defaults.extra_query)
+        if self.client_options is not None:
+            managed = {"api_key", "base_url", "timeout", "max_retries", "default_headers", "default_query"}
+            overlap = managed.intersection(self.client_options)
+            if overlap:
+                names = ", ".join(sorted(overlap))
+                raise ValueError(f"client_options cannot override managed LLMConfig fields: {names}")
+            object.__setattr__(self, "client_options", MappingProxyType(dict(self.client_options)))
+        if self.request_options is not None and not isinstance(self.request_options, RequestOptions):
+            raise TypeError("request_options must be a RequestOptions instance")
 
     # ------------------------------------------------------------------
     # Classmethods / factory helpers
@@ -324,6 +372,13 @@ class AgentConfig:
     :param temperature: Sampling temperature for this agent.  Overrides the
         :class:`LLMConfig` temperature when set.
     :type temperature: float
+    :param top_p: Optional nucleus-sampling value for this agent.
+    :type top_p: float | None
+    :param max_completion_tokens: Provider-native output limit.
+    :type max_completion_tokens: int | None
+    :param request_options: Provider-specific and transport-level request
+        options for each model call.
+    :type request_options: RequestOptions | None
     :param memory_window_tokens: Sliding-window size in tokens for
         conversation history passed to the model.
     :type memory_window_tokens: int
@@ -382,6 +437,9 @@ class AgentConfig:
     max_turns: int = field(default=10)
     max_tokens_per_turn: int = field(default=4096)
     temperature: float = field(default=1.0)
+    top_p: float | None = field(default=None)
+    max_completion_tokens: int | None = field(default=None)
+    request_options: RequestOptions | None = field(default=None)
     memory_window_tokens: int = field(default=40_000)
     max_cost_usd: float | None = field(default=None)
     parallel_tool_calls: bool = field(default=False)
@@ -390,7 +448,7 @@ class AgentConfig:
     thinking: bool = field(default=False)
     thinking_budget_tokens: int = field(default=8_000)
     # OpenAI reasoning models
-    reasoning_effort: Literal["low", "medium", "high"] | None = field(default=None)
+    reasoning_effort: str | None = field(default=None)
     include_reasoning_in_response: bool = field(default=False)
     # Context-window summarisation (opt-in)
     summarize_at: float | None = field(default=None)

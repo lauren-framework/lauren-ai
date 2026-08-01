@@ -26,6 +26,13 @@ from typing import Any, Literal, runtime_checkable
 
 from typing_extensions import Protocol
 
+from lauren_ai._transport._options import (
+    AnthropicRequestOptions,
+    OpenAIRequestOptions,
+    ProviderCapabilities,
+    RequestOptions,
+)
+
 __all__ = [
     # Primitive data types
     "TokenUsage",
@@ -42,6 +49,10 @@ __all__ = [
     "Embedding",
     "ToolSchema",
     "ToolChoice",
+    "RequestOptions",
+    "OpenAIRequestOptions",
+    "AnthropicRequestOptions",
+    "ProviderCapabilities",
     # Protocol
     "Transport",
     # Token estimation
@@ -125,6 +136,10 @@ class TokenUsage:
     output_tokens: int
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
+    audio_input_tokens: int = 0
+    audio_output_tokens: int = 0
+    provider_metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def total_tokens(self) -> int:
@@ -166,6 +181,10 @@ class TokenUsage:
             output_tokens=self.output_tokens + other.output_tokens,
             cache_read_tokens=self.cache_read_tokens + other.cache_read_tokens,
             cache_write_tokens=self.cache_write_tokens + other.cache_write_tokens,
+            reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
+            audio_input_tokens=self.audio_input_tokens + other.audio_input_tokens,
+            audio_output_tokens=self.audio_output_tokens + other.audio_output_tokens,
+            provider_metadata={**self.provider_metadata, **other.provider_metadata},
         )
 
 
@@ -490,6 +509,10 @@ class Completion:
     stop_reason: Literal["end_turn", "tool_use", "max_tokens", "stop_sequence"]
     usage: TokenUsage
     thinking_blocks: list[ThinkingBlock | RedactedThinkingBlock] = field(default_factory=list)
+    provider: str | None = None
+    request_id: str | None = None
+    provider_metadata: dict[str, Any] = field(default_factory=dict)
+    raw_response: Any = field(default=None, repr=False, compare=False)
 
 
 # ---------------------------------------------------------------------------
@@ -528,6 +551,15 @@ class CompletionChunk:
         other field populated; callers surface it to the user but must NOT add
         it to the assistant's accumulated content.
     :type system_notice: str | None
+    :param thinking_signature: The cryptographic signature for the thinking block
+        that just completed (Anthropic extended thinking).  Emitted when the
+        ``signature_delta`` arrives; finalises the accumulated ``thinking_delta``
+        text into a complete thinking block that must be round-tripped verbatim.
+    :type thinking_signature: str | None
+    :param redacted_thinking_data: Opaque base64 payload of a
+        ``redacted_thinking`` block, delivered whole.  Must be preserved and sent
+        back unchanged.
+    :type redacted_thinking_data: str | None
     """
 
     delta: str = ""
@@ -538,6 +570,10 @@ class CompletionChunk:
     pending_approval: PendingApproval | None = None
     guardrail_override: str | None = None
     system_notice: str | None = None
+    thinking_signature: str | None = None
+    redacted_thinking_data: str | None = None
+    provider_metadata: dict[str, Any] | None = None
+    raw_event: Any = field(default=None, repr=False, compare=False)
 
 
 # ---------------------------------------------------------------------------
@@ -587,6 +623,9 @@ class CompletionCall:
     stream: bool = False
     thinking: bool = False
     thinking_budget_tokens: int = 8000
+    top_p: float | None = None
+    max_completion_tokens: int | None = None
+    request_options: RequestOptions | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -630,6 +669,8 @@ class ToolSchema:
     name: str
     description: str
     input_schema: dict[str, Any]
+    kind: Literal["function", "hosted", "mcp", "computer_use", "tool_search"] = "function"
+    provider_options: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -722,6 +763,9 @@ class Transport(Protocol):
         stream: bool = False,
         thinking: bool = False,
         thinking_budget_tokens: int = 8000,
+        top_p: float | None = None,
+        max_completion_tokens: int | None = None,
+        request_options: RequestOptions | None = None,
     ) -> Completion | AsyncIterator[CompletionChunk]:
         """Send *messages* to the model and return the result.
 

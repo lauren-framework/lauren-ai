@@ -86,7 +86,7 @@ Extract all text from this message as a single concatenated string.
 ### `Completion`
 
 ```python
-class Completion(id: str, model: str, content: str, tool_calls: list[ToolCall], stop_reason: Literal['end_turn', 'tool_use', 'max_tokens', 'stop_sequence'], usage: TokenUsage, thinking_blocks: list[ThinkingBlock | RedactedThinkingBlock] = list())
+class Completion(id: str, model: str, content: str, tool_calls: list[ToolCall], stop_reason: Literal['end_turn', 'tool_use', 'max_tokens', 'stop_sequence'], usage: TokenUsage, thinking_blocks: list[ThinkingBlock | RedactedThinkingBlock] = list(), provider: str | None = None, request_id: str | None = None, provider_metadata: dict[str, Any] = dict(), raw_response: Any = None)
 ```
 
 A finished (non-streaming) model completion.
@@ -111,7 +111,7 @@ A finished (non-streaming) model completion.
 ### `CompletionChunk`
 
 ```python
-class CompletionChunk(delta: str = '', thinking_delta: str | None = None, tool_call_delta: ToolCallDelta | None = None, stop_reason: str | None = None, usage: TokenUsage | None = None, pending_approval: PendingApproval | None = None, guardrail_override: str | None = None)
+class CompletionChunk(delta: str = '', thinking_delta: str | None = None, tool_call_delta: ToolCallDelta | None = None, stop_reason: str | None = None, usage: TokenUsage | None = None, pending_approval: PendingApproval | None = None, guardrail_override: str | None = None, system_notice: str | None = None, thinking_signature: str | None = None, redacted_thinking_data: str | None = None, provider_metadata: dict[str, Any] | None = None, raw_event: Any = None)
 ```
 
 A single chunk from a streaming model completion.
@@ -135,13 +135,24 @@ string is the replacement content.  The runner emits one sentinel
 chunk with only this field populated (`delta=""` etc.) after all
 normal chunks have been yielded.  Callers should replace the
 accumulated streaming text with this value. |
+| `system_notice` | `str | None` | An out-of-band, user-facing status line (e.g.
+`"⎋ Compacting conversation…"`).  Emitted as a sentinel chunk with no
+other field populated; callers surface it to the user but must NOT add
+it to the assistant's accumulated content. |
+| `thinking_signature` | `str | None` | The cryptographic signature for the thinking block
+that just completed (Anthropic extended thinking).  Emitted when the
+`signature_delta` arrives; finalises the accumulated `thinking_delta`
+text into a complete thinking block that must be round-tripped verbatim. |
+| `redacted_thinking_data` | `str | None` | Opaque base64 payload of a
+`redacted_thinking` block, delivered whole.  Must be preserved and sent
+back unchanged. |
 
 ## Usage & calls
 
 ### `TokenUsage`
 
 ```python
-class TokenUsage(input_tokens: int, output_tokens: int, cache_read_tokens: int = 0, cache_write_tokens: int = 0)
+class TokenUsage(input_tokens: int, output_tokens: int, cache_read_tokens: int = 0, cache_write_tokens: int = 0, reasoning_tokens: int = 0, audio_input_tokens: int = 0, audio_output_tokens: int = 0, provider_metadata: dict[str, Any] = dict())
 ```
 
 Token accounting for a single model call.
@@ -193,7 +204,7 @@ A completed tool call extracted from a model response.
 ### `ToolSchema`
 
 ```python
-class ToolSchema(name: str, description: str, input_schema: dict[str, Any])
+class ToolSchema(name: str, description: str, input_schema: dict[str, Any], kind: Literal['function', 'hosted', 'mcp', 'computer_use', 'tool_search'] = 'function', provider_options: dict[str, Any] = dict())
 ```
 
 JSON Schema descriptor for a tool exposed to the model.

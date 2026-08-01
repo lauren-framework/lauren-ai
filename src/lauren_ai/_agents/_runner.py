@@ -46,6 +46,8 @@ from lauren_ai._transport import (
     Completion,
     CompletionChunk,
     Message,
+    RedactedThinkingBlock,
+    ThinkingBlock,
     TokenUsage,
     ToolCall,
     ToolSchema,
@@ -855,15 +857,21 @@ class AgentRunnerBase(AgentRunner):
                 )
 
                 t0 = time.monotonic()
-                completion = await self._transport.complete(
-                    messages,
-                    model=model,
-                    system=system_prompt,
-                    tools=tool_schemas if tool_schemas else None,
-                    max_tokens=effective_config.max_tokens_per_turn,
-                    temperature=effective_config.temperature,
-                    stream=False,
-                )
+                completion_kwargs: dict[str, Any] = {
+                    "model": model,
+                    "system": system_prompt,
+                    "tools": tool_schemas if tool_schemas else None,
+                    "max_tokens": effective_config.max_tokens_per_turn,
+                    "temperature": effective_config.temperature,
+                    "stream": False,
+                }
+                if effective_config.top_p is not None:
+                    completion_kwargs["top_p"] = effective_config.top_p
+                if effective_config.max_completion_tokens is not None:
+                    completion_kwargs["max_completion_tokens"] = effective_config.max_completion_tokens
+                if effective_config.request_options is not None:
+                    completion_kwargs["request_options"] = effective_config.request_options
+                completion = await self._transport.complete(messages, **completion_kwargs)
                 duration_ms = (time.monotonic() - t0) * 1000
 
                 # Accumulate usage
@@ -1357,15 +1365,21 @@ class AgentRunnerBase(AgentRunner):
                 )
 
                 t0 = time.monotonic()
-                stream = await self._transport.complete(
-                    messages,
-                    model=model,
-                    system=system_prompt,
-                    tools=_tool_schemas_arg,
-                    max_tokens=effective_config.max_tokens_per_turn,
-                    temperature=effective_config.temperature,
-                    stream=True,
-                )
+                stream_kwargs: dict[str, Any] = {
+                    "model": model,
+                    "system": system_prompt,
+                    "tools": _tool_schemas_arg,
+                    "max_tokens": effective_config.max_tokens_per_turn,
+                    "temperature": effective_config.temperature,
+                    "stream": True,
+                }
+                if effective_config.top_p is not None:
+                    stream_kwargs["top_p"] = effective_config.top_p
+                if effective_config.max_completion_tokens is not None:
+                    stream_kwargs["max_completion_tokens"] = effective_config.max_completion_tokens
+                if effective_config.request_options is not None:
+                    stream_kwargs["request_options"] = effective_config.request_options
+                stream = await self._transport.complete(messages, **stream_kwargs)
 
                 # Accumulate the full completion while yielding chunks
                 accumulated_text = ""
@@ -1375,6 +1389,11 @@ class AgentRunnerBase(AgentRunner):
                 accumulated_tool_calls: list[ToolCall] = []
                 partial_tool_inputs: dict[str, str] = {}  # tool_use_id -> input_json
                 partial_tool_names: dict[str, str] = {}  # tool_use_id -> name
+                # PRD-137 B: reconstruct ordered thinking blocks from the stream so
+                # they can be round-tripped (a thinking block is finalised when its
+                # signature_delta arrives; redacted blocks arrive whole).
+                accumulated_thinking_blocks: list[ThinkingBlock | RedactedThinkingBlock] = []
+                _cur_thinking_text = ""
 
                 async for chunk in stream:
                     if chunk.delta:
@@ -1382,6 +1401,16 @@ class AgentRunnerBase(AgentRunner):
 
                     if chunk.thinking_delta:
                         accumulated_thinking += chunk.thinking_delta
+                        _cur_thinking_text += chunk.thinking_delta
+
+                    if chunk.thinking_signature is not None:
+                        accumulated_thinking_blocks.append(
+                            ThinkingBlock(thinking=_cur_thinking_text, signature=chunk.thinking_signature)
+                        )
+                        _cur_thinking_text = ""
+
+                    if chunk.redacted_thinking_data is not None:
+                        accumulated_thinking_blocks.append(RedactedThinkingBlock(data=chunk.redacted_thinking_data))
 
                     if chunk.tool_call_delta is not None:
                         tcd = chunk.tool_call_delta
@@ -1460,6 +1489,11 @@ class AgentRunnerBase(AgentRunner):
                 turn_usage = accumulated_usage or TokenUsage(input_tokens=0, output_tokens=0)
                 total_usage = total_usage + turn_usage
 
+                # Finalise any thinking text that never received a signature_delta
+                # (e.g. a gateway that omits signatures) so it is still preserved.
+                if _cur_thinking_text:
+                    accumulated_thinking_blocks.append(ThinkingBlock(thinking=_cur_thinking_text, signature=""))
+
                 synthetic_completion = Completion(
                     id=uuid.uuid4().hex,
                     model=model,
@@ -1467,6 +1501,7 @@ class AgentRunnerBase(AgentRunner):
                     tool_calls=accumulated_tool_calls,
                     stop_reason=accumulated_stop_reason or "end_turn",  # type: ignore[arg-type]
                     usage=turn_usage,
+                    thinking_blocks=accumulated_thinking_blocks,
                 )
                 # ── Atomic commit: add_assistant + signals + tool execution ──────
                 # Everything from add_assistant onward is wrapped in a single

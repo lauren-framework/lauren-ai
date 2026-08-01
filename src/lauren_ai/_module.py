@@ -56,7 +56,14 @@ from lauren import Scope, injectable, module, post_construct, use_class, use_fac
 from lauren_ai._config import AgentConfig, LLMConfig
 from lauren_ai._exceptions import AgentConfigError, DecoratorUsageError
 from lauren_ai._knowledge import KnowledgeBase, KnowledgeSource
-from lauren_ai._transport import Completion, CompletionChunk, Embedding, Message
+from lauren_ai._transport import (
+    Completion,
+    CompletionChunk,
+    Embedding,
+    Message,
+    ProviderCapabilities,
+    RequestOptions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +74,13 @@ T = TypeVar("T")
 # ---------------------------------------------------------------------------
 
 
-def _build_transport(config: LLMConfig, override: Any = None) -> Any:
+def _build_transport(
+    config: LLMConfig,
+    override: Any = None,
+    *,
+    client_override: Any | None = None,
+    client_factory: Any | None = None,
+) -> Any:
     """Build a transport instance from *config*, or return *override* directly.
 
     :param config: The LLM configuration.
@@ -85,13 +98,13 @@ def _build_transport(config: LLMConfig, override: Any = None) -> Any:
     if config.provider == "anthropic":
         from lauren_ai._transport._anthropic import AnthropicTransport  # noqa: PLC0415
 
-        return AnthropicTransport(config)
+        return AnthropicTransport(config, client=client_override, client_factory=client_factory)
 
     if config.provider == "openai":
         try:
             from lauren_ai._transport._openai import OpenAITransport  # noqa: PLC0415
 
-            return OpenAITransport(config)
+            return OpenAITransport(config, client=client_override, client_factory=client_factory)
         except ImportError as exc:
             raise AgentConfigError(
                 "OpenAI transport requires the 'openai' package.  Install it with: pip install openai",
@@ -168,6 +181,13 @@ class LLMService:
         model: str | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        top_p: float | None = None,
+        max_completion_tokens: int | None = None,
+        stop_sequences: list[str] | None = None,
+        request_options: RequestOptions | None = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_query: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
         stream: bool = False,
     ) -> Completion | AsyncIterator[CompletionChunk]:
         """Run a completion with merged per-call overrides and config defaults.
@@ -194,12 +214,34 @@ class LLMService:
             iterator of :class:`~lauren_ai._transport.CompletionChunk`.
         :rtype: Completion | AsyncIterator[CompletionChunk]
         """
+        defaults = self._config.request_options or RequestOptions()
+        if request_options is not None or extra_headers or extra_query or extra_body:
+            request_options = defaults.merged(request_options).with_call_extras(
+                extra_headers=extra_headers,
+                extra_query=extra_query,
+                extra_body=extra_body,
+            )
+        else:
+            request_options = defaults if self._config.request_options is not None else None
+
         kwargs: dict[str, Any] = dict(
-            model=model or self._config.model,
-            max_tokens=max_tokens or self._config.max_tokens,
+            model=model if model is not None else self._config.model,
+            max_tokens=max_tokens if max_tokens is not None else self._config.max_tokens,
             temperature=temperature if temperature is not None else self._config.temperature,
             stream=stream,
         )
+        effective_top_p = top_p if top_p is not None else self._config.top_p
+        effective_max_completion_tokens = (
+            max_completion_tokens if max_completion_tokens is not None else self._config.max_completion_tokens
+        )
+        if effective_top_p is not None:
+            kwargs["top_p"] = effective_top_p
+        if effective_max_completion_tokens is not None:
+            kwargs["max_completion_tokens"] = effective_max_completion_tokens
+        if stop_sequences is not None:
+            kwargs["stop_sequences"] = stop_sequences
+        if request_options is not None:
+            kwargs["request_options"] = request_options
         if system is not None:
             kwargs["system"] = system
         if tools is not None:
@@ -248,6 +290,15 @@ class LLMService:
             dimensions=self._config.embed_dimensions,
         )
 
+    async def close(self) -> None:
+        """Close the underlying provider transport when it owns its client."""
+
+        close = getattr(self._transport, "close", None)
+        if close is not None:
+            result = close()
+            if hasattr(result, "__await__"):
+                await result
+
     async def count_tokens(self, messages: list[Message]) -> int:
         """Count the tokens in *messages* for the configured model.
 
@@ -273,6 +324,43 @@ class LLMService:
                     total_chars += len(str(block))
         return total_chars // 4
 
+    async def capabilities(self, *, model: str | None = None) -> ProviderCapabilities:
+        """Return configured provider capabilities without a network call."""
+
+        provider = self._config.provider
+        resolved_model = model if model is not None else self._config.model
+        if provider == "openai":
+            return ProviderCapabilities(
+                provider=provider,
+                model=resolved_model,
+                supports_tools=True,
+                supports_streaming=True,
+                supports_structured_output=True,
+                supports_audio=True,
+                supports_embeddings=True,
+                supports_responses=True,
+                supports_realtime=True,
+            )
+        if provider == "anthropic":
+            return ProviderCapabilities(
+                provider=provider,
+                model=resolved_model,
+                supports_tools=True,
+                supports_streaming=True,
+                supports_thinking=True,
+                supports_structured_output=True,
+                supports_documents=True,
+            )
+        if provider == "ollama":
+            return ProviderCapabilities(
+                provider=provider,
+                model=resolved_model,
+                supports_tools=True,
+                supports_streaming=True,
+                supports_embeddings=True,
+            )
+        return ProviderCapabilities(provider=provider, model=resolved_model)
+
     def with_structured_output(self, model_cls: type[T]) -> StructuredLLM[T]:
         """Return a StructuredLLM that forces schema-valid output.
 
@@ -294,6 +382,20 @@ class LLMService:
         from lauren_ai._transport._structured import StructuredLLM  # noqa: PLC0415
 
         return StructuredLLM(self, model_cls)
+
+    async def structured_complete(self, messages: list[Message], model_cls: type[T]) -> T:
+        """Use a provider-native structured parser when available.
+
+        ``StructuredLLM`` calls this method before falling back to its portable
+        synthetic-tool strategy. A missing native parser is represented by
+        ``NotImplementedError`` so provider/API errors are not hidden by a
+        second request.
+        """
+
+        parser = getattr(self._transport, "structured_complete", None)
+        if parser is None:
+            raise NotImplementedError("The configured transport has no native structured parser")
+        return await parser(messages, model=self._config.model, model_cls=model_cls)
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +467,9 @@ class LLMModule:
         config: LLMConfig,
         *,
         transport_override: Any | None = None,
+        client_override: Any | None = None,
+        client_factory: Any | None = None,
+        signals: Any | None = None,
     ) -> type:
         """Create a ``@module`` that provides :class:`LLMService` and
         :class:`EmbedService`.
@@ -375,10 +480,18 @@ class LLMModule:
             one derived from *config*.  Pass a
             :class:`~lauren_ai._transport._mock.MockTransport` here in tests.
         :type transport_override: Any | None
+        :param signals: Optional :class:`~lauren_ai._signals.SignalBus` used by
+            native provider services for model-call lifecycle events.
+        :type signals: Any | None
         :return: A ``@module``-decorated class.
         :rtype: type
         """
-        transport = _build_transport(config, override=transport_override)
+        transport = _build_transport(
+            config,
+            override=transport_override,
+            client_override=client_override,
+            client_factory=client_factory,
+        )
         llm_service = LLMService(transport=transport, config=config)
         embed_service = EmbedService(llm_service=llm_service)
 
@@ -394,6 +507,52 @@ class LLMModule:
             _config_provider,
         ]
         exports = [LLMService, EmbedService, LLMConfig]
+
+        # Native provider services share the transport's lazily-created async
+        # client. They are registered only for the selected provider, so an
+        # Anthropic-only application does not need the OpenAI SDK installed.
+        native_instances: list[tuple[type, Any]] = []
+        try:
+            from lauren_ai._providers import (  # noqa: PLC0415
+                AnthropicBatchService,
+                AnthropicClient,
+                AnthropicMessagesService,
+                AnthropicModelsService,
+                OpenAIClient,
+                OpenAIRealtimeService,
+                OpenAIResponsesService,
+            )
+
+            get_client = getattr(transport, "get_client", None)
+            native_client: Any
+            if config.provider == "openai":
+                native_client = OpenAIClient(config, client_factory=get_client if callable(get_client) else None)
+                native_instances.extend(
+                    [
+                        (OpenAIClient, native_client),
+                        (OpenAIResponsesService, OpenAIResponsesService(native_client, signals=signals)),
+                        (OpenAIRealtimeService, OpenAIRealtimeService(native_client)),
+                    ]
+                )
+            elif config.provider == "anthropic":
+                native_client = AnthropicClient(config, client_factory=get_client if callable(get_client) else None)
+                messages_service = AnthropicMessagesService(native_client, signals=signals)
+                native_instances.extend(
+                    [
+                        (AnthropicClient, native_client),
+                        (AnthropicMessagesService, messages_service),
+                        (AnthropicBatchService, AnthropicBatchService(native_client)),
+                        (AnthropicModelsService, AnthropicModelsService(native_client)),
+                    ]
+                )
+        except ImportError:
+            # Native wrappers have no eager provider imports, but keep module
+            # construction resilient if an optional dependency is unavailable.
+            native_instances = []
+
+        for token, instance in native_instances:
+            providers.append(use_value(provide=token, value=instance))
+            exports.append(token)
 
         # Also try to export the transport under the Transport protocol token
         try:
@@ -412,6 +571,11 @@ class LLMModule:
             transport_instance: Any = transport
             llm_service_instance: LLMService = llm_service
             embed_service_instance: EmbedService = embed_service
+            native_services: dict[str, Any] = {token.__name__: instance for token, instance in native_instances}
+
+        for token, instance in native_instances:
+            attr_name = token.__name__[0].lower() + token.__name__[1:] + "_instance"
+            setattr(_LLMModule, attr_name, instance)
 
         _LLMModule.__name__ = "LLMModule"
         _LLMModule.__qualname__ = "LLMModule"

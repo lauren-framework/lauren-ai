@@ -43,6 +43,7 @@ from lauren_ai._transport import (
     ContentBlock,
     Embedding,
     Message,
+    RequestOptions,
     TokenUsage,
     ToolCall,
     ToolCallDelta,
@@ -261,11 +262,22 @@ class OllamaTransport:
         """
         if self._client is None:
             httpx = _require_httpx()
-            self._client = httpx.AsyncClient(
-                base_url=self._base_url,
-                timeout=self._config.timeout,
-            )
+            kwargs: dict[str, Any] = dict(self._config.client_options or {})
+            kwargs.setdefault("base_url", self._base_url)
+            kwargs.setdefault("timeout", self._config.timeout)
+            if self._config.default_headers is not None:
+                kwargs.setdefault("headers", dict(self._config.default_headers))
+            if self._config.default_query is not None:
+                kwargs.setdefault("params", dict(self._config.default_query))
+            self._client = httpx.AsyncClient(**kwargs)
         return self._client
+
+    async def close(self) -> None:
+        """Close the lazily-created HTTP client."""
+
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     async def complete(
         self,
@@ -281,6 +293,9 @@ class OllamaTransport:
         stream: bool = False,
         thinking: bool = False,
         thinking_budget_tokens: int = 8000,
+        top_p: float | None = None,
+        max_completion_tokens: int | None = None,
+        request_options: RequestOptions | None = None,
     ) -> Completion | AsyncIterator[CompletionChunk]:
         """Send messages to Ollama and return the completion.
 
@@ -325,10 +340,14 @@ class OllamaTransport:
                 "temperature": temperature,
             },
         }
+        if top_p is not None:
+            payload["options"]["top_p"] = top_p
         if stop_sequences:
             payload["options"]["stop"] = stop_sequences
         if tools:
             payload["tools"] = [_tool_schema_to_ollama(t) for t in tools]
+        if request_options is not None and request_options.extra_body:
+            payload.update(dict(request_options.extra_body))
 
         if stream:
             return self._stream(payload)

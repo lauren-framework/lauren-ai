@@ -31,7 +31,7 @@ Usage::
 #### `LLMModule.for_root`
 
 ```python
-def for_root(cls, config: LLMConfig, transport_override: Any | None = None) -> type
+def for_root(cls, config: LLMConfig, transport_override: Any | None = None, client_override: Any | None = None, client_factory: Any | None = None) -> type
 ```
 
 Create a `@module` that provides `LLMService` and
@@ -89,7 +89,7 @@ startup.
 #### `AgentModule.for_root`
 
 ```python
-def for_root(cls, agents: list[type], tools: list[Any] | None = None, imports: Any | None = None, signals: Any | None = None, config: AgentConfig | None = None, tool_cache: Any | None = None, knowledge: list[Any] | None = None, runner: type | None = None, injects: list[type] | None = None, export_tools: list[type] | None = None, shared_tools: list[type] | None = None) -> type
+def for_root(cls, agents: list[type], tools: list[Any] | None = None, imports: Any | None = None, signals: Any | None = None, message_bus: Any | None = None, config: AgentConfig | None = None, tool_cache: Any | None = None, knowledge: list[Any] | None = None, runner: type | None = None, injects: list[type] | None = None, export_tools: list[type] | None = None, shared_tools: list[type] | None = None, global_tool_hooks: list[type] | None = None, mcp_servers: list[Any] | None = None) -> type
 ```
 
 Create a `@module` providing the agent runner and all agent instances.
@@ -112,6 +112,10 @@ exports. |
 | `signals` | `Any | None` | Optional `SignalBus` to wire
 into the `AgentRunner` so it emits
 `ModelCallComplete` / `AgentRunComplete` events. |
+| `message_bus` | `Any | None` | Optional shared inter-agent message bus.  When
+supplied, it is registered as a DI value provider, exported from
+the module, threaded into the generated runner, and exposed on
+`AgentContext` / `ToolContext`. |
 | `config` | `AgentConfig | None` | Default `AgentConfig`. |
 | `tool_cache` | `Any | None` | Cache backend for tool result caching. |
 | `knowledge` | `list[Any] | None` | List of `KnowledgeSource`
@@ -162,6 +166,12 @@ as a provider in multiple `AgentModule` instances.
 The tools remain fully usable by agents in this module — the DI container resolves
 them through the import chain.  Only the *declaration* step is skipped; ownership,
 lifecycle, and scope all remain in the providing module. |
+| `mcp_servers` | `list[Any] | None` | Optional list of MCP server configurations.  Each
+entry is an `McpServerConfig(alias, client)` or a bare
+`McpClientProtocol` (alias derived from the command/URL).  At
+application startup the bridge connects every client, fetches its
+tool list, and injects `{alias}__{tool_name}` entries into every
+agent's tool map so they are visible to the LLM. |
 
 **Returns:** `type` — A `@module`-decorated class.
 
@@ -198,7 +208,7 @@ directly into controllers or agents::
 #### `LLMService.complete`
 
 ```python
-def complete(self, messages: list[Message], system: str | None = None, tools: list[Any] | None = None, tool_choice: Any | None = None, model: str | None = None, max_tokens: int | None = None, temperature: float | None = None, stream: bool = False) -> Completion | AsyncIterator[CompletionChunk]
+def complete(self, messages: list[Message], system: str | None = None, tools: list[Any] | None = None, tool_choice: Any | None = None, model: str | None = None, max_tokens: int | None = None, temperature: float | None = None, top_p: float | None = None, max_completion_tokens: int | None = None, stop_sequences: list[str] | None = None, request_options: RequestOptions | None = None, extra_headers: dict[str, str] | None = None, extra_query: dict[str, Any] | None = None, extra_body: dict[str, Any] | None = None, stream: bool = False) -> Completion | AsyncIterator[CompletionChunk]
 ```
 
 Run a completion with merged per-call overrides and config defaults.
@@ -256,6 +266,14 @@ Compute embeddings for a list of input strings.
 
 **Returns:** `list[Embedding]` — One `Embedding` per input.
 
+#### `LLMService.close`
+
+```python
+def close(self) -> None
+```
+
+Close the underlying provider transport when it owns its client.
+
 #### `LLMService.count_tokens`
 
 ```python
@@ -274,6 +292,14 @@ does not support `count_tokens`.
 | `messages` | `list[Message]` | The messages to count. |
 
 **Returns:** `int` — Estimated or exact token count.
+
+#### `LLMService.capabilities`
+
+```python
+def capabilities(self, model: str | None = None) -> ProviderCapabilities
+```
+
+Return configured provider capabilities without a network call.
 
 #### `LLMService.with_structured_output`
 
@@ -300,3 +326,16 @@ the model must satisfy. |
 
 **Returns:** `StructuredLLM[T]` — A `StructuredLLM`
 bound to this service.
+
+#### `LLMService.structured_complete`
+
+```python
+def structured_complete(self, messages: list[Message], model_cls: type[T]) -> T
+```
+
+Use a provider-native structured parser when available.
+
+`StructuredLLM` calls this method before falling back to its portable
+synthetic-tool strategy. A missing native parser is represented by
+`NotImplementedError` so provider/API errors are not hidden by a
+second request.

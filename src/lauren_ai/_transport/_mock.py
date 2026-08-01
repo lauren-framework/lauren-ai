@@ -48,6 +48,7 @@ from lauren_ai._transport import (
     CompletionChunk,
     Embedding,
     Message,
+    RequestOptions,
     TokenUsage,
     ToolCall,
     ToolCallDelta,
@@ -320,6 +321,9 @@ class MockTransport:
         stream: bool = False,
         thinking: bool = False,
         thinking_budget_tokens: int = 8000,
+        top_p: float | None = None,
+        max_completion_tokens: int | None = None,
+        request_options: RequestOptions | None = None,
     ) -> Completion | AsyncIterator[CompletionChunk]:
         """Dequeue and return the next canned response.
 
@@ -370,6 +374,9 @@ class MockTransport:
                 stream=stream,
                 thinking=thinking,
                 thinking_budget_tokens=thinking_budget_tokens,
+                top_p=top_p,
+                max_completion_tokens=max_completion_tokens,
+                request_options=request_options,
             )
         )
 

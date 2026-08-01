@@ -58,6 +58,10 @@ __all__ = [
     "TokenUsage",
     "ToolCall",
     "ToolSchema",
+    "RequestOptions",
+    "ProviderCapabilities",
+    "OpenAIRequestOptions",
+    "AnthropicRequestOptions",
     "Embedding",
     # Multimodal content types (Section 38)
     "ImageContent",
@@ -168,6 +172,14 @@ __all__ = [
     "LLMModule",
     "AgentModule",
     "LLMService",
+    "OpenAIClient",
+    "OpenAIResponsesService",
+    "OpenAIRealtimeService",
+    "ResponsesRequest",
+    "AnthropicClient",
+    "AnthropicMessagesService",
+    "AnthropicBatchService",
+    "AnthropicModelsService",
     # Extractors
     "Agent",
     "Embed",
@@ -471,6 +483,16 @@ from lauren_ai._prompts import (
     PromptRenderError,
     PromptTemplate,
 )
+from lauren_ai._providers import (
+    AnthropicBatchService,
+    AnthropicClient,
+    AnthropicMessagesService,
+    AnthropicModelsService,
+    OpenAIClient,
+    OpenAIRealtimeService,
+    OpenAIResponsesService,
+    ResponsesRequest,
+)
 
 # ---------------------------------------------------------------------------
 # Semantic router (Section 39)
@@ -572,10 +594,14 @@ from lauren_ai._tracing import (
 # Transport types
 # ---------------------------------------------------------------------------
 from lauren_ai._transport import (
+    AnthropicRequestOptions,
     Completion,
     CompletionChunk,
     Embedding,
     Message,
+    OpenAIRequestOptions,
+    ProviderCapabilities,
+    RequestOptions,
     TokenUsage,
     ToolCall,
     ToolSchema,
