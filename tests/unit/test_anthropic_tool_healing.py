@@ -14,13 +14,12 @@ from __future__ import annotations
 import pytest
 
 from lauren_ai._memory import (
+    _INTERRUPTED_CONTENT,
     ShortTermMemory,
+    _get_tool_result_ids,
     _heal_dangling_tail,
     _heal_dangling_tail_unconditional,
-    _get_tool_result_ids,
-    _INTERRUPTED_CONTENT,
 )
-
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -296,13 +295,13 @@ class TestAnthropicMessageConversion:
         assert block["content"] == "[interrupted]"
 
     def test_legacy_role_tool_empty_tool_call_id(self) -> None:
-        """Even with a missing tool_call_id the conversion must not raise."""
+        """A legacy result without an ID is blocked before provider I/O."""
+        from lauren_ai._exceptions import ToolConversationIntegrityError
         from lauren_ai._transport._anthropic import _message_to_anthropic
 
         legacy = {"role": "tool", "content": "result"}
-        result = _message_to_anthropic(legacy)
-        assert result["role"] == "user"
-        assert result["content"][0]["tool_use_id"] == ""
+        with pytest.raises(ToolConversationIntegrityError, match="without an ID"):
+            _message_to_anthropic(legacy)
 
     def test_normal_user_message_unchanged(self) -> None:
         from lauren_ai._transport._anthropic import _message_to_anthropic

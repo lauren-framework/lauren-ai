@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Transaction-safe tool-call conversations
+
+- Added provider-neutral `ToolExchange` memory transactions and strict history
+  validation shared by `run()` and `run_stream()`.
+- Parallel, denied, filtered, cancelled, and partially completed tool batches
+  now commit one result per requested call, synthesizing bounded interruption
+  errors for unresolved calls and preserving provider call order.
+- OpenAI-compatible and Anthropic serializers fail locally on malformed tool
+  history instead of silently dropping result blocks. New lifecycle signals
+  expose exchange start, per-result, commit, abort, repair, and invariant
+  violation states without payload logging.
+
 ### Added — ToolMeta & ToolContext extensions
 
 Four new decoration-time fields on `ToolMeta` and three new runtime fields on

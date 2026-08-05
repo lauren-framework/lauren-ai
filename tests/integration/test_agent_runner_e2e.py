@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from lauren_ai import SignalBus, use_guardrails
@@ -2090,3 +2092,111 @@ class TestRunEdgeCases:
             pass
 
         assert captured[0] == "real text"
+
+
+@pytest.mark.asyncio
+async def test_stream_cancellation_between_parallel_tools_repairs_complete_batch() -> None:
+    """A cancellation cannot serialize only the fast sibling's result."""
+    fast_done = asyncio.Event()
+    release_slow = asyncio.Event()
+
+    @tool()
+    async def fast_read() -> str:
+        fast_done.set()
+        return "fast result"
+
+    @tool()
+    async def slow_read() -> str:
+        await release_slow.wait()
+        return "slow result"
+
+    @agent(model="mock-model")
+    @use_tools(fast_read, slow_read)
+    class ParallelAgent: ...
+
+    from lauren_ai._tools import _add_to_tool_map
+
+    tool_map: dict[str, object] = {}
+    _add_to_tool_map(tool_map, fast_read)
+    _add_to_tool_map(tool_map, slow_read)
+    ParallelAgent.__lauren_ai_agent__.tools = tool_map
+
+    mock = MockTransport()
+    mock.queue_response(
+        Completion(
+            id="parallel",
+            model="mock-model",
+            content="",
+            tool_calls=[
+                ToolCall(tool_use_id="fast", name="fast_read", input={}),
+                ToolCall(tool_use_id="slow", name="slow_read", input={}),
+            ],
+            stop_reason="tool_use",
+            usage=TokenUsage(input_tokens=1, output_tokens=1),
+        )
+    )
+    memory = ShortTermMemory()
+    runner = AgentRunner(transport=mock)
+
+    async def consume() -> None:
+        async for _ in await runner.run_stream(ParallelAgent(), "read both", memory=memory):
+            pass
+
+    task = asyncio.create_task(consume())
+    await asyncio.wait_for(fast_done.wait(), timeout=1.0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    release_slow.set()
+    assert memory.validate_tool_history().ok is True
+    result_blocks = [
+        block
+        for message in memory._messages
+        if isinstance(message, dict) and isinstance(message.get("content"), list)
+        for block in message["content"]
+        if isinstance(block, dict) and block.get("type") == "tool_result"
+    ]
+    assert {block["tool_use_id"] for block in result_blocks} == {"fast", "slow"}
+    assert any(block.get("is_error") is True for block in result_blocks)
+
+
+@pytest.mark.asyncio
+async def test_run_cancellation_during_approval_repairs_exchange() -> None:
+    """Cancellation while an approval hook is suspended cannot orphan calls."""
+    approval_started = asyncio.Event()
+    approval_wait = asyncio.Event()
+
+    @tool()
+    async def protected_tool() -> dict[str, bool]:
+        """Tool held behind the test approval gate."""
+        return {"ok": True}
+
+    @agent(model="mock-model")
+    @use_tools(protected_tool)
+    class ProtectedAgent: ...
+
+    class ApprovalRunner(AgentRunner):
+        async def _on_tools_requested(self, tool_calls, *, ctx):
+            approval_started.set()
+            await approval_wait.wait()
+            return tool_calls
+
+    mock = MockTransport()
+    mock.queue_tool_use("protected_tool", {})
+    memory = ShortTermMemory()
+    runner = ApprovalRunner(transport=mock)
+
+    task = asyncio.create_task(runner.run(ProtectedAgent(), "do it", memory=memory))
+    await asyncio.wait_for(approval_started.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert memory.validate_tool_history().ok
+    result_message = memory._messages[-1]
+    assert result_message["role"] == "user"
+    call_id = result_message["content"][0]["tool_use_id"]
+    assert call_id
+    assert any(block.get("id") == call_id for block in memory._messages[-2]["content"])
+    assert result_message["content"][0]["is_error"] is True

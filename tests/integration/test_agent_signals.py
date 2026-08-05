@@ -19,6 +19,9 @@ from lauren_ai._signals import (
     SignalBus,
     ToolCallComplete,
     ToolCallStarted,
+    ToolExchangeCommitted,
+    ToolExchangeResultRecorded,
+    ToolExchangeStarted,
 )
 from lauren_ai._tools import TOOL_META, tool
 from lauren_ai._transport import Completion, TokenUsage
@@ -76,6 +79,33 @@ async def echo_tool(message: str) -> str:
 @use_tools(echo_tool)
 class SignalTestAgent:
     pass
+
+
+@pytest.mark.asyncio
+async def test_tool_exchange_lifecycle_signals_are_ordered() -> None:
+    bus = SignalBus()
+    mock = MockTransport()
+    runner = make_runner_with_signals(mock, bus)
+    events: list[str] = []
+
+    @bus.on(ToolExchangeStarted)
+    async def capture_started(_event: ToolExchangeStarted) -> None:
+        events.append("started")
+
+    @bus.on(ToolExchangeResultRecorded)
+    async def capture_result(_event: ToolExchangeResultRecorded) -> None:
+        events.append("result")
+
+    @bus.on(ToolExchangeCommitted)
+    async def capture_committed(_event: ToolExchangeCommitted) -> None:
+        events.append("committed")
+
+    mock.queue_tool_use("echo_tool", {"message": "transaction"})
+    mock.queue_response(text_completion("done", id="after-tool"))
+
+    await runner.run(SignalTestAgent(), "use the tool")
+
+    assert events == ["started", "result", "committed"]
 
 
 SignalTestAgent.__lauren_ai_agent__.tools = _make_tool_map(echo_tool)

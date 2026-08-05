@@ -36,6 +36,13 @@ __all__ = [
     "ModelCallComplete",
     "ToolCallStarted",
     "ToolCallComplete",
+    "ToolExchangeStarted",
+    "ToolExchangeResultRecorded",
+    "ToolExchangeCommitted",
+    "ToolExchangeAborted",
+    "ToolExchangeRepaired",
+    "ToolConversationInvariantViolation",
+    "ToolSerializationBlocked",
     "ToolPendingApproval",
     "ToolApprovalResolved",
     "AgentTurnComplete",
@@ -192,6 +199,84 @@ class ToolCallComplete(LifecycleEvent):  # type: ignore[misc]
     duration_ms: float = 0.0
     success: bool = True
     error: str | None = None
+
+
+@dataclass
+class ToolExchangeStarted(LifecycleEvent):  # type: ignore[misc]
+    """Emitted when a complete assistant tool-call batch begins execution."""
+
+    exchange_id: str = ""
+    run_id: str | None = None
+    agent_id: str | None = None
+    call_count: int = 0
+
+
+@dataclass
+class ToolExchangeResultRecorded(LifecycleEvent):  # type: ignore[misc]
+    """Emitted after one result is durably associated with an exchange."""
+
+    exchange_id: str = ""
+    run_id: str | None = None
+    agent_id: str | None = None
+    tool_use_id: str = ""
+    status: str = ""
+    synthetic: bool = False
+
+
+@dataclass
+class ToolExchangeCommitted(LifecycleEvent):  # type: ignore[misc]
+    """Emitted after every requested call has a canonical result."""
+
+    exchange_id: str = ""
+    run_id: str | None = None
+    agent_id: str | None = None
+    call_count: int = 0
+    completed_count: int = 0
+    synthetic_count: int = 0
+
+
+@dataclass
+class ToolExchangeAborted(LifecycleEvent):  # type: ignore[misc]
+    """Emitted when an interrupted exchange is closed with recovery results."""
+
+    exchange_id: str = ""
+    run_id: str | None = None
+    agent_id: str | None = None
+    call_count: int = 0
+    repaired: bool = False
+
+
+@dataclass
+class ToolExchangeRepaired(LifecycleEvent):  # type: ignore[misc]
+    """Emitted after deterministic recovery changes canonical memory."""
+
+    exchange_id: str = ""
+    run_id: str | None = None
+    agent_id: str | None = None
+    call_count: int = 0
+
+
+@dataclass
+class ToolConversationInvariantViolation(LifecycleEvent):  # type: ignore[misc]
+    """Emitted when malformed canonical history blocks provider I/O."""
+
+    code: str = ""
+    expected_count: int = 0
+    observed_count: int = 0
+    assistant_index: int | None = None
+    repairable: bool = False
+    provider: str = ""
+    agent_id: str | None = None
+
+
+@dataclass
+class ToolSerializationBlocked(LifecycleEvent):  # type: ignore[misc]
+    """Emitted when a provider serializer rejects invalid tool history."""
+
+    provider: str = ""
+    code: str = ""
+    expected_count: int = 0
+    observed_count: int = 0
 
 
 @dataclass

@@ -495,8 +495,11 @@ class TestOpenAITransportStreamingFix:
         async for chunk in transport._stream(mock_client, call_kwargs, model="test"):
             chunks.append(chunk)
 
+        # The fallback may replace the missing name, but it must preserve the
+        # already-observed provider identity so the eventual tool_result can
+        # correlate with the original streamed call.
         fb_deltas = [
-            c for c in chunks if c.tool_call_delta is not None and c.tool_call_delta.tool_use_id.startswith("fb_")
+            c for c in chunks if c.tool_call_delta is not None and c.tool_call_delta.tool_use_id == "call_pool"
         ]
         assert len(fb_deltas) == 1
         assert fb_deltas[0].tool_call_delta.name == "search_menu_tool"
@@ -837,9 +840,9 @@ class TestAnthropicTransportEmptyNameFallback:
             chunks.append(chunk)
 
         tc_deltas = [c for c in chunks if c.tool_call_delta is not None]
-        # The blank-name header must be suppressed — only the fallback fb_ chunk appears
-        assert not any(d.tool_call_delta.tool_use_id == "toolu_empty" for d in tc_deltas)
-        fb_deltas = [d for d in tc_deltas if d.tool_call_delta.tool_use_id.startswith("fb_")]
+        # The blank-name header is suppressed; the fallback reuses the original
+        # unambiguous provider identity.
+        fb_deltas = [d for d in tc_deltas if d.tool_call_delta.tool_use_id == "toolu_empty"]
         assert len(fb_deltas) == 1
         assert fb_deltas[0].tool_call_delta.name == "search_menu_tool"
 
@@ -892,7 +895,7 @@ class TestAnthropicTransportEmptyNameFallback:
 
         assert fallback_call_count == 1
         fb_deltas = [
-            c for c in chunks if c.tool_call_delta is not None and c.tool_call_delta.tool_use_id.startswith("fb_")
+            c for c in chunks if c.tool_call_delta is not None and c.tool_call_delta.tool_use_id == "toolu_noname"
         ]
         assert len(fb_deltas) == 1
         assert fb_deltas[0].tool_call_delta.name == "check_dietary_tool"

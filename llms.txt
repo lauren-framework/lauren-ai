@@ -266,6 +266,17 @@ store = InMemoryVectorStore()
 conv = InMemoryConversationStore()
 ```
 
+`ShortTermMemory` validates provider-neutral tool-call exchanges before every
+provider request. Use `begin_tool_exchange()`, `commit_tool_exchange()`, and
+`validate_tool_history()` for a batch: every non-empty unique assistant call ID
+must have exactly one adjacent result. Cancellations, approval filtering, and
+partial execution synthesize bounded error results for unresolved calls;
+unknown, duplicate, empty, or non-adjacent IDs raise
+`ToolConversationIntegrityError` before network I/O. Snapshots retain active
+exchange state, and the lifecycle signals include
+`ToolExchangeStarted`, `ToolExchangeResultRecorded`, `ToolExchangeCommitted`,
+`ToolExchangeAborted`, and `ToolExchangeRepaired`.
+
 ### Signals — observability hooks
 
 ```python

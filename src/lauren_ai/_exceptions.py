@@ -33,6 +33,7 @@ __all__ = [
     "TransientTransportError",
     "AuthTransportError",
     "ToolExecutionError",
+    "ToolConversationIntegrityError",
     "ToolSchemaError",
     "ToolConfigError",
     "AgentMaxTurnsError",
@@ -231,6 +232,33 @@ class ToolExecutionError(LaurenAIError):
         if self.cause is not None:
             base += f" (caused by: {self.cause!r})"
         return base
+
+
+class ToolConversationIntegrityError(LaurenAIError):
+    """Raised before a provider request when tool history is malformed.
+
+    The exception intentionally exposes counts and a machine-readable code,
+    never prompts, tool arguments, tool output, or raw provider payloads.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        expected_count: int = 0,
+        observed_count: int = 0,
+        assistant_index: int | None = None,
+        repairable: bool = False,
+        provider: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.expected_count = expected_count
+        self.observed_count = observed_count
+        self.assistant_index = assistant_index
+        self.repairable = repairable
+        self.provider = provider
 
 
 class StorageError(LaurenAIError):

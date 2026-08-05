@@ -24,7 +24,12 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from lauren_ai._config import LLMConfig
-from lauren_ai._exceptions import AuthTransportError, TransientTransportError, TransportError
+from lauren_ai._exceptions import (
+    AuthTransportError,
+    ToolConversationIntegrityError,
+    TransientTransportError,
+    TransportError,
+)
 from lauren_ai._transport import (
     Completion,
     CompletionChunk,
@@ -187,6 +192,12 @@ def _message_to_anthropic(message: Any) -> dict[str, Any]:
         tool_use_id: str = (
             message.get("tool_call_id", "") if isinstance(message, dict) else getattr(message, "tool_call_id", "")
         )
+        if not tool_use_id:
+            raise ToolConversationIntegrityError(
+                "Anthropic serialization blocked a tool result without an ID",
+                code="empty_result_id",
+                provider="anthropic",
+            )
         return {
             "role": "user",
             "content": [
@@ -200,10 +211,21 @@ def _message_to_anthropic(message: Any) -> dict[str, Any]:
 
     if isinstance(content, str):
         return {"role": role, "content": content}
-    return {
-        "role": role,
-        "content": [_content_block_to_anthropic(b) for b in content],
-    }
+    converted = [_content_block_to_anthropic(b) for b in content]
+    for block in converted:
+        if block.get("type") == "tool_use" and not block.get("id"):
+            raise ToolConversationIntegrityError(
+                "Anthropic serialization blocked a tool call without an ID",
+                code="empty_call_id",
+                provider="anthropic",
+            )
+        if block.get("type") == "tool_result" and not block.get("tool_use_id"):
+            raise ToolConversationIntegrityError(
+                "Anthropic serialization blocked a tool result without an ID",
+                code="empty_result_id",
+                provider="anthropic",
+            )
+    return {"role": role, "content": converted}
 
 
 def _apply_conversation_cache(messages: list[dict[str, Any]]) -> None:
@@ -666,6 +688,25 @@ class AnthropicTransport:
         :raises AuthTransportError: On 401/403 responses.
         :raises TransportError: On other provider errors.
         """
+        from lauren_ai._memory import _validate_tool_history  # noqa: PLC0415
+
+        report = _validate_tool_history(messages)
+        if not report.ok:
+            issue = report.first_issue
+            assert issue is not None
+            raise ToolConversationIntegrityError(
+                (
+                    "Anthropic request blocked by invalid tool history: "
+                    f"code={issue.code} expected={issue.expected_count} observed={issue.observed_count}"
+                ),
+                code=issue.code,
+                expected_count=issue.expected_count,
+                observed_count=issue.observed_count,
+                assistant_index=issue.assistant_index,
+                repairable=issue.repairable,
+                provider="anthropic",
+            )
+
         client = self._get_client()
         anthropic_messages = [_message_to_anthropic(m) for m in messages]
         if self._config.cache_conversation:
@@ -955,26 +996,33 @@ class AnthropicTransport:
                             )
                             try:
                                 sync_resp = await client.messages.create(**call_kwargs)
-                                for tc_block in getattr(sync_resp, "content", []):
-                                    if getattr(tc_block, "type", None) == "tool_use":
-                                        tc_name = getattr(tc_block, "name", "") or ""
-                                        tc_input = getattr(tc_block, "input", {}) or {}
-                                        if tc_name:
-                                            logger.debug(
-                                                "anthropic_transport: fallback tool call name=%r",
-                                                tc_name,
+                                for tc_id, tc_block in zip(
+                                    _empty_name_tool_ids,
+                                    [
+                                        block
+                                        for block in getattr(sync_resp, "content", [])
+                                        if getattr(block, "type", None) == "tool_use"
+                                    ],
+                                    strict=False,
+                                ):
+                                    tc_name = getattr(tc_block, "name", "") or ""
+                                    tc_input = getattr(tc_block, "input", {}) or {}
+                                    if tc_name:
+                                        logger.debug(
+                                            "anthropic_transport: fallback tool call name=%r",
+                                            tc_name,
+                                        )
+                                        yield CompletionChunk(
+                                            tool_call_delta=ToolCallDelta(
+                                                tool_use_id=tc_id,
+                                                name=tc_name,
+                                                input_delta=json.dumps(tc_input),
                                             )
-                                            yield CompletionChunk(
-                                                tool_call_delta=ToolCallDelta(
-                                                    tool_use_id=f"fb_{uuid.uuid4().hex[:16]}",
-                                                    name=tc_name,
-                                                    input_delta=json.dumps(tc_input),
-                                                )
-                                            )
+                                        )
                             except Exception as _fb_exc:  # noqa: BLE001
                                 logger.warning(
-                                    "anthropic_transport: fallback non-streaming call failed: %s",
-                                    _fb_exc,
+                                    "anthropic_transport: fallback non-streaming call failed (%s)",
+                                    type(_fb_exc).__name__,
                                 )
 
                         yield CompletionChunk(

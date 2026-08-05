@@ -311,11 +311,15 @@ class ToolResult:
     :param is_error: ``True`` when the tool raised an exception or returned an
         explicit error payload.
     :type is_error: bool
+    :param status: Bounded execution outcome classification used by the
+        provider-neutral tool-exchange transaction.
+    :type status: str
     """
 
     tool_use_id: str
     content: str | list[Any]
     is_error: bool = False
+    status: str = "executed"
 
     @classmethod
     def ok(cls, content: Any, *, tool_use_id: str) -> ToolResult:
@@ -341,20 +345,23 @@ class ToolResult:
                 serialised = json.dumps(content, default=str)
             except (TypeError, ValueError):
                 serialised = str(content)
-        return cls(tool_use_id=tool_use_id, content=serialised, is_error=False)
+        return cls(tool_use_id=tool_use_id, content=serialised, is_error=False, status="executed")
 
     @classmethod
-    def error(cls, message: str, *, tool_use_id: str) -> ToolResult:
+    def error(cls, message: str, *, tool_use_id: str, status: str = "error") -> ToolResult:
         """Create an error ``ToolResult``.
 
         :param message: Human-readable error description.
         :type message: str
         :param tool_use_id: Matching provider tool-use identifier.
         :type tool_use_id: str
+        :param status: Bounded outcome classification, such as ``"error"`` or
+            ``"rejected"``.
+        :type status: str
         :return: A new ``ToolResult`` with ``is_error=True``.
         :rtype: ToolResult
         """
-        return cls(tool_use_id=tool_use_id, content=message, is_error=True)
+        return cls(tool_use_id=tool_use_id, content=message, is_error=True, status=status)
 
 
 # ---------------------------------------------------------------------------

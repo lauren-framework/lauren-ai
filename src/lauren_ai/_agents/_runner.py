@@ -36,8 +36,13 @@ from lauren_ai._exceptions import (
     AgentBudgetExceededError,
     AgentConfigError,
     AgentContextOverflowError,
+    ToolConversationIntegrityError,
 )
-from lauren_ai._memory import ShortTermMemory, _enforce_char_budget, _message_char_length
+from lauren_ai._memory import (
+    ShortTermMemory,
+    _enforce_char_budget,
+    _message_char_length,
+)
 from lauren_ai._messaging import AgentMessageBus
 from lauren_ai._tools import TOOL_METADATA, IdempotencyLedger, ToolContext, ToolResult
 from lauren_ai._tools._executor import CacheBackend, ToolExecutor, ToolPendingApprovalSignal
@@ -77,6 +82,93 @@ def _build_system_prompt(base: str, memory: ShortTermMemory) -> str:
     if not summary:
         return base
     return f"{base}\n\n[Earlier conversation summary]\n{summary}"
+
+
+def _validate_memory_before_provider(memory: Any) -> bool:
+    """Repair and validate memory immediately before provider serialization.
+
+    Return whether deterministic repair changed the canonical message
+    projection. Callers use that bit to emit one bounded recovery event.
+    """
+    before = list(getattr(memory, "_messages", ()))
+    repaired = False
+    ensure_valid_and_persist = getattr(memory, "ensure_valid_and_persist", None)
+    if callable(ensure_valid_and_persist):
+        changed = ensure_valid_and_persist()
+        if isinstance(changed, bool):
+            repaired = repaired or changed
+    else:
+        ensure_valid = getattr(memory, "ensure_valid", None)
+        if callable(ensure_valid):
+            ensure_valid()
+    repaired = repaired or before != list(getattr(memory, "_messages", ()))
+    validate = getattr(memory, "validate_tool_history", None)
+    if not callable(validate):
+        return repaired
+    report = validate()
+    if getattr(report, "ok", True):
+        return repaired
+    issue = getattr(report, "first_issue", None)
+    if issue is None:
+        raise ToolConversationIntegrityError(
+            "Tool conversation invariant violated",
+            code="invalid_tool_history",
+        )
+    raise ToolConversationIntegrityError(
+        (
+            "Tool conversation invariant violated: "
+            f"code={issue.code} expected={issue.expected_count} observed={issue.observed_count}"
+        ),
+        code=issue.code,
+        expected_count=issue.expected_count,
+        observed_count=issue.observed_count,
+        assistant_index=issue.assistant_index,
+        repairable=issue.repairable,
+    )
+
+
+def _complete_tool_results(tool_calls: list[ToolCall], results: list[ToolResult]) -> list[ToolResult]:
+    """Return one result per requested call, preserving provider call order."""
+    by_id: dict[str, ToolResult] = {}
+    for result in results:
+        call_id = str(result.tool_use_id or "")
+        if not call_id or call_id in by_id:
+            raise ToolConversationIntegrityError(
+                "Tool executor returned an empty or duplicate result ID",
+                code="invalid_executor_result_id",
+                expected_count=len(tool_calls),
+                observed_count=len(results),
+            )
+        by_id[call_id] = dataclasses.replace(result, tool_use_id=call_id)
+    expected = [call.tool_use_id for call in tool_calls]
+    unknown = set(by_id) - set(expected)
+    if unknown:
+        raise ToolConversationIntegrityError(
+            "Tool executor returned a result for an unknown call",
+            code="unknown_executor_result_id",
+            expected_count=len(expected),
+            observed_count=len(results),
+        )
+    completed: list[ToolResult] = []
+    for call in tool_calls:
+        completed_result = by_id.get(call.tool_use_id)
+        if completed_result is None:
+            completed_result = ToolResult.error(
+                f"Tool call '{call.name}' was not approved or did not complete.",
+                tool_use_id=call.tool_use_id,
+                status="rejected",
+            )
+        completed.append(completed_result)
+    return completed
+
+
+class _ToolExecutionInterrupted(Exception):
+    """Internal signal carrying results completed before a batch was interrupted."""
+
+    def __init__(self, partial_results: list[ToolResult], cause: BaseException) -> None:
+        super().__init__(str(cause))
+        self.partial_results = partial_results
+        self.cause = cause
 
 
 # Summarisation call parameters.  The system prompt mirrors agenthicc's manual
@@ -743,6 +835,7 @@ class AgentRunnerBase(AgentRunner):
             prior = await effective_store.load(conversation_id)
             if prior:
                 memory.restore(prior)
+        await self._preflight_memory(memory, _run_sinks, agent_run_id)
         # ── Input guardrails ─────────────────────────────────────────────────
         _input_guards = _get_input_guardrails(agent)
         if _input_guards:
@@ -831,6 +924,17 @@ class AgentRunnerBase(AgentRunner):
             for _turn in range(effective_config.max_turns):
                 ctx.turn = _turn
 
+                if await self._preflight_memory(memory, _run_sinks, agent_run_id):
+                    exchange = getattr(memory, "active_tool_exchange", None)
+                    await self._emit(
+                        "ToolExchangeRepaired",
+                        _run_sinks,
+                        exchange_id=getattr(exchange, "exchange_id", ""),
+                        run_id=agent_run_id,
+                        agent_id=agent_run_id,
+                        call_count=len(getattr(exchange, "call_ids", ())),
+                    )
+
                 # ── Compaction ladder rung 1: proactive LLM compaction ────
                 # Exact-count-triggered, meaning-preserving — runs *before* the
                 # hard guard would resort to lossy truncation (PRD-135).
@@ -871,7 +975,18 @@ class AgentRunnerBase(AgentRunner):
                     completion_kwargs["max_completion_tokens"] = effective_config.max_completion_tokens
                 if effective_config.request_options is not None:
                     completion_kwargs["request_options"] = effective_config.request_options
-                completion = await self._transport.complete(messages, **completion_kwargs)
+                try:
+                    completion = await self._transport.complete(messages, **completion_kwargs)
+                except ToolConversationIntegrityError as exc:
+                    await self._emit(
+                        "ToolSerializationBlocked",
+                        _run_sinks,
+                        provider=type(self._transport).__name__,
+                        code=exc.code,
+                        expected_count=exc.expected_count,
+                        observed_count=exc.observed_count,
+                    )
+                    raise
                 duration_ms = (time.monotonic() - t0) * 1000
 
                 # Accumulate usage
@@ -958,30 +1073,105 @@ class AgentRunnerBase(AgentRunner):
                     break
 
                 if completion.stop_reason == "tool_use" and completion.tool_calls:
-                    # Extension point — subclasses can filter, pause, or reorder.
-                    approved_calls = await self._on_tools_requested(list(completion.tool_calls), ctx=ctx)
-                    if approved_calls:
-                        results = await self._execute_tools(
-                            approved_calls,
-                            ctx=ctx,
-                            agent=agent,
-                            model=model,
-                            run_sinks=_run_sinks,
-                        )
-                    else:
-                        results = [
-                            ToolResult.error(
-                                f"Tool call '{tc.name}' was not approved.",
-                                tool_use_id=tc.tool_use_id,
+                    exchange = (
+                        memory.begin_tool_exchange(completion.tool_calls, run_id=agent_run_id)
+                        if callable(getattr(memory, "begin_tool_exchange", None))
+                        else None
+                    )
+                    if exchange is not None:
+                        try:
+                            await self._emit(
+                                "ToolExchangeStarted",
+                                _run_sinks,
+                                exchange_id=exchange.exchange_id,
+                                run_id=agent_run_id,
+                                agent_id=agent_run_id,
+                                call_count=len(exchange.call_ids),
                             )
-                            for tc in completion.tool_calls
-                        ]
+                        except BaseException:
+                            await self._recover_interrupted_exchange(memory, exchange, [], _run_sinks, agent_run_id)
+                            raise
+                    try:
+                        # Extension point — subclasses can filter, pause, or
+                        # reorder. Keep approval inside the transaction guard:
+                        # cancellation while waiting for approval must still
+                        # close every requested call with a result.
+                        approved_calls = await self._on_tools_requested(list(completion.tool_calls), ctx=ctx)
+                        if approved_calls:
+                            results = await self._execute_tools(
+                                approved_calls,
+                                ctx=ctx,
+                                agent=agent,
+                                model=model,
+                                run_sinks=_run_sinks,
+                            )
+                        else:
+                            results = [
+                                ToolResult.error(
+                                    f"Tool call '{tc.name}' was not approved.",
+                                    tool_use_id=tc.tool_use_id,
+                                    status="rejected",
+                                )
+                                for tc in completion.tool_calls
+                            ]
+                    except _ToolExecutionInterrupted as interrupted:
+                        if exchange is not None:
+                            repaired_exchange = memory.commit_tool_exchange(exchange, interrupted.partial_results)
+                            await self._emit_tool_exchange_results(repaired_exchange, _run_sinks, agent_run_id)
+                            aborted = memory.abort_tool_exchange(exchange, repaired=True)
+                            await self._emit(
+                                "ToolExchangeRepaired",
+                                _run_sinks,
+                                exchange_id=aborted.exchange_id,
+                                run_id=agent_run_id,
+                                agent_id=agent_run_id,
+                                call_count=len(aborted.call_ids),
+                            )
+                            await self._emit(
+                                "ToolExchangeAborted",
+                                _run_sinks,
+                                exchange_id=aborted.exchange_id,
+                                run_id=agent_run_id,
+                                agent_id=agent_run_id,
+                                call_count=len(aborted.call_ids),
+                                repaired=True,
+                            )
+                        else:
+                            memory.add_tool_results(
+                                _complete_tool_results(list(completion.tool_calls), interrupted.partial_results)
+                            )
+                        raise interrupted.cause from interrupted
+                    except BaseException:
+                        if exchange is not None:
+                            await self._recover_interrupted_exchange(memory, exchange, [], _run_sinks, agent_run_id)
+                        raise
                     all_tool_calls.extend(completion.tool_calls)
+
+                    # A filtering hook may return a subset.  Complete the
+                    # response batch before it reaches memory so omitted calls
+                    # cannot disappear from the provider conversation.
+                    if results:
+                        results = _complete_tool_results(list(completion.tool_calls), results)
 
                     # Record tool results as ONE consolidated message so that
                     # Anthropic sees all parallel tool_results in the same
                     # immediately-following user turn (required by the API).
-                    memory.add_tool_results(results)
+                    if results:
+                        if exchange is not None:
+                            committed = memory.commit_tool_exchange(exchange, results)
+                            await self._emit_tool_exchange_results(committed, _run_sinks, agent_run_id)
+                            await self._emit(
+                                "ToolExchangeCommitted",
+                                _run_sinks,
+                                exchange_id=committed.exchange_id,
+                                run_id=agent_run_id,
+                                agent_id=agent_run_id,
+                                call_count=len(committed.call_ids),
+                                completed_count=len(committed.outcomes),
+                                synthetic_count=sum(1 for item in committed.outcomes if item.synthetic),
+                            )
+                        else:
+                            memory.add_tool_results(results)
 
                     # Continue loop for next turn
                     continue
@@ -1137,6 +1327,17 @@ class AgentRunnerBase(AgentRunner):
             prior = await effective_store.load(conversation_id)
             if prior:
                 memory.restore(prior)
+
+        if await self._preflight_memory(memory, _run_sinks, agent_run_id):
+            exchange = getattr(memory, "active_tool_exchange", None)
+            await self._emit(
+                "ToolExchangeRepaired",
+                _run_sinks,
+                exchange_id=getattr(exchange, "exchange_id", ""),
+                run_id=agent_run_id,
+                agent_id=agent_run_id,
+                call_count=len(getattr(exchange, "call_ids", ())),
+            )
 
         # ── Input guardrails (before first LLM call) ─────────────────────
         _stream_input_guards = _get_input_guardrails(agent)
@@ -1351,7 +1552,16 @@ class AgentRunnerBase(AgentRunner):
                 # before assembling the message list.  This persists the heal
                 # into _messages so subsequent add_user / add_assistant calls
                 # build on a consistent history.
-                memory.ensure_valid()
+                if await self._preflight_memory(memory, run_sinks, agent_run_id):
+                    exchange = getattr(memory, "active_tool_exchange", None)
+                    await self._emit(
+                        "ToolExchangeRepaired",
+                        run_sinks,
+                        exchange_id=getattr(exchange, "exchange_id", ""),
+                        run_id=agent_run_id,
+                        agent_id=agent_run_id,
+                        call_count=len(getattr(exchange, "call_ids", ())),
+                    )
                 messages = memory.messages()
                 # Hard pre-send guard (rungs 2-3): drop oldest → truncate → error,
                 # so the request never exceeds the model's window (PRD-133 D/E).
@@ -1379,7 +1589,18 @@ class AgentRunnerBase(AgentRunner):
                     stream_kwargs["max_completion_tokens"] = effective_config.max_completion_tokens
                 if effective_config.request_options is not None:
                     stream_kwargs["request_options"] = effective_config.request_options
-                stream = await self._transport.complete(messages, **stream_kwargs)
+                try:
+                    stream = await self._transport.complete(messages, **stream_kwargs)
+                except ToolConversationIntegrityError as exc:
+                    await self._emit(
+                        "ToolSerializationBlocked",
+                        run_sinks,
+                        provider=type(self._transport).__name__,
+                        code=exc.code,
+                        expected_count=exc.expected_count,
+                        observed_count=exc.observed_count,
+                    )
+                    raise
 
                 # Accumulate the full completion while yielding chunks
                 accumulated_text = ""
@@ -1563,34 +1784,119 @@ class AgentRunnerBase(AgentRunner):
                         break
 
                     if accumulated_stop_reason == "tool_use" and accumulated_tool_calls:
-                        # Extension point — subclasses can filter, pause, or reorder.
-                        approved_calls = await self._on_tools_requested(list(accumulated_tool_calls), ctx=ctx)
-                        if approved_calls:
-                            results = await self._execute_tools(
-                                approved_calls,
-                                ctx=ctx,
-                                agent=agent,
-                                model=model,
-                                run_sinks=run_sinks,
-                            )
-                        else:
-                            results = [
-                                ToolResult.error(
-                                    f"Tool call '{tc.name}' was not approved.",
-                                    tool_use_id=tc.tool_use_id,
+                        exchange = (
+                            memory.begin_tool_exchange(accumulated_tool_calls, run_id=agent_run_id)
+                            if callable(getattr(memory, "begin_tool_exchange", None))
+                            else None
+                        )
+                        if exchange is not None:
+                            try:
+                                await self._emit(
+                                    "ToolExchangeStarted",
+                                    run_sinks,
+                                    exchange_id=exchange.exchange_id,
+                                    run_id=agent_run_id,
+                                    agent_id=agent_run_id,
+                                    call_count=len(exchange.call_ids),
                                 )
-                                for tc in accumulated_tool_calls
-                            ]
+                            except BaseException:
+                                await self._recover_interrupted_exchange(memory, exchange, [], run_sinks, agent_run_id)
+                                raise
+                        try:
+                            # Keep approval inside the exchange guard so a
+                            # cancelled approval overlay cannot leave a bare
+                            # assistant tool-call message behind.
+                            approved_calls = await self._on_tools_requested(list(accumulated_tool_calls), ctx=ctx)
+                            if approved_calls:
+                                results = await self._execute_tools(
+                                    approved_calls,
+                                    ctx=ctx,
+                                    agent=agent,
+                                    model=model,
+                                    run_sinks=run_sinks,
+                                )
+                            else:
+                                results = [
+                                    ToolResult.error(
+                                        f"Tool call '{tc.name}' was not approved.",
+                                        tool_use_id=tc.tool_use_id,
+                                        status="rejected",
+                                    )
+                                    for tc in accumulated_tool_calls
+                                ]
+                        except _ToolExecutionInterrupted as interrupted:
+                            if exchange is not None:
+                                repaired_exchange = memory.commit_tool_exchange(exchange, interrupted.partial_results)
+                                await self._emit_tool_exchange_results(repaired_exchange, run_sinks, agent_run_id)
+                                aborted = memory.abort_tool_exchange(exchange, repaired=True)
+                                await self._emit(
+                                    "ToolExchangeRepaired",
+                                    run_sinks,
+                                    exchange_id=aborted.exchange_id,
+                                    run_id=agent_run_id,
+                                    agent_id=agent_run_id,
+                                    call_count=len(aborted.call_ids),
+                                )
+                                await self._emit(
+                                    "ToolExchangeAborted",
+                                    run_sinks,
+                                    exchange_id=aborted.exchange_id,
+                                    run_id=agent_run_id,
+                                    agent_id=agent_run_id,
+                                    call_count=len(aborted.call_ids),
+                                    repaired=True,
+                                )
+                            else:
+                                memory.add_tool_results(
+                                    _complete_tool_results(list(accumulated_tool_calls), interrupted.partial_results)
+                                )
+                            raise interrupted.cause from interrupted
+                        except BaseException:
+                            if exchange is not None:
+                                await self._recover_interrupted_exchange(memory, exchange, [], run_sinks, agent_run_id)
+                            raise
                         all_tool_calls.extend(accumulated_tool_calls)
+                        if results:
+                            results = _complete_tool_results(list(accumulated_tool_calls), results)
                         # Consolidate all results into ONE message (Anthropic requirement).
-                        memory.add_tool_results(results)
+                        if results:
+                            if exchange is not None:
+                                committed = memory.commit_tool_exchange(exchange, results)
+                                await self._emit_tool_exchange_results(committed, run_sinks, agent_run_id)
+                                await self._emit(
+                                    "ToolExchangeCommitted",
+                                    run_sinks,
+                                    exchange_id=committed.exchange_id,
+                                    run_id=agent_run_id,
+                                    agent_id=agent_run_id,
+                                    call_count=len(committed.call_ids),
+                                    completed_count=len(committed.outcomes),
+                                    synthetic_count=sum(1 for item in committed.outcomes if item.synthetic),
+                                )
+                            else:
+                                memory.add_tool_results(results)
                         continue
 
                 except BaseException:
                     # Heal any dangling tool_use so that the next call to
                     # run_stream() / ensure_valid() finds a consistent history
                     # regardless of provider or interruption point.
-                    memory.ensure_valid()
+                    try:
+                        if await self._preflight_memory(memory, run_sinks, agent_run_id):
+                            exchange = getattr(memory, "active_tool_exchange", None)
+                            await self._emit(
+                                "ToolExchangeRepaired",
+                                run_sinks,
+                                exchange_id=getattr(exchange, "exchange_id", ""),
+                                run_id=agent_run_id,
+                                agent_id=agent_run_id,
+                                call_count=len(getattr(exchange, "call_ids", ())),
+                            )
+                    except Exception:  # noqa: BLE001
+                        # Preserve the original cancellation/provider failure;
+                        # the next invocation will surface the typed invariant
+                        # error if deterministic repair was impossible.
+                        logger.warning("lauren_ai: unable to repair interrupted tool history", exc_info=True)
                     raise
 
                 if accumulated_stop_reason == "max_tokens":
@@ -1736,13 +2042,29 @@ class AgentRunnerBase(AgentRunner):
         :rtype: list[ToolResult]
         """
         if ctx.config.parallel_tool_calls and len(tool_calls) > 1:
-            coros = [self._execute_single_tool(tc, ctx=ctx, agent=agent, run_sinks=run_sinks) for tc in tool_calls]
-            results = list(await asyncio.gather(*coros, return_exceptions=False))
-        else:
-            results = []
+            tasks = [
+                asyncio.create_task(self._execute_single_tool(tc, ctx=ctx, agent=agent, run_sinks=run_sinks))
+                for tc in tool_calls
+            ]
+            try:
+                return list(await asyncio.gather(*tasks, return_exceptions=False))
+            except BaseException as exc:
+                # Gather can raise after one sibling has completed. Drain all
+                # tasks before propagating so the conversation transaction can
+                # preserve every result that actually finished.
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                settled = await asyncio.gather(*tasks, return_exceptions=True)
+                partial = [item for item in settled if isinstance(item, ToolResult)]
+                raise _ToolExecutionInterrupted(partial, exc) from exc
+
+        results: list[ToolResult] = []
+        try:
             for tc in tool_calls:
-                result = await self._execute_single_tool(tc, ctx=ctx, agent=agent, run_sinks=run_sinks)
-                results.append(result)
+                results.append(await self._execute_single_tool(tc, ctx=ctx, agent=agent, run_sinks=run_sinks))
+        except BaseException as exc:
+            raise _ToolExecutionInterrupted(results, exc) from exc
         return results
 
     async def _execute_single_tool(
@@ -1963,7 +2285,18 @@ class AgentRunnerBase(AgentRunner):
         # Lifecycle hook: on_tool_result
         hook_result = await self._call_hook_with_return(agent, "on_tool_result", result, ctx)
         if hook_result is not None and isinstance(hook_result, ToolResult):
-            result = hook_result
+            # Hooks may replace output, but they do not own provider
+            # correlation.  Re-key compatibility results to the request ID so
+            # a legacy hook cannot create an orphan tool_result message.
+            result = dataclasses.replace(hook_result, tool_use_id=tool_call.tool_use_id)
+
+        if not isinstance(result, ToolResult):
+            result = ToolResult.error(
+                "Tool executor returned an invalid result.",
+                tool_use_id=tool_call.tool_use_id,
+            )
+        elif result.tool_use_id != tool_call.tool_use_id:
+            result = dataclasses.replace(result, tool_use_id=tool_call.tool_use_id)
 
         # PRD-129 Phase 1: record only successful results so a later
         # transport-retry attempt replays them instead of re-executing the tool.
@@ -2126,3 +2459,86 @@ class AgentRunnerBase(AgentRunner):
                     signal_name,
                     exc_info=True,
                 )
+
+    async def _preflight_memory(
+        self,
+        memory: Any,
+        sinks: tuple[Any, ...],
+        agent_id: str,
+    ) -> bool:
+        """Validate memory and emit safe diagnostics when provider I/O is blocked."""
+        try:
+            return _validate_memory_before_provider(memory)
+        except ToolConversationIntegrityError as exc:
+            await self._emit(
+                "ToolConversationInvariantViolation",
+                sinks,
+                code=exc.code,
+                expected_count=exc.expected_count,
+                observed_count=exc.observed_count,
+                assistant_index=exc.assistant_index,
+                repairable=exc.repairable,
+                provider=type(self._transport).__name__,
+                agent_id=agent_id,
+            )
+            raise
+
+    async def _emit_tool_exchange_results(
+        self,
+        exchange: Any,
+        sinks: tuple[Any, ...],
+        agent_id: str,
+    ) -> None:
+        """Emit bounded lifecycle signals for the results in a committed exchange."""
+        for outcome in getattr(exchange, "outcomes", ()):
+            await self._emit(
+                "ToolExchangeResultRecorded",
+                sinks,
+                exchange_id=getattr(exchange, "exchange_id", ""),
+                run_id=getattr(exchange, "run_id", None),
+                agent_id=agent_id,
+                tool_use_id=getattr(outcome, "tool_use_id", ""),
+                status=getattr(outcome, "status", ""),
+                synthetic=bool(getattr(outcome, "synthetic", False)),
+            )
+
+    async def _recover_interrupted_exchange(
+        self,
+        memory: Any,
+        exchange: Any,
+        partial_results: list[ToolResult],
+        sinks: tuple[Any, ...],
+        agent_id: str,
+    ) -> None:
+        """Close an exchange without masking the original interruption."""
+        try:
+            current = getattr(memory, "active_tool_exchange", None)
+            if getattr(current, "exchange_id", None) == getattr(exchange, "exchange_id", None) and getattr(
+                current, "state", ""
+            ) in {"committed", "aborted"}:
+                return
+            repaired_exchange = memory.commit_tool_exchange(exchange, partial_results)
+            await self._emit_tool_exchange_results(repaired_exchange, sinks, agent_id)
+            aborted = memory.abort_tool_exchange(exchange, repaired=True)
+            await self._emit(
+                "ToolExchangeRepaired",
+                sinks,
+                exchange_id=aborted.exchange_id,
+                run_id=agent_id,
+                agent_id=agent_id,
+                call_count=len(aborted.call_ids),
+            )
+            await self._emit(
+                "ToolExchangeAborted",
+                sinks,
+                exchange_id=aborted.exchange_id,
+                run_id=agent_id,
+                agent_id=agent_id,
+                call_count=len(aborted.call_ids),
+                repaired=True,
+            )
+        except BaseException:  # noqa: BLE001
+            logger.warning(
+                "lauren_ai: unable to durably close an interrupted tool exchange",
+                exc_info=True,
+            )

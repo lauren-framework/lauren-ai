@@ -33,7 +33,12 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Literal
 
 from lauren_ai._config import LLMConfig
-from lauren_ai._exceptions import AuthTransportError, TransientTransportError, TransportError
+from lauren_ai._exceptions import (
+    AuthTransportError,
+    ToolConversationIntegrityError,
+    TransientTransportError,
+    TransportError,
+)
 from lauren_ai._transport import (
     Completion,
     CompletionChunk,
@@ -149,8 +154,11 @@ def _message_to_openai(message: Any) -> list[dict[str, Any]]:
         if role == "tool":
             tc_id = message.get("tool_call_id", "") if isinstance(message, dict) else ""
             if not tc_id:
-                # Skip tool messages with no ID — cannot be sent to OpenAI.
-                return []
+                raise ToolConversationIntegrityError(
+                    "OpenAI serialization blocked a tool result without an ID",
+                    code="empty_result_id",
+                    provider="openai",
+                )
             return [{"role": "tool", "tool_call_id": tc_id, "content": content}]
         return [{"role": role, "content": content}]
 
@@ -174,12 +182,12 @@ def _message_to_openai(message: Any) -> list[dict[str, Any]]:
         else:
             blk_content = block.content
             blk_tool_use_id = block.tool_use_id or ""
-        # A tool result without a tool_use_id cannot be sent to OpenAI — the API
-        # rejects any tool message missing tool_call_id (even an empty string).
-        # Skip such blocks silently; the upstream heal logic should have already
-        # ensured all tool calls have matching results.
         if not blk_tool_use_id:
-            continue
+            raise ToolConversationIntegrityError(
+                "OpenAI serialization blocked a tool result without an ID",
+                code="empty_result_id",
+                provider="openai",
+            )
         if isinstance(blk_content, list):
             blk_content = json.dumps(blk_content)
         result.append(
@@ -199,13 +207,19 @@ def _message_to_openai(message: Any) -> list[dict[str, Any]]:
             if block_type == "tool_use":
                 if isinstance(block, dict):
                     # ShortTermMemory stores tool_use blocks with an "id" key
-                    blk_id = block.get("id") or block.get("tool_use_id") or f"call_{uuid.uuid4().hex[:16]}"
+                    blk_id = block.get("id") or block.get("tool_use_id") or ""
                     blk_name = block.get("name", "")
                     blk_input = block.get("input", {})
                 else:
-                    blk_id = block.tool_use_id or f"call_{uuid.uuid4().hex[:16]}"
+                    blk_id = block.tool_use_id or ""
                     blk_name = block.name or ""
                     blk_input = block.input or {}
+                if not blk_id:
+                    raise ToolConversationIntegrityError(
+                        "OpenAI serialization blocked a tool call without an ID",
+                        code="empty_call_id",
+                        provider="openai",
+                    )
                 tool_calls_list.append(
                     {
                         "id": blk_id,
@@ -587,6 +601,25 @@ class OpenAITransport:
         :raises AuthTransportError: On 401/403.
         :raises TransportError: On other provider errors.
         """
+        from lauren_ai._memory import _validate_tool_history  # noqa: PLC0415
+
+        report = _validate_tool_history(messages)
+        if not report.ok:
+            issue = report.first_issue
+            assert issue is not None
+            raise ToolConversationIntegrityError(
+                (
+                    "OpenAI request blocked by invalid tool history: "
+                    f"code={issue.code} expected={issue.expected_count} observed={issue.observed_count}"
+                ),
+                code=issue.code,
+                expected_count=issue.expected_count,
+                observed_count=issue.observed_count,
+                assistant_index=issue.assistant_index,
+                repairable=issue.repairable,
+                provider="openai",
+            )
+
         client = self._get_client()
 
         # Translate all messages.
@@ -836,6 +869,7 @@ class OpenAITransport:
                                     "id": tc_id or f"call_{uuid.uuid4().hex[:16]}",
                                     "name": fn_name or "",
                                     "args": "",
+                                    "emitted_args": 0,
                                 }
                             else:
                                 if tc_id:
@@ -851,16 +885,22 @@ class OpenAITransport:
                             # string or omit it entirely on subsequent deltas.
                             accumulated_name = _tool_call_state[idx]["name"]
 
-                            # Skip blank header deltas (no name yet, no args)
-                            # to avoid creating phantom entries in the runner.
-                            if not accumulated_name and not fn_args:
+                            # Buffer arguments until the identity is known. A
+                            # fallback response must not create a second call,
+                            # and emitting an unnamed argument delta would make
+                            # the streaming parser produce an ambiguous call.
+                            if not accumulated_name:
                                 continue
+
+                            emitted_args = int(_tool_call_state[idx]["emitted_args"])
+                            pending_args = _tool_call_state[idx]["args"][emitted_args:]
+                            _tool_call_state[idx]["emitted_args"] = len(_tool_call_state[idx]["args"])
 
                             yield CompletionChunk(
                                 tool_call_delta=ToolCallDelta(
                                     tool_use_id=_tool_call_state[idx]["id"],
-                                    name=accumulated_name or None,
-                                    input_delta=fn_args or "",
+                                    name=accumulated_name,
+                                    input_delta=pending_args,
                                 )
                             )
 
@@ -886,33 +926,32 @@ class OpenAITransport:
                                     None,
                                 )
                                 raw_tcs = getattr(sync_msg, "tool_calls", None) or []
-                                for tc in raw_tcs:
+                                missing_indices = [idx for idx, state in _tool_call_state.items() if not state["name"]]
+                                for position, tc in enumerate(raw_tcs):
                                     tc_fn = getattr(tc, "function", None)
                                     if tc_fn is None:
                                         continue
                                     tc_name = getattr(tc_fn, "name", "") or ""
                                     tc_args = getattr(tc_fn, "arguments", "") or ""
-                                    logger.debug(
-                                        "openai_transport: fallback tool call name=%r args=%r",
-                                        tc_name,
-                                        tc_args[:80],
-                                    )
-                                    if tc_name:
-                                        # Use a fresh ID so the runner's
-                                        # partial_tool_inputs dict doesn't
-                                        # collide with the (empty-named)
-                                        # streaming entry for the same call.
+                                    logger.debug("openai_transport: fallback tool call name=%r", tc_name)
+                                    if tc_name and position < len(missing_indices):
+                                        state = _tool_call_state[missing_indices[position]]
+                                        # Reuse the already-streamed call ID so
+                                        # fallback data cannot create a second
+                                        # assistant tool call. The buffered
+                                        # unnamed arguments were never emitted;
+                                        # the fallback supplies them now.
                                         yield CompletionChunk(
                                             tool_call_delta=ToolCallDelta(
-                                                tool_use_id=f"fb_{uuid.uuid4().hex[:16]}",
+                                                tool_use_id=state["id"],
                                                 name=tc_name,
                                                 input_delta=tc_args,
                                             )
                                         )
                             except Exception as _fb_exc:  # noqa: BLE001
                                 logger.warning(
-                                    "openai_transport: fallback non-streaming call failed: %s",
-                                    _fb_exc,
+                                    "openai_transport: fallback non-streaming call failed (%s)",
+                                    type(_fb_exc).__name__,
                                 )
 
                         # Include usage if present in the same chunk.

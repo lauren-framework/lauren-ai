@@ -22,6 +22,13 @@ __all__ = [
     "MemoryResult",
     "MemoryStore",
     "ShortTermMemory",
+    "ToolCallRecord",
+    "ToolExchange",
+    "ToolHistoryIssue",
+    "ToolHistoryReport",
+    "ToolResultRecord",
+    "extract_tool_call_ids",
+    "extract_tool_result_ids",
     "MemoryFact",
     "UserMemoryStore",
     "InMemoryUserMemoryStore",
@@ -38,8 +45,22 @@ __all__ = [
 
 import copy
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
+
+from lauren_ai._exceptions import ToolConversationIntegrityError
+from lauren_ai._memory._tool_integrity import (
+    ToolCallRecord,
+    ToolExchange,
+    ToolHistoryIssue,
+    ToolHistoryReport,
+    ToolResultRecord,
+    extract_tool_call_ids,
+    extract_tool_result_ids,
+    is_tool_call_message,
+    is_tool_result_message,
+)
 
 # ---------------------------------------------------------------------------
 # Shared result type
@@ -686,6 +707,219 @@ def _enforce_char_budget(messages: list[Any], budget_chars: int) -> list[Any]:
     return result
 
 
+def _tool_history_error(report: ToolHistoryReport) -> ToolConversationIntegrityError:
+    """Convert a validation report into a safe public exception."""
+    issue = report.first_issue
+    if issue is None:
+        raise ValueError("Cannot construct a tool-history error from a valid report")
+    return ToolConversationIntegrityError(
+        (
+            "Tool conversation invariant violated: "
+            f"code={issue.code} expected={issue.expected_count} observed={issue.observed_count}"
+        ),
+        code=issue.code,
+        expected_count=issue.expected_count,
+        observed_count=issue.observed_count,
+        assistant_index=issue.assistant_index,
+        repairable=issue.repairable,
+    )
+
+
+def _validate_tool_history(messages: list[Any]) -> ToolHistoryReport:
+    """Validate assistant tool batches and their immediately following results."""
+    issues: list[ToolHistoryIssue] = []
+    consumed_result_indexes: set[int] = set()
+    for index, message in enumerate(messages):
+        expected = extract_tool_call_ids(message)
+        if not is_tool_call_message(message):
+            continue
+
+        if any(not value for value in expected):
+            issues.append(
+                ToolHistoryIssue(
+                    "empty_call_id",
+                    "assistant tool-call batch contains an empty call ID",
+                    index,
+                    expected,
+                    (),
+                    False,
+                )
+            )
+            continue
+        if len(set(expected)) != len(expected):
+            issues.append(
+                ToolHistoryIssue(
+                    "duplicate_call_id",
+                    "assistant tool-call batch contains duplicate call IDs",
+                    index,
+                    expected,
+                    (),
+                    False,
+                )
+            )
+            continue
+
+        next_index = index + 1
+        if next_index >= len(messages) or not is_tool_result_message(messages[next_index]):
+            later_result = any(is_tool_result_message(item) for item in messages[next_index:])
+            issues.append(
+                ToolHistoryIssue(
+                    "non_adjacent_results" if later_result else "missing_results",
+                    "tool results do not immediately follow the assistant batch",
+                    index,
+                    expected,
+                    (),
+                    not later_result,
+                )
+            )
+            continue
+
+        observed: list[str] = []
+        result_index = next_index
+        while result_index < len(messages) and is_tool_result_message(messages[result_index]):
+            consumed_result_indexes.add(result_index)
+            observed.extend(extract_tool_result_ids(messages[result_index]))
+            result_index += 1
+
+        if any(not value for value in observed):
+            issues.append(
+                ToolHistoryIssue(
+                    "empty_result_id",
+                    "tool result exchange contains an empty call ID",
+                    index,
+                    expected,
+                    tuple(observed),
+                    False,
+                )
+            )
+            continue
+        if len(set(observed)) != len(observed):
+            issues.append(
+                ToolHistoryIssue(
+                    "duplicate_result_id",
+                    "tool result exchange contains duplicate call IDs",
+                    index,
+                    expected,
+                    tuple(observed),
+                    False,
+                )
+            )
+            continue
+        unknown = set(observed) - set(expected)
+        if unknown:
+            issues.append(
+                ToolHistoryIssue(
+                    "unknown_result_id",
+                    "tool result exchange contains an ID not requested by the assistant",
+                    index,
+                    expected,
+                    tuple(observed),
+                    False,
+                )
+            )
+            continue
+        missing = set(expected) - set(observed)
+        if missing:
+            issues.append(
+                ToolHistoryIssue(
+                    "missing_results",
+                    "tool result exchange does not answer every assistant call",
+                    index,
+                    expected,
+                    tuple(observed),
+                    True,
+                )
+            )
+    for index, message in enumerate(messages):
+        if is_tool_result_message(message) and index not in consumed_result_indexes:
+            issues.append(
+                ToolHistoryIssue(
+                    "orphan_result",
+                    "tool result is not attached to an assistant tool-call batch",
+                    None,
+                    (),
+                    extract_tool_result_ids(message),
+                    False,
+                )
+            )
+    return ToolHistoryReport(tuple(issues))
+
+
+def _synthetic_result(call_id: str) -> Any:
+    """Create a provider-neutral error result without importing at module load."""
+    from lauren_ai._tools import ToolResult  # noqa: PLC0415
+
+    return ToolResult.error(
+        "[Tool execution was interrupted before a result was received.]",
+        tool_use_id=call_id,
+        status="synthetic",
+    )
+
+
+_TOOL_OUTCOME_STATUSES = frozenset({"executed", "error", "rejected", "cancelled", "timed_out", "synthetic"})
+
+
+def _outcome_status(result: Any, *, synthetic: bool) -> str:
+    """Return a bounded transaction outcome classification."""
+    if synthetic:
+        return "synthetic"
+    if isinstance(result, dict):
+        candidate = result.get("status", "")
+        is_error = bool(result.get("is_error", False))
+    else:
+        candidate = getattr(result, "status", "")
+        is_error = bool(getattr(result, "is_error", False))
+    status = str(candidate) if candidate in _TOOL_OUTCOME_STATUSES else ""
+    return status or ("error" if is_error else "executed")
+
+
+def _repair_tool_history(messages: list[Any]) -> tuple[list[Any], ToolHistoryReport]:
+    """Repair only deterministic missing-result tails and validate again."""
+    report = _validate_tool_history(messages)
+    if report.ok:
+        return list(messages), report
+    if not report.repairable:
+        raise _tool_history_error(report)
+
+    repaired = copy.deepcopy(messages)
+    for issue in sorted(report.issues, key=lambda item: item.assistant_index or -1, reverse=True):
+        if issue.assistant_index is None:
+            continue
+        assistant_index = issue.assistant_index
+        expected = issue.expected_ids
+        observed: list[str] = []
+        result_index = assistant_index + 1
+        while result_index < len(repaired) and is_tool_result_message(repaired[result_index]):
+            observed.extend(extract_tool_result_ids(repaired[result_index]))
+            result_index += 1
+        missing = [call_id for call_id in expected if call_id not in set(observed)]
+        if not missing:
+            continue
+        blocks = [
+            {
+                "type": "tool_result",
+                "tool_use_id": call_id,
+                "content": "[Tool execution was interrupted before a result was received.]",
+                "is_error": True,
+            }
+            for call_id in missing
+        ]
+        first_result_index = assistant_index + 1
+        if first_result_index < len(repaired) and is_tool_result_message(repaired[first_result_index]):
+            first = repaired[first_result_index]
+            if isinstance(first, dict) and first.get("role") == "user" and isinstance(first.get("content"), list):
+                first["content"].extend(blocks)
+            else:
+                repaired[result_index:result_index] = [{"role": "user", "content": blocks}]
+        else:
+            repaired[result_index:result_index] = [{"role": "user", "content": blocks}]
+
+    final = _validate_tool_history(repaired)
+    if not final.ok:
+        raise _tool_history_error(final)
+    return repaired, final
+
+
 class ShortTermMemory:
     """Sliding-window conversation buffer for a single agent run.
 
@@ -713,6 +947,214 @@ class ShortTermMemory:
         self._max_tokens = max_tokens
         self._messages: list[Any] = []
         self._summary: str | None = None
+        self._active_exchange: ToolExchange | None = None
+
+    def validate_tool_history(self) -> ToolHistoryReport:
+        """Validate every assistant tool exchange in the current history.
+
+        The report contains only machine-readable codes, counts, and indexes;
+        it never includes prompts, tool arguments, or tool output.  Callers
+        that are about to contact a provider must reject a non-``ok`` report.
+        """
+        return _validate_tool_history(self._messages)
+
+    @property
+    def active_tool_exchange(self) -> ToolExchange | None:
+        """Return the most recently started tool exchange, if any."""
+        return self._active_exchange
+
+    def repair_tool_history(self) -> ToolHistoryReport:
+        """Repair deterministic missing-result exchanges in place.
+
+        Missing results are filled with explicit error results.  Empty,
+        duplicate, unknown, or non-adjacent IDs are not guessed at and raise
+        :class:`ToolConversationIntegrityError` instead.
+        """
+        before = self.validate_tool_history()
+        repaired, report = _repair_tool_history(self._messages)
+        self._messages = repaired
+        exchange = self._active_exchange
+        if exchange is not None and exchange.state == "started" and not before.ok:
+            self._abort_repaired_exchange(exchange)
+        return report
+
+    def _abort_repaired_exchange(self, exchange: ToolExchange) -> None:
+        """Record repaired outcomes and close an in-flight exchange once."""
+        observed = {tool_use_id for message in self._messages for tool_use_id in extract_tool_result_ids(message)}
+        outcomes = tuple(
+            ToolResultRecord(
+                tool_use_id=call_id,
+                status="synthetic" if call_id not in observed else "executed",
+                synthetic=call_id not in observed,
+            )
+            for call_id in exchange.call_ids
+        )
+        aborted = exchange.with_outcomes(outcomes).aborted()
+        self._active_exchange = aborted
+        for outcome in outcomes:
+            self.on_tool_exchange_result_recorded(aborted, outcome)
+        self.on_tool_exchange_aborted(aborted, repaired=True)
+
+    def begin_tool_exchange(self, tool_calls: Iterable[Any], run_id: str | None = None) -> ToolExchange:
+        """Start an exchange for the most recently appended assistant batch."""
+        if self._active_exchange is not None and self._active_exchange.state == "started":
+            raise ToolConversationIntegrityError(
+                "A tool exchange is already in progress",
+                code="exchange_already_started",
+                expected_count=len(self._active_exchange.call_ids),
+                observed_count=0,
+            )
+        exchange = ToolExchange.from_tool_calls(tool_calls, run_id=run_id)
+        if not self._messages or extract_tool_call_ids(self._messages[-1]) != exchange.call_ids:
+            raise ToolConversationIntegrityError(
+                "Tool exchange does not match the most recent assistant batch",
+                code="exchange_batch_mismatch",
+                expected_count=len(exchange.call_ids),
+                observed_count=len(extract_tool_call_ids(self._messages[-1])) if self._messages else 0,
+            )
+        self._active_exchange = exchange
+        self.on_tool_exchange_started(exchange)
+        return exchange
+
+    def commit_tool_exchange(
+        self,
+        exchange: ToolExchange,
+        results: list[Any],
+        *,
+        on_unresolved: str = "synthesize_error_results",
+    ) -> ToolExchange:
+        """Commit one complete result batch for *exchange*.
+
+        Results are reordered to the assistant's call order.  A missing result
+        is synthesized when ``on_unresolved`` requests the default recovery;
+        unknown, duplicate, or empty IDs always fail locally.
+        """
+        if exchange.state == "committed":
+            return exchange
+        if exchange.state == "aborted":
+            raise ToolConversationIntegrityError(
+                "Cannot commit an aborted tool exchange",
+                code="exchange_already_aborted",
+                expected_count=len(exchange.call_ids),
+                observed_count=0,
+            )
+        current = self._active_exchange
+        if current is not None and current.exchange_id != exchange.exchange_id:
+            raise ToolConversationIntegrityError(
+                "Tool exchange does not own the active transaction",
+                code="exchange_owner_mismatch",
+                expected_count=len(current.call_ids),
+                observed_count=len(exchange.call_ids),
+            )
+        if current is not None and current.exchange_id == exchange.exchange_id:
+            if current.state == "committed":
+                return current
+            if current.state == "aborted":
+                raise ToolConversationIntegrityError(
+                    "Cannot commit an aborted tool exchange",
+                    code="exchange_already_aborted",
+                    expected_count=len(exchange.call_ids),
+                    observed_count=0,
+                )
+        expected = exchange.call_ids
+        actual: list[str] = []
+        for result in results:
+            if isinstance(result, dict):
+                actual.extend(extract_tool_result_ids(result))
+            else:
+                actual.append(str(getattr(result, "tool_use_id", "") or ""))
+        if any(not value for value in actual):
+            raise ToolConversationIntegrityError(
+                "Tool exchange contains an empty result ID",
+                code="empty_result_id",
+                expected_count=len(expected),
+                observed_count=len(actual),
+            )
+        if len(set(actual)) != len(actual):
+            raise ToolConversationIntegrityError(
+                "Tool exchange contains duplicate result IDs",
+                code="duplicate_result_id",
+                expected_count=len(expected),
+                observed_count=len(actual),
+            )
+        if set(actual) - set(expected):
+            raise ToolConversationIntegrityError(
+                "Tool exchange contains an unknown result ID",
+                code="unknown_result_id",
+                expected_count=len(expected),
+                observed_count=len(actual),
+            )
+        missing = [call_id for call_id in expected if call_id not in set(actual)]
+        if missing and on_unresolved != "synthesize_error_results":
+            raise ToolConversationIntegrityError(
+                "Tool exchange does not contain a result for every call",
+                code="missing_results",
+                expected_count=len(expected),
+                observed_count=len(actual),
+                repairable=True,
+            )
+
+        by_id = {
+            str(getattr(result, "tool_use_id", "") or ""): result for result in results if not isinstance(result, dict)
+        }
+        for result in results:
+            if isinstance(result, dict):
+                result_ids = extract_tool_result_ids(result)
+                if len(result_ids) == 1:
+                    by_id[result_ids[0]] = result
+        ordered = [by_id[call_id] for call_id in expected if call_id in by_id]
+        ordered.extend(_synthetic_result(call_id) for call_id in missing)
+        self.add_tool_results(ordered)
+        report = self.validate_tool_history()
+        if not report.ok:
+            raise _tool_history_error(report)
+        synthetic_ids = set(missing)
+        outcomes = tuple(
+            ToolResultRecord(
+                tool_use_id=call_id,
+                status=_outcome_status(by_id.get(call_id), synthetic=call_id in synthetic_ids),
+                synthetic=call_id in synthetic_ids,
+            )
+            for call_id in expected
+        )
+        committed = exchange.with_outcomes(outcomes).committed()
+        self._active_exchange = committed
+        for outcome in outcomes:
+            self.on_tool_exchange_result_recorded(committed, outcome)
+        self.on_tool_exchange_committed(committed)
+        return committed
+
+    def abort_tool_exchange(self, exchange: ToolExchange, *, repaired: bool = False) -> ToolExchange:
+        """Mark an exchange aborted after unresolved calls were repaired."""
+        current = self._active_exchange
+        if current is not None and current.exchange_id == exchange.exchange_id and current.state == "aborted":
+            return current
+        if current is not None and current.exchange_id == exchange.exchange_id and current.state == "committed":
+            return current
+        if exchange.state == "committed":
+            return exchange
+        if exchange.state == "aborted":
+            return exchange
+        aborted = (
+            current.aborted()
+            if current is not None and current.exchange_id == exchange.exchange_id
+            else exchange.aborted()
+        )
+        self._active_exchange = aborted
+        self.on_tool_exchange_aborted(aborted, repaired=repaired)
+        return aborted
+
+    def on_tool_exchange_started(self, exchange: ToolExchange) -> None:
+        """Lifecycle hook for durable memory implementations."""
+
+    def on_tool_exchange_committed(self, exchange: ToolExchange) -> None:
+        """Lifecycle hook for durable memory implementations."""
+
+    def on_tool_exchange_result_recorded(self, exchange: ToolExchange, outcome: ToolResultRecord) -> None:
+        """Lifecycle hook after one result is associated with an exchange."""
+
+    def on_tool_exchange_aborted(self, exchange: ToolExchange, *, repaired: bool) -> None:
+        """Lifecycle hook for durable memory implementations."""
 
     @property
     def max_tokens(self) -> int:
@@ -750,6 +1192,21 @@ class ShortTermMemory:
             "content": "..."}`` dict.
         :type completion: Any
         """
+        incoming_ids = extract_tool_call_ids(completion)
+        if any(not value for value in incoming_ids):
+            raise ToolConversationIntegrityError(
+                "Assistant tool-call batch contains an empty call ID",
+                code="empty_call_id",
+                expected_count=len(incoming_ids),
+                observed_count=0,
+            )
+        if len(set(incoming_ids)) != len(incoming_ids):
+            raise ToolConversationIntegrityError(
+                "Assistant tool-call batch contains duplicate call IDs",
+                code="duplicate_call_id",
+                expected_count=len(incoming_ids),
+                observed_count=0,
+            )
         if isinstance(completion, dict):
             self._messages.append(completion)
             return
@@ -791,6 +1248,19 @@ class ShortTermMemory:
         :param result: A ``ToolResult`` object or dict.
         :type result: Any
         """
+        expected = extract_tool_call_ids(self._messages[-1]) if self._messages else ()
+        result_id = (
+            extract_tool_result_ids(result)[0]
+            if isinstance(result, dict) and extract_tool_result_ids(result)
+            else str(getattr(result, "tool_use_id", "") or "")
+        )
+        if expected and (len(expected) != 1 or result_id != expected[0]):
+            raise ToolConversationIntegrityError(
+                "A single result cannot commit a multi-call assistant exchange",
+                code="partial_result_batch",
+                expected_count=len(expected),
+                observed_count=1 if result_id else 0,
+            )
         if isinstance(result, dict):
             self._messages.append(result)
             return
@@ -834,6 +1304,37 @@ class ShortTermMemory:
         """
         if not results:
             return
+
+        expected = extract_tool_call_ids(self._messages[-1]) if self._messages else ()
+        if expected:
+            actual: list[str] = []
+            for result in results:
+                if isinstance(result, dict):
+                    actual.extend(extract_tool_result_ids(result))
+                else:
+                    actual.append(str(getattr(result, "tool_use_id", "") or ""))
+            if any(not value for value in actual):
+                raise ToolConversationIntegrityError(
+                    "Tool result exchange contains an empty result ID",
+                    code="empty_result_id",
+                    expected_count=len(expected),
+                    observed_count=len(actual),
+                )
+            if len(actual) != len(set(actual)):
+                raise ToolConversationIntegrityError(
+                    "Tool result exchange contains duplicate result IDs",
+                    code="duplicate_result_id",
+                    expected_count=len(expected),
+                    observed_count=len(actual),
+                )
+            if set(actual) != set(expected):
+                raise ToolConversationIntegrityError(
+                    "Tool result exchange does not answer exactly the assistant batch",
+                    code="result_batch_mismatch",
+                    expected_count=len(expected),
+                    observed_count=len(actual),
+                )
+
         if len(results) == 1:
             self.add_tool_result(results[0])
             return
@@ -1030,7 +1531,10 @@ class ShortTermMemory:
 
         The method is idempotent — calling it multiple times is safe.
         """
-        self._messages = _heal_dangling_tail_unconditional(self._messages)
+        before = self.validate_tool_history()
+        self._messages, _ = _repair_tool_history(self._messages)
+        if self._active_exchange is not None and self._active_exchange.state == "started" and not before.ok:
+            self._abort_repaired_exchange(self._active_exchange)
 
     @property
     def token_estimate(self) -> int:
@@ -1053,6 +1557,7 @@ class ShortTermMemory:
         :rtype: None
         """
         self._messages.clear()
+        self._active_exchange = None
 
     def snapshot(self) -> Any:
         """Return a deep copy of the current memory state.
@@ -1069,10 +1574,13 @@ class ShortTermMemory:
         :return: Snapshot dict ``{"messages": [...], "summary": str | None}``.
         :rtype: dict[str, Any]
         """
-        return {
+        snapshot: dict[str, Any] = {
             "messages": copy.deepcopy(self._messages),
             "summary": self._summary,
         }
+        if self._active_exchange is not None:
+            snapshot["tool_exchange"] = copy.deepcopy(self._active_exchange)
+        return snapshot
 
     def restore(self, data: Any) -> None:
         """Restore the memory buffer from a snapshot.
@@ -1089,9 +1597,11 @@ class ShortTermMemory:
             # Legacy format — plain list with no summary
             self._messages = list(data)
             self._summary = None
+            self._active_exchange = None
         else:
             self._messages = list(data.get("messages", []))
             self._summary = data.get("summary")
+            self._active_exchange = data.get("tool_exchange")
 
     # ------------------------------------------------------------------
     # Dunder helpers

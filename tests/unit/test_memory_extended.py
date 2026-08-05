@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from lauren_ai._exceptions import StorageError
+from lauren_ai._exceptions import StorageError, ToolConversationIntegrityError
 from lauren_ai._memory import (
     ShortTermMemory,
     _estimate_content_length,
@@ -344,7 +344,7 @@ class TestShortTermMemoryExtended:
             name = "search"
             input = {}
 
-        # This should not fail
+        # A provider response without any identity cannot be serialized safely.
         completion = Completion(
             id="c1",
             model="mock",
@@ -354,6 +354,5 @@ class TestShortTermMemoryExtended:
             usage=TokenUsage(input_tokens=5, output_tokens=2),
         )
         mem = ShortTermMemory()
-        mem.add_assistant(completion)
-        msgs = mem.messages()
-        assert len(msgs) == 1
+        with pytest.raises(ToolConversationIntegrityError, match="empty call ID"):
+            mem.add_assistant(completion)

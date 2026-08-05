@@ -281,6 +281,7 @@ result = ToolResult.error("City not found.", tool_use_id="toolu_abc")
 
 print(result.content)   # str
 print(result.is_error)  # bool
+print(result.status)    # executed, error, rejected, cancelled, timed_out, or synthetic
 ```
 
 ### `ToolContext`
@@ -508,6 +509,23 @@ snapshot = mem.snapshot()  # Save state
 mem.restore(snapshot)      # Restore state
 mem.clear()                # Clear all messages
 ```
+
+### Transaction-safe tool exchanges
+
+`ShortTermMemory.validate_tool_history()` is the authoritative provider-neutral
+invariant check. `begin_tool_exchange()` binds the ordered assistant call IDs;
+`commit_tool_exchange()` reorders valid results, synthesizes stable error
+results for unresolved calls, and records ordered outcomes. Empty, duplicate,
+unknown, or non-adjacent IDs are rejected locally. `run()` and `run_stream()`
+share this boundary and validate before each provider request. Snapshot/restore
+preserves an active exchange, and interruption repair is idempotent.
+
+The corresponding lifecycle signals are `ToolExchangeStarted`,
+`ToolExchangeResultRecorded`, `ToolExchangeCommitted`, `ToolExchangeAborted`,
+`ToolExchangeRepaired`, `ToolConversationInvariantViolation`, and
+`ToolSerializationBlocked`. Signal and error metadata contains counts and
+safe correlation fields only; prompts, tool arguments, outputs, and secrets
+are not included.
 
 ### `InMemoryConversationStore`
 
