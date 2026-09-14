@@ -113,6 +113,10 @@ async def _completion_as_stream(
     """
     import json as _json  # noqa: PLC0415
 
+    if completion.reasoning_content is not None:
+        # Emit an empty delta too: it distinguishes an explicitly present
+        # empty provider field from a field that was absent.
+        yield CompletionChunk(reasoning_content_delta=completion.reasoning_content)
     if completion.content:
         yield CompletionChunk(delta=completion.content)
     # Emit one tool_call_delta chunk per tool call so _stream_loop accumulates them.
@@ -471,6 +475,8 @@ def _aggregate_chunks(
     content_parts: list[str] = []
     stop_reason: str = "end_turn"
     usage: TokenUsage = TokenUsage(input_tokens=0, output_tokens=0)
+    reasoning_parts: list[str] = []
+    reasoning_present = False
 
     # Tool call accumulation.
     _tool_calls: dict[str, dict[str, Any]] = {}  # tool_use_id -> {name, input_json}
@@ -478,6 +484,9 @@ def _aggregate_chunks(
     for chunk in chunks:
         if chunk.delta:
             content_parts.append(chunk.delta)
+        if chunk.reasoning_content_delta is not None:
+            reasoning_parts.append(chunk.reasoning_content_delta)
+            reasoning_present = True
         if chunk.stop_reason:
             stop_reason = chunk.stop_reason
         if chunk.usage is not None:
@@ -518,4 +527,5 @@ def _aggregate_chunks(
         tool_calls=tool_calls,
         stop_reason=stop_reason,  # type: ignore[arg-type]
         usage=usage,
+        reasoning_content="".join(reasoning_parts) if reasoning_present else None,
     )

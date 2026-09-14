@@ -28,6 +28,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from lauren_ai._agents import AGENT_META, AgentContext, AgentMeta, AgentResponse
@@ -42,6 +43,7 @@ from lauren_ai._memory import (
     ShortTermMemory,
     _enforce_char_budget,
     _message_char_length,
+    tool_exchange_event_id,
 )
 from lauren_ai._messaging import AgentMessageBus
 from lauren_ai._tools import TOOL_METADATA, IdempotencyLedger, ToolContext, ToolResult
@@ -61,6 +63,150 @@ from lauren_ai._transport import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _CollectedStreamAttempt:
+    """Provider output buffered until one streaming step is complete.
+
+    Buffering is intentional: yielding a failed attempt's deltas would make a
+    retry duplicate text in every streaming consumer. The outer agenthicc
+    projection can still render the completed attempt immediately after the
+    provider closes the stream, while the durable step boundary stays atomic.
+    """
+
+    chunks: list[CompletionChunk]
+    text: str
+    thinking: str
+    reasoning_content: str
+    reasoning_content_present: bool
+    stop_reason: str | None
+    usage: TokenUsage | None
+    tool_calls: list[ToolCall]
+    thinking_blocks: list[ThinkingBlock | RedactedThinkingBlock]
+
+
+class _StreamAttemptInterrupted(Exception):
+    """Internal wrapper preserving partial-size metadata for a failed stream."""
+
+    def __init__(self, cause: BaseException, partial_text: str) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.partial_text = partial_text[:16_384]
+        self.partial_chars = len(partial_text)
+
+
+async def _collect_stream_attempt(
+    transport: Any,
+    messages: list[Any],
+    stream_kwargs: dict[str, Any],
+) -> _CollectedStreamAttempt:
+    """Collect one provider stream without mutating agent memory.
+
+    The provider may fail after yielding data. The data is retained only as
+    diagnostic size information when that happens; it is never mistaken for a
+    valid completion or sent to a subsequent provider request.
+    """
+
+    text = ""
+    thinking = ""
+    reasoning_parts: list[str] = []
+    reasoning_content_present = False
+    stop_reason: str | None = None
+    usage: TokenUsage | None = None
+    chunks: list[CompletionChunk] = []
+    partial_tool_inputs: dict[str, str] = {}
+    partial_tool_names: dict[str, str] = {}
+    thinking_blocks: list[ThinkingBlock | RedactedThinkingBlock] = []
+    current_thinking = ""
+    try:
+        stream = await transport.complete(messages, **stream_kwargs)
+        async for chunk in stream:
+            chunks.append(chunk)
+            if chunk.delta:
+                text += chunk.delta
+            if chunk.thinking_delta:
+                thinking += chunk.thinking_delta
+                current_thinking += chunk.thinking_delta
+            if chunk.reasoning_content_delta is not None:
+                reasoning_parts.append(chunk.reasoning_content_delta)
+                reasoning_content_present = True
+            if chunk.thinking_signature is not None:
+                thinking_blocks.append(ThinkingBlock(thinking=current_thinking, signature=chunk.thinking_signature))
+                current_thinking = ""
+            if chunk.redacted_thinking_data is not None:
+                thinking_blocks.append(RedactedThinkingBlock(data=chunk.redacted_thinking_data))
+            if chunk.tool_call_delta is not None:
+                delta = chunk.tool_call_delta
+                if delta.name:
+                    partial_tool_names[delta.tool_use_id] = delta.name
+                partial_tool_inputs.setdefault(delta.tool_use_id, "")
+                partial_tool_inputs[delta.tool_use_id] += delta.input_delta
+            if chunk.stop_reason is not None:
+                stop_reason = chunk.stop_reason
+            if chunk.usage is not None:
+                usage = chunk.usage
+    except BaseException as exc:
+        raise _StreamAttemptInterrupted(exc, text + current_thinking) from exc
+
+    if current_thinking:
+        thinking_blocks.append(ThinkingBlock(thinking=current_thinking, signature=""))
+    tool_calls: list[ToolCall] = []
+    for tool_use_id, input_json in partial_tool_inputs.items():
+        name = partial_tool_names.get(tool_use_id, "")
+        if not name:
+            continue
+        try:
+            parsed_input = json.loads(input_json)
+        except (json.JSONDecodeError, ValueError):
+            parsed_input = {}
+        tool_calls.append(ToolCall(tool_use_id=tool_use_id, name=name, input=parsed_input))
+
+    return _CollectedStreamAttempt(
+        chunks=chunks,
+        text=text,
+        thinking=thinking,
+        reasoning_content="".join(reasoning_parts),
+        reasoning_content_present=reasoning_content_present,
+        stop_reason=stop_reason,
+        usage=usage,
+        tool_calls=tool_calls,
+        thinking_blocks=thinking_blocks,
+    )
+
+
+def _stream_retryable(exc: BaseException) -> bool:
+    """Classify provider-step errors without importing agenthicc."""
+
+    try:
+        from lauren_ai._exceptions import TransientTransportError
+
+        if isinstance(exc, TransientTransportError):
+            return True
+    except ImportError:  # pragma: no cover - this module is part of lauren-ai
+        pass
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    transient_names = {
+        "ReadTimeout",
+        "ConnectTimeout",
+        "ConnectError",
+        "PoolTimeout",
+        "RemoteProtocolError",
+        "APITimeoutError",
+        "APIConnectionError",
+        "NetworkError",
+        "RemoteDisconnected",
+    }
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        status = getattr(current, "status_code", None)
+        if isinstance(status, int) and (status == 429 or status >= 500):
+            return True
+        if type(current).__name__ in transient_names:
+            return True
+        current = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -705,6 +851,10 @@ class AgentRunnerBase(AgentRunner):
     :type cache_backend: CacheBackend | None
     """
 
+    # Consumers such as agenthicc use this capability to avoid wrapping the
+    # entire multi-step stream in a second, destructive retry boundary.
+    supports_step_recovery: bool = True
+
     def __init__(
         self,
         transport: Any,
@@ -726,6 +876,12 @@ class AgentRunnerBase(AgentRunner):
         )
         # Pending HITL approvals: agent_run_id -> tool_use_id -> Future
         self._pending_approvals: dict[str, dict[str, asyncio.Future[bool]]] = {}
+        # Recovery can be discovered by several safety-net paths (the direct
+        # interruption handler, preflight, and the outer exception boundary).
+        # Keep one emission per stable exchange event for this runner instance;
+        # the session-level projector provides the second idempotency boundary
+        # across runner instances and process resume.
+        self._emitted_recovery_event_ids: set[str] = set()
 
     # ------------------------------------------------------------------
     # Public API
@@ -1365,7 +1521,13 @@ class AgentRunnerBase(AgentRunner):
                 message = _redirect
         # ─────────────────────────────────────────────────────────────────
 
-        memory.add_user(message)
+        # agenthicc may re-enter a failed logical turn after restoring the
+        # latest safe provider-step checkpoint. In that case the user message
+        # is already durable and adding it again would create a duplicate
+        # user turn. Ordinary callers retain the historical behavior.
+        resume_existing_turn = bool(metadata is not None and metadata.get("_agenthicc_resume_existing_turn") is True)
+        if not resume_existing_turn:
+            memory.add_user(message)
 
         ctx = AgentContext(
             agent_id=agent_id,
@@ -1589,64 +1751,105 @@ class AgentRunnerBase(AgentRunner):
                     stream_kwargs["max_completion_tokens"] = effective_config.max_completion_tokens
                 if effective_config.request_options is not None:
                     stream_kwargs["request_options"] = effective_config.request_options
-                try:
-                    stream = await self._transport.complete(messages, **stream_kwargs)
-                except ToolConversationIntegrityError as exc:
+
+                # A provider step is the retry unit. Memory has not yet been
+                # mutated for this response, so restoring this checkpoint can
+                # never erase a previously committed assistant/tool step.
+                step_id = f"{agent_run_id}:{_turn}"
+                step_snapshot = memory.snapshot()
+                step_started = time.monotonic()
+                collected: _CollectedStreamAttempt | None = None
+                for retry_number in range(effective_config.transport_max_retries + 1):
+                    attempt_id = f"{step_id}:{uuid.uuid4().hex[:12]}"
                     await self._emit(
-                        "ToolSerializationBlocked",
+                        "AgentStepStarted",
                         run_sinks,
-                        provider=type(self._transport).__name__,
-                        code=exc.code,
-                        expected_count=exc.expected_count,
-                        observed_count=exc.observed_count,
+                        run_id=agent_run_id,
+                        step_id=step_id,
+                        attempt_id=attempt_id,
+                        agent_id=agent_run_id,
+                        step_index=_turn,
                     )
-                    raise
-
-                # Accumulate the full completion while yielding chunks
-                accumulated_text = ""
-                accumulated_thinking = ""
-                accumulated_stop_reason: str | None = None
-                accumulated_usage: TokenUsage | None = None
-                accumulated_tool_calls: list[ToolCall] = []
-                partial_tool_inputs: dict[str, str] = {}  # tool_use_id -> input_json
-                partial_tool_names: dict[str, str] = {}  # tool_use_id -> name
-                # PRD-137 B: reconstruct ordered thinking blocks from the stream so
-                # they can be round-tripped (a thinking block is finalised when its
-                # signature_delta arrives; redacted blocks arrive whole).
-                accumulated_thinking_blocks: list[ThinkingBlock | RedactedThinkingBlock] = []
-                _cur_thinking_text = ""
-
-                async for chunk in stream:
-                    if chunk.delta:
-                        accumulated_text += chunk.delta
-
-                    if chunk.thinking_delta:
-                        accumulated_thinking += chunk.thinking_delta
-                        _cur_thinking_text += chunk.thinking_delta
-
-                    if chunk.thinking_signature is not None:
-                        accumulated_thinking_blocks.append(
-                            ThinkingBlock(thinking=_cur_thinking_text, signature=chunk.thinking_signature)
+                    try:
+                        collected = await _collect_stream_attempt(
+                            self._transport,
+                            messages,
+                            stream_kwargs,
                         )
-                        _cur_thinking_text = ""
+                        break
+                    except _StreamAttemptInterrupted as interrupted:
+                        cause = interrupted.cause
+                        if isinstance(cause, ToolConversationIntegrityError):
+                            await self._emit(
+                                "ToolSerializationBlocked",
+                                run_sinks,
+                                provider=type(self._transport).__name__,
+                                code=cause.code,
+                                expected_count=cause.expected_count,
+                                observed_count=cause.observed_count,
+                            )
+                        if isinstance(cause, (asyncio.CancelledError, KeyboardInterrupt)):
+                            raise cause from interrupted
+                        retry_delay = effective_config.transport_retry_base_delay_s * (2**retry_number)
+                        within_budget = (
+                            effective_config.transport_retry_max_total_s <= 0
+                            or time.monotonic() - step_started + retry_delay
+                            <= effective_config.transport_retry_max_total_s
+                        )
+                        retryable = _stream_retryable(cause)
+                        await self._emit(
+                            "AgentStepInterrupted",
+                            run_sinks,
+                            run_id=agent_run_id,
+                            step_id=step_id,
+                            attempt_id=attempt_id,
+                            agent_id=agent_run_id,
+                            error_kind=type(cause).__name__,
+                            partial_chars=interrupted.partial_chars,
+                            partial_text=interrupted.partial_text,
+                            retryable=retryable,
+                        )
+                        if retryable and retry_number < effective_config.transport_max_retries and within_budget:
+                            rollback_attempt = getattr(memory, "rollback_uncommitted_attempt", None)
+                            if callable(rollback_attempt):
+                                rollback_attempt(
+                                    step_snapshot,
+                                    turn_id=agent_run_id,
+                                    step_id=step_id,
+                                )
+                            else:
+                                memory.restore(step_snapshot)
+                            await self._emit(
+                                "AgentStepRetryScheduled",
+                                run_sinks,
+                                run_id=agent_run_id,
+                                step_id=step_id,
+                                attempt_id=attempt_id,
+                                agent_id=agent_run_id,
+                                retry_number=retry_number + 1,
+                                max_retries=effective_config.transport_max_retries,
+                                delay_s=retry_delay,
+                                error_kind=type(cause).__name__,
+                            )
+                            if retry_delay > 0:
+                                await asyncio.sleep(retry_delay)
+                            continue
+                        raise cause from interrupted
 
-                    if chunk.redacted_thinking_data is not None:
-                        accumulated_thinking_blocks.append(RedactedThinkingBlock(data=chunk.redacted_thinking_data))
+                if collected is None:  # pragma: no cover - defensive invariant
+                    raise RuntimeError("provider step ended without a result")
+                accumulated_text = collected.text
+                accumulated_thinking = collected.thinking
+                accumulated_reasoning_content = collected.reasoning_content
+                accumulated_reasoning_content_present = collected.reasoning_content_present
+                accumulated_stop_reason = collected.stop_reason
+                accumulated_usage = collected.usage
+                accumulated_tool_calls = collected.tool_calls
+                accumulated_thinking_blocks = collected.thinking_blocks
 
-                    if chunk.tool_call_delta is not None:
-                        tcd = chunk.tool_call_delta
-                        tid = tcd.tool_use_id
-                        if tcd.name:
-                            partial_tool_names[tid] = tcd.name
-                        partial_tool_inputs.setdefault(tid, "")
-                        partial_tool_inputs[tid] += tcd.input_delta
-
-                    if chunk.stop_reason is not None:
-                        accumulated_stop_reason = chunk.stop_reason
-
-                    if chunk.usage is not None:
-                        accumulated_usage = chunk.usage
-
+                # Do not expose deltas from an attempt until the entire attempt
+                # has succeeded; otherwise a retry would duplicate visible text.
+                for chunk in collected.chunks:
                     yield chunk
 
                 duration_ms = (time.monotonic() - t0) * 1000
@@ -1677,43 +1880,11 @@ class AgentRunnerBase(AgentRunner):
                         # reflect the safe content, not the hallucination.
                         accumulated_text = _override
                         accumulated_tool_calls = []
-                        # Clear the raw tool-delta dicts so the tool-rebuild
-                        # loop below cannot re-populate accumulated_tool_calls
-                        # from stale deltas.
-                        partial_tool_inputs = {}
-                        partial_tool_names = {}
                         accumulated_stop_reason = "end_turn"
                 # ─────────────────────────────────────────────────────────────
 
-                # Build tool calls from accumulated deltas.
-                # Skip entries with no resolved name — a tool call without a name
-                # can never be dispatched (ToolExecutor would return "unknown tool").
-                # This covers phantom entries created when the transport generates a
-                # temporary random ID for a blank first delta and then updates the
-                # real ID/name in a subsequent delta.
-                for tid, input_json in partial_tool_inputs.items():
-                    name = partial_tool_names.get(tid, "")
-                    if not name:
-                        continue
-                    try:
-                        parsed_input = json.loads(input_json)
-                    except (json.JSONDecodeError, ValueError):
-                        parsed_input = {}
-                    accumulated_tool_calls.append(
-                        ToolCall(
-                            tool_use_id=tid,
-                            name=name,
-                            input=parsed_input,
-                        )
-                    )
-
                 turn_usage = accumulated_usage or TokenUsage(input_tokens=0, output_tokens=0)
                 total_usage = total_usage + turn_usage
-
-                # Finalise any thinking text that never received a signature_delta
-                # (e.g. a gateway that omits signatures) so it is still preserved.
-                if _cur_thinking_text:
-                    accumulated_thinking_blocks.append(ThinkingBlock(thinking=_cur_thinking_text, signature=""))
 
                 synthetic_completion = Completion(
                     id=uuid.uuid4().hex,
@@ -1723,6 +1894,9 @@ class AgentRunnerBase(AgentRunner):
                     stop_reason=accumulated_stop_reason or "end_turn",  # type: ignore[arg-type]
                     usage=turn_usage,
                     thinking_blocks=accumulated_thinking_blocks,
+                    reasoning_content=(
+                        accumulated_reasoning_content if accumulated_reasoning_content_present else None
+                    ),
                 )
                 # ── Atomic commit: add_assistant + signals + tool execution ──────
                 # Everything from add_assistant onward is wrapped in a single
@@ -1781,6 +1955,15 @@ class AgentRunnerBase(AgentRunner):
 
                     if accumulated_stop_reason in ("end_turn", "stop_sequence", None):
                         final_stop_reason = "end_turn"
+                        await self._emit(
+                            "AgentStepCommitted",
+                            run_sinks,
+                            run_id=agent_run_id,
+                            step_id=step_id,
+                            agent_id=agent_run_id,
+                            step_index=_turn,
+                            message_count=len(memory._messages),
+                        )
                         break
 
                     if accumulated_stop_reason == "tool_use" and accumulated_tool_calls:
@@ -1875,6 +2058,15 @@ class AgentRunnerBase(AgentRunner):
                                 )
                             else:
                                 memory.add_tool_results(results)
+                        await self._emit(
+                            "AgentStepCommitted",
+                            run_sinks,
+                            run_id=agent_run_id,
+                            step_id=step_id,
+                            agent_id=agent_run_id,
+                            step_index=_turn,
+                            message_count=len(memory._messages),
+                        )
                         continue
 
                 except BaseException:
@@ -2420,6 +2612,25 @@ class AgentRunnerBase(AgentRunner):
         if self._signals is None and not all_sinks:
             return
 
+        if signal_name in {"ToolExchangeRepaired", "ToolExchangeAborted"}:
+            exchange_id = kwargs.get("exchange_id")
+            if isinstance(exchange_id, str) and exchange_id:
+                event_id = kwargs.get("event_id")
+                if not isinstance(event_id, str) or not event_id:
+                    event_id = tool_exchange_event_id(
+                        exchange_id,
+                        "repaired" if signal_name == "ToolExchangeRepaired" else "aborted",
+                    )
+                    kwargs["event_id"] = event_id
+                if event_id in self._emitted_recovery_event_ids:
+                    return
+                self._emitted_recovery_event_ids.add(event_id)
+                if len(self._emitted_recovery_event_ids) > 4096:
+                    # This is an observability guard only. Exchange IDs are
+                    # unique, and the durable projector remains authoritative.
+                    self._emitted_recovery_event_ids.clear()
+                    self._emitted_recovery_event_ids.add(event_id)
+
         # Build the signal instance once; a bad field set is logged once
         # rather than once per consumer.
         try:
@@ -2428,6 +2639,10 @@ class AgentRunnerBase(AgentRunner):
             signal_cls = getattr(_signals, signal_name, None)
             if signal_cls is None:
                 return
+            if "event_id" in kwargs and "event_id" not in getattr(signal_cls, "__dataclass_fields__", {}):
+                # Compatibility with lauren-ai releases predating PRD-191.
+                # The agenthicc projector derives the same ID from exchange_id.
+                kwargs.pop("event_id", None)
             event = signal_cls(**kwargs)
         except Exception:  # noqa: BLE001
             logger.debug(

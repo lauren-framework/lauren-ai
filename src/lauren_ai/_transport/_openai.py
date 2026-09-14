@@ -29,7 +29,7 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, Literal
 
 from lauren_ai._config import LLMConfig
@@ -83,6 +83,43 @@ def _require_openai() -> Any:
 # ---------------------------------------------------------------------------
 # Translation helpers
 # ---------------------------------------------------------------------------
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    """Read a field from an SDK object or a JSON-like mapping."""
+
+    if isinstance(value, Mapping):
+        return value.get(name, default)
+    # ``MagicMock`` creates arbitrary attributes on access.  Treat attributes
+    # that were not explicitly assigned as absent so compatibility fixtures do
+    # not masquerade as a provider-supplied value.
+    if type(value).__module__.startswith("unittest.mock") and name not in vars(value):
+        return default
+    return getattr(value, name, default)
+
+
+def _actionable_provider_message(exc: Exception) -> str:
+    """Return a safe recovery hint for a missing reasoning replay error.
+
+    Gateways such as Console Go report this as an ordinary HTTP 400.  The
+    original exception contains no reasoning payload, but its provider wording
+    is noisy and often leads callers to increase retries.  Keep the error
+    non-transient while replacing this one known compatibility failure with a
+    concise, payload-free recovery hint.
+    """
+
+    message = str(exc)
+    lowered = message.lower()
+    if "reasoning_content" in lowered and (
+        "passed back" in lowered or "thinking mode" in lowered or "missing" in lowered
+    ):
+        return (
+            "OpenAI-compatible provider rejected the assistant history because its "
+            "required reasoning_content was not replayed. This is non-retryable; "
+            "resume with a lauren-ai version that preserves reasoning content, "
+            "or start a new conversation."
+        )
+    return message
 
 
 def _content_block_to_openai(block: Any) -> dict[str, Any]:
@@ -144,9 +181,19 @@ def _message_to_openai(message: Any) -> list[dict[str, Any]]:
     if isinstance(message, dict):
         role: str = message.get("role", "user")
         content: Any = message.get("content", "")
+        reasoning_content: Any = message.get("reasoning_content")
     else:
         role = message.role
         content = message.content
+        reasoning_content = getattr(message, "reasoning_content", None)
+
+    if reasoning_content is not None and not isinstance(reasoning_content, str):
+        raise ValueError("OpenAI reasoning_content must be a string when present")
+
+    def _assistant_fields(payload: dict[str, Any]) -> dict[str, Any]:
+        if role == "assistant" and reasoning_content is not None:
+            payload["reasoning_content"] = reasoning_content
+        return payload
 
     if isinstance(content, str):
         # Fast path for string content — but role="tool" messages MUST preserve
@@ -160,7 +207,7 @@ def _message_to_openai(message: Any) -> list[dict[str, Any]]:
                     provider="openai",
                 )
             return [{"role": "tool", "tool_call_id": tc_id, "content": content}]
-        return [{"role": role, "content": content}]
+        return [_assistant_fields({"role": role, "content": content})]
 
     result: list[dict[str, Any]] = []
     # Separate tool_result blocks from regular content.
@@ -243,7 +290,7 @@ def _message_to_openai(message: Any) -> list[dict[str, Any]]:
             msg["content"] = ""
         if tool_calls_list:
             msg["tool_calls"] = tool_calls_list
-        result.insert(0, msg)
+        result.insert(0, _assistant_fields(msg))
 
     return result
 
@@ -469,7 +516,12 @@ class OpenAITransport:
                 return TransientTransportError(str(exc), status_code=code, provider="openai", cause=exc)
             if code in (401, 403):
                 return AuthTransportError(str(exc), status_code=code, provider="openai", cause=exc)
-            return TransportError(str(exc), status_code=code, provider="openai", cause=exc)
+            return TransportError(
+                _actionable_provider_message(exc),
+                status_code=code,
+                provider="openai",
+                cause=exc,
+            )
         if isinstance(exc, _openai.APIConnectionError):
             return TransientTransportError(str(exc), provider="openai", cause=exc)
         return None
@@ -719,71 +771,77 @@ class OpenAITransport:
         :return: Canonical :class:`~lauren_ai._transport.Completion`.
         :rtype: Completion
         """
-        usage_obj = getattr(response, "usage", None)
-        prompt_details = getattr(usage_obj, "prompt_tokens_details", None) if usage_obj else None
-        completion_details = getattr(usage_obj, "completion_tokens_details", None) if usage_obj else None
+        usage_obj = _field(response, "usage")
+        prompt_details = _field(usage_obj, "prompt_tokens_details") if usage_obj else None
+        completion_details = _field(usage_obj, "completion_tokens_details") if usage_obj else None
         usage = TokenUsage(
-            input_tokens=getattr(usage_obj, "prompt_tokens", 0) if usage_obj else 0,
-            output_tokens=getattr(usage_obj, "completion_tokens", 0) if usage_obj else 0,
-            cache_read_tokens=getattr(prompt_details, "cached_tokens", 0) if prompt_details else 0,
-            reasoning_tokens=getattr(completion_details, "reasoning_tokens", 0) if completion_details else 0,
-            audio_input_tokens=getattr(prompt_details, "audio_tokens", 0) if prompt_details else 0,
-            audio_output_tokens=getattr(completion_details, "audio_tokens", 0) if completion_details else 0,
+            input_tokens=_field(usage_obj, "prompt_tokens", 0) if usage_obj else 0,
+            output_tokens=_field(usage_obj, "completion_tokens", 0) if usage_obj else 0,
+            cache_read_tokens=_field(prompt_details, "cached_tokens", 0) if prompt_details else 0,
+            reasoning_tokens=_field(completion_details, "reasoning_tokens", 0) if completion_details else 0,
+            audio_input_tokens=_field(prompt_details, "audio_tokens", 0) if prompt_details else 0,
+            audio_output_tokens=_field(completion_details, "audio_tokens", 0) if completion_details else 0,
             provider_metadata={"estimated": usage_obj is None} if usage_obj is not None else {"estimated": True},
         )
 
-        choices = getattr(response, "choices", [])
+        choices = _field(response, "choices", [])
         if not choices:
             return Completion(
-                id=getattr(response, "id", f"chatcmpl_{uuid.uuid4().hex[:16]}"),
-                model=getattr(response, "model", model),
+                id=_field(response, "id", f"chatcmpl_{uuid.uuid4().hex[:16]}"),
+                model=_field(response, "model", model),
                 content="",
                 tool_calls=[],
                 stop_reason="end_turn",
                 usage=usage,
                 provider="openai",
-                request_id=getattr(response, "id", None),
+                request_id=_field(response, "id"),
                 provider_metadata=self._response_metadata(response),
                 raw_response=response if include_raw_response else None,
             )
 
         choice = choices[0]
-        finish_reason = getattr(choice, "finish_reason", None)
+        finish_reason = _field(choice, "finish_reason")
         stop_reason = _parse_stop_reason(finish_reason)
 
-        msg = getattr(choice, "message", None)
+        msg = _field(choice, "message")
         content: str = ""
         tool_calls: list[ToolCall] = []
+        reasoning_content: str | None = None
 
         if msg is not None:
-            content = getattr(msg, "content", "") or ""
-            raw_tool_calls = getattr(msg, "tool_calls", None) or []
+            content = _field(msg, "content", "") or ""
+            raw_reasoning_content = _field(msg, "reasoning_content")
+            if raw_reasoning_content is not None and not isinstance(raw_reasoning_content, str):
+                raise ValueError("OpenAI reasoning_content must be a string when present")
+            reasoning_content = raw_reasoning_content
+            raw_tool_calls = _field(msg, "tool_calls", None) or []
             for tc in raw_tool_calls:
-                fn = getattr(tc, "function", None)
+                fn = _field(tc, "function")
                 if fn is None:
                     continue
-                arguments_str = getattr(fn, "arguments", "{}") or "{}"
+                arguments_str = _field(fn, "arguments", "{}") or "{}"
                 try:
                     arguments = json.loads(arguments_str)
                 except json.JSONDecodeError:
                     arguments = {"_raw": arguments_str}
                 tool_calls.append(
                     ToolCall(
-                        tool_use_id=getattr(tc, "id", f"call_{uuid.uuid4().hex[:16]}"),
-                        name=getattr(fn, "name", ""),
+                        tool_use_id=_field(tc, "id", f"call_{uuid.uuid4().hex[:16]}"),
+                        name=_field(fn, "name", ""),
                         input=arguments,
                     )
                 )
 
         return Completion(
-            id=getattr(response, "id", f"chatcmpl_{uuid.uuid4().hex[:16]}"),
-            model=getattr(response, "model", model),
+            id=_field(response, "id", f"chatcmpl_{uuid.uuid4().hex[:16]}"),
+            model=_field(response, "model", model),
             content=content,
             tool_calls=tool_calls,
             stop_reason=stop_reason,
             usage=usage,
+            reasoning_content=reasoning_content,
             provider="openai",
-            request_id=getattr(response, "id", None),
+            request_id=_field(response, "id"),
             provider_metadata=self._response_metadata(response),
             raw_response=response if include_raw_response else None,
         )
@@ -794,7 +852,7 @@ class OpenAITransport:
 
         metadata: dict[str, Any] = {}
         for name in ("model", "system_fingerprint", "service_tier"):
-            value = getattr(response, name, None)
+            value = _field(response, name)
             if value is not None:
                 metadata[name] = value
         return metadata
@@ -819,17 +877,22 @@ class OpenAITransport:
         try:
             # Partial tool call accumulation state.
             _tool_call_state: dict[int, dict[str, Any]] = {}  # index -> {id, name, args}
+            # A few OpenAI-compatible gateways send incremental reasoning
+            # deltas and then repeat the complete value on the final chunk.
+            # Keep the already emitted prefix so that the aggregate suffix is
+            # emitted once rather than duplicating the provider field.
+            _reasoning_emitted = ""
 
             async with await client.chat.completions.create(**call_kwargs) as stream:
                 async for chunk in stream:
-                    choices = getattr(chunk, "choices", [])
-                    usage_obj = getattr(chunk, "usage", None)
+                    choices = _field(chunk, "choices", [])
+                    usage_obj = _field(chunk, "usage")
 
                     if not choices and usage_obj is not None:
                         # Final usage chunk.
                         usage = TokenUsage(
-                            input_tokens=getattr(usage_obj, "prompt_tokens", 0),
-                            output_tokens=getattr(usage_obj, "completion_tokens", 0),
+                            input_tokens=_field(usage_obj, "prompt_tokens", 0),
+                            output_tokens=_field(usage_obj, "completion_tokens", 0),
                         )
                         yield CompletionChunk(
                             usage=usage,
@@ -842,12 +905,12 @@ class OpenAITransport:
                         continue
 
                     choice = choices[0]
-                    delta = getattr(choice, "delta", None)
-                    finish_reason = getattr(choice, "finish_reason", None)
+                    delta = _field(choice, "delta")
+                    finish_reason = _field(choice, "finish_reason")
 
                     if delta is not None:
                         # Text delta.
-                        content = getattr(delta, "content", None)
+                        content = _field(delta, "content")
                         if content:
                             yield CompletionChunk(
                                 delta=content,
@@ -855,14 +918,31 @@ class OpenAITransport:
                                 raw_event=chunk if include_raw_response else None,
                             )
 
+                        # OpenAI-compatible reasoning models commonly expose
+                        # hidden reasoning as ``delta.reasoning_content``.
+                        # Keep it separate from visible text so the runner can
+                        # attach it to the assistant message for exact replay.
+                        reasoning_content = _field(delta, "reasoning_content")
+                        if reasoning_content is not None:
+                            if not isinstance(reasoning_content, str):
+                                raise ValueError("OpenAI reasoning_content must be a string when present")
+                            if finish_reason is not None and reasoning_content.startswith(_reasoning_emitted):
+                                reasoning_content = reasoning_content[len(_reasoning_emitted) :]
+                            yield CompletionChunk(
+                                reasoning_content_delta=reasoning_content,
+                                provider_metadata={"provider": "openai"},
+                                raw_event=chunk if include_raw_response else None,
+                            )
+                            _reasoning_emitted += reasoning_content
+
                         # Tool call deltas.
-                        raw_tc_deltas = getattr(delta, "tool_calls", None) or []
+                        raw_tc_deltas = _field(delta, "tool_calls", None) or []
                         for tc_delta in raw_tc_deltas:
-                            idx = getattr(tc_delta, "index", 0)
-                            tc_id = getattr(tc_delta, "id", None)
-                            fn = getattr(tc_delta, "function", None)
-                            fn_name = getattr(fn, "name", None) if fn else None
-                            fn_args = getattr(fn, "arguments", "") if fn else ""
+                            idx = _field(tc_delta, "index", 0)
+                            tc_id = _field(tc_delta, "id")
+                            fn = _field(tc_delta, "function")
+                            fn_name = _field(fn, "name") if fn else None
+                            fn_args = _field(fn, "arguments", "") if fn else ""
 
                             if idx not in _tool_call_state:
                                 _tool_call_state[idx] = {
@@ -958,8 +1038,8 @@ class OpenAITransport:
                         chunk_usage: TokenUsage | None = None
                         if usage_obj is not None:
                             chunk_usage = TokenUsage(
-                                input_tokens=getattr(usage_obj, "prompt_tokens", 0),
-                                output_tokens=getattr(usage_obj, "completion_tokens", 0),
+                                input_tokens=_field(usage_obj, "prompt_tokens", 0),
+                                output_tokens=_field(usage_obj, "completion_tokens", 0),
                             )
                         yield CompletionChunk(stop_reason=stop_reason, usage=chunk_usage)
 

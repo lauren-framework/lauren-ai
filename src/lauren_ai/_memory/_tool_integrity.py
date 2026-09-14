@@ -19,7 +19,19 @@ __all__ = [
     "is_tool_call_message",
     "is_tool_result_message",
     "redact_tool_ids",
+    "tool_exchange_event_id",
 ]
+
+
+def tool_exchange_event_id(exchange_id: str, event: str = "repaired") -> str:
+    """Return a stable, non-sensitive lifecycle ID for an exchange event.
+
+    The exchange ID is already an opaque transaction identity.  Hashing the
+    pair keeps the event ID safe for journals and logs while allowing every
+    observer, retry path, and resumed process to derive the same identity.
+    """
+    value = f"lauren-ai:tool-exchange:{event}:{exchange_id}"
+    return f"tool-exchange-{event}:{hashlib.sha256(value.encode('utf-8')).hexdigest()[:32]}"
 
 
 @dataclass(frozen=True, slots=True)

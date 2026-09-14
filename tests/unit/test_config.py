@@ -73,3 +73,21 @@ class TestAgentConfig:
         cfg = AgentConfig(thinking=True, thinking_budget_tokens=12000)
         assert cfg.thinking is True
         assert cfg.thinking_budget_tokens == 12000
+
+    def test_provider_step_retry_defaults_are_disabled(self):
+        cfg = AgentConfig()
+        assert cfg.transport_max_retries == 0
+        assert cfg.transport_retry_base_delay_s == 0.5
+        assert cfg.transport_retry_max_total_s == 0.0
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"transport_max_retries": -1},
+            {"transport_retry_base_delay_s": -0.1},
+            {"transport_retry_max_total_s": -1.0},
+        ],
+    )
+    def test_provider_step_retry_bounds_are_validated(self, kwargs):
+        with pytest.raises(ValueError):
+            AgentConfig(**kwargs)

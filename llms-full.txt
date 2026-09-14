@@ -171,6 +171,7 @@ result = Completion(
     stop_reason="end_turn",
     usage=TokenUsage(input_tokens=10, output_tokens=5),
     thinking_blocks=[],        # list[ThinkingBlock | RedactedThinkingBlock] — Anthropic only
+    reasoning_content=None,    # str | None — OpenAI-compatible replay metadata
 )
 
 # ThinkingBlock / RedactedThinkingBlock (Anthropic extended thinking)

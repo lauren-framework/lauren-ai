@@ -29,6 +29,7 @@ __all__ = [
     "ToolResultRecord",
     "extract_tool_call_ids",
     "extract_tool_result_ids",
+    "tool_exchange_event_id",
     "MemoryFact",
     "UserMemoryStore",
     "InMemoryUserMemoryStore",
@@ -60,6 +61,7 @@ from lauren_ai._memory._tool_integrity import (
     extract_tool_result_ids,
     is_tool_call_message,
     is_tool_result_message,
+    tool_exchange_event_id,
 )
 
 # ---------------------------------------------------------------------------
@@ -561,9 +563,13 @@ def _message_char_length(message: Any) -> int:
     :rtype: int
     """
     if isinstance(message, dict):
-        return _estimate_content_length(message.get("content", ""))
+        content_length = _estimate_content_length(message.get("content", ""))
+        reasoning = message.get("reasoning_content")
+        return content_length + (len(reasoning) if isinstance(reasoning, str) else 0)
     content = getattr(message, "content", "")
-    return _estimate_content_length(content)
+    content_length = _estimate_content_length(content)
+    reasoning = getattr(message, "reasoning_content", None)
+    return content_length + (len(reasoning) if isinstance(reasoning, str) else 0)
 
 
 def _get_role(message: Any) -> str:
@@ -1208,6 +1214,9 @@ class ShortTermMemory:
                 observed_count=0,
             )
         if isinstance(completion, dict):
+            reasoning_content = completion.get("reasoning_content")
+            if reasoning_content is not None and not isinstance(reasoning_content, str):
+                raise ValueError("reasoning_content must be a string when present")
             self._messages.append(completion)
             return
 
@@ -1215,6 +1224,15 @@ class ShortTermMemory:
         content = getattr(completion, "content", "")
         tool_calls = getattr(completion, "tool_calls", [])
         thinking_blocks = getattr(completion, "thinking_blocks", []) or []
+        reasoning_content = getattr(completion, "reasoning_content", None)
+        if reasoning_content is not None and not isinstance(reasoning_content, str):
+            raise ValueError("reasoning_content must be a string when present")
+
+        def _assistant_message(message_content: Any) -> dict[str, Any]:
+            message: dict[str, Any] = {"role": "assistant", "content": message_content}
+            if reasoning_content is not None:
+                message["reasoning_content"] = reasoning_content
+            return message
 
         if tool_calls or thinking_blocks:
             # Build a content list.  Anthropic extended thinking requires the
@@ -1236,9 +1254,9 @@ class ShortTermMemory:
                         "input": tc_input,
                     }
                 )
-            self._messages.append({"role": "assistant", "content": blocks})
+            self._messages.append(_assistant_message(blocks))
         else:
-            self._messages.append({"role": "assistant", "content": content})
+            self._messages.append(_assistant_message(content))
 
     def add_tool_result(self, result: Any) -> None:
         """Append a tool result message to the buffer.

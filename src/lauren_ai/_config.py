@@ -431,6 +431,16 @@ class AgentConfig:
         when the window is unknown.  Callers normally populate this from
         :func:`context_window_for` or an explicit override.
     :type context_window: int
+    :param transport_max_retries: Maximum retries for one streaming provider
+        step. This is distinct from the provider client's
+        ``LLMConfig.max_retries`` and never retries the whole agent run.
+    :type transport_max_retries: int
+    :param transport_retry_base_delay_s: Initial delay between streaming-step
+        retries.
+    :type transport_retry_base_delay_s: float
+    :param transport_retry_max_total_s: Optional wall-clock budget for retries
+        of one streaming provider step. Zero disables this additional cap.
+    :type transport_retry_max_total_s: float
     """
 
     system_prompt: str = field(default="You are a helpful assistant.")
@@ -455,6 +465,20 @@ class AgentConfig:
     summary_model: str | None = field(default=None)
     # Hard pre-send context-window guard (0 → disabled / window unknown)
     context_window: int = field(default=0)
+    # Streaming provider-step retry. The default is disabled for standalone
+    # lauren-ai callers; agenthicc supplies its execution settings explicitly.
+    transport_max_retries: int = field(default=0)
+    transport_retry_base_delay_s: float = field(default=0.5)
+    transport_retry_max_total_s: float = field(default=0.0)
+
+    def __post_init__(self) -> None:
+        """Reject invalid provider-step retry bounds early."""
+        if self.transport_max_retries < 0:
+            raise ValueError("transport_max_retries must be non-negative")
+        if self.transport_retry_base_delay_s < 0:
+            raise ValueError("transport_retry_base_delay_s must be non-negative")
+        if self.transport_retry_max_total_s < 0:
+            raise ValueError("transport_retry_max_total_s must be non-negative")
 
     @property
     def usable_context_budget(self) -> int:

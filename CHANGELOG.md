@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — OpenAI-compatible `reasoning_content` round-trip
+
+- OpenAI-compatible non-streaming and streaming responses now preserve the
+  provider's exact `reasoning_content` separately from visible assistant text.
+- Assistant memory, snapshots, journals, compaction, retries, cassettes, and
+  session resume retain the field on the same tool-call message.
+- OpenAI-compatible serialization replays the field verbatim; Anthropic and
+  other provider serializers do not emit it. Missing-reasoning HTTP 400s stay
+  non-retryable and receive a payload-free recovery hint.
+
 ### Added — Transaction-safe tool-call conversations
 
 - Added provider-neutral `ToolExchange` memory transactions and strict history

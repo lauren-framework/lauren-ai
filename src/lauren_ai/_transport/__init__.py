@@ -500,6 +500,10 @@ class Completion:
     :type usage: TokenUsage
     :param thinking_blocks: Extended-thinking blocks (Anthropic only).
     :type thinking_blocks: list[ThinkingBlock | RedactedThinkingBlock]
+    :param reasoning_content: Provider-specific reasoning content returned by
+        an OpenAI-compatible endpoint. When present, it is kept separate from
+        visible ``content`` and passed back verbatim on replay.
+    :type reasoning_content: str | None
     """
 
     id: str
@@ -513,6 +517,7 @@ class Completion:
     request_id: str | None = None
     provider_metadata: dict[str, Any] = field(default_factory=dict)
     raw_response: Any = field(default=None, repr=False, compare=False)
+    reasoning_content: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -524,13 +529,18 @@ class Completion:
 class CompletionChunk:
     """A single chunk from a streaming model completion.
 
-    Only one of *delta*, *thinking_delta*, or *tool_call_delta* is populated
+    Only one of *delta*, *thinking_delta*, *reasoning_content_delta*, or
+    *tool_call_delta* is populated
     per chunk (though they are not mutually exclusive in the schema).
 
     :param delta: Text content delta for this chunk.
     :type delta: str
     :param thinking_delta: Reasoning / thinking text delta (extended thinking).
     :type thinking_delta: str | None
+    :param reasoning_content_delta: Reasoning-content delta from an
+        OpenAI-compatible endpoint. ``None`` means absent; an empty string
+        means the provider emitted an explicitly empty field.
+    :type reasoning_content_delta: str | None
     :param tool_call_delta: Partial tool call update for this chunk.
     :type tool_call_delta: ToolCallDelta | None
     :param stop_reason: Stop reason, populated only in the final chunk.
@@ -574,6 +584,7 @@ class CompletionChunk:
     redacted_thinking_data: str | None = None
     provider_metadata: dict[str, Any] | None = None
     raw_event: Any = field(default=None, repr=False, compare=False)
+    reasoning_content_delta: str | None = None
 
 
 # ---------------------------------------------------------------------------

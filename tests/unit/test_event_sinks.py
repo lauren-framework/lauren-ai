@@ -11,7 +11,12 @@ import pytest
 from lauren_ai import EventSink, serialize
 from lauren_ai._agents import agent, use_tools
 from lauren_ai._agents._runner import AgentRunnerBase
-from lauren_ai._signals import AgentRunComplete, ModelCallComplete, ToolCallComplete
+from lauren_ai._signals import (
+    AgentRunComplete,
+    ModelCallComplete,
+    ToolCallComplete,
+    ToolExchangeRepaired,
+)
 from lauren_ai._tools import tool
 from lauren_ai._transport import Completion, TokenUsage
 from lauren_ai._transport._mock import MockTransport
@@ -87,6 +92,31 @@ class TestEventSinkProtocol:
 
 
 class TestConstructorSinks:
+    async def test_repaired_exchange_signal_is_emitted_once_per_event_id(self):
+        sink = RecordingSink()
+        runner = AgentRunnerBase(object(), event_sinks=[sink])
+
+        await runner._emit(
+            "ToolExchangeRepaired",
+            (sink,),
+            exchange_id="exchange-1",
+            run_id="run-1",
+            agent_id="agent-1",
+            call_count=2,
+        )
+        await runner._emit(
+            "ToolExchangeRepaired",
+            (sink,),
+            exchange_id="exchange-1",
+            run_id="run-1",
+            agent_id="agent-1",
+            call_count=2,
+        )
+
+        repaired = [signal for signal in sink.signals if isinstance(signal, ToolExchangeRepaired)]
+        assert len(repaired) == 1
+        assert repaired[0].event_id
+
     async def test_sink_called_for_end_turn_run(self):
         mock = MockTransport()
         mock.queue_response(_c("hello"))

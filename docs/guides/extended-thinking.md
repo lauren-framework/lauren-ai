@@ -15,6 +15,25 @@ Two separate features live under this umbrella:
 Both are set on `AgentConfig` and both are silently ignored by providers that
 do not support them.
 
+### OpenAI-compatible reasoning-content replay
+
+`reasoning_effort` controls a request when the selected provider supports that
+option. Some OpenAI-compatible gateways additionally return a hidden
+`reasoning_content` string on the assistant message. This is different from
+`TokenUsage.reasoning_tokens` (accounting) and from Anthropic's signed
+`thinking_blocks`.
+
+Lauren-ai keeps this value out of visible `Completion.content`, but preserves
+it on the assistant conversation message. When that assistant message is
+followed by a tool result, the OpenAI-compatible serializer sends the exact
+value back on the next request. This is required by gateways such as Console
+Go when a reasoning response contains a tool call. Applications should not
+copy it into user-facing text or truncate it; the agent memory and journal
+handle the round-trip automatically.
+
+The value is optional, so ordinary OpenAI messages retain their existing wire
+shape. Anthropic serializers do not emit `reasoning_content`.
+
 ---
 
 ## Anthropic extended thinking

@@ -140,6 +140,7 @@ result.stop_reason      # "end_turn" | "tool_use" | "max_tokens" | "stop_sequenc
 result.usage            # TokenUsage(input_tokens, output_tokens)
 result.usage.cost_usd("claude-opus-4-6")  # estimated cost in USD
 result.thinking_blocks  # list[ThinkingBlock | RedactedThinkingBlock] — Anthropic only
+result.reasoning_content  # str | None — OpenAI-compatible provider replay metadata
 ```
 
 ### Completion with extended thinking

@@ -150,6 +150,7 @@ __all__ = [
     "ToolHistoryIssue",
     "ToolHistoryReport",
     "ToolResultRecord",
+    "tool_exchange_event_id",
     # User memory (Section 36)
     "MemoryFact",
     "UserMemoryStore",
@@ -444,6 +445,7 @@ from lauren_ai._memory import (
     ToolResultRecord,
     UserMemoryStore,
     remember,
+    tool_exchange_event_id,
 )
 from lauren_ai._memory._stores import InMemoryConversationStore
 from lauren_ai._memory._vector import InMemoryVectorStore

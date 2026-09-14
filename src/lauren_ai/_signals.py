@@ -7,6 +7,10 @@ Signal classes
 
 * :class:`ModelCallStarted` — emitted before calling the LLM transport.
 * :class:`ModelCallComplete` — emitted after a successful LLM completion.
+* :class:`AgentStepStarted` / :class:`AgentStepCommitted` — delimit provider
+  steps inside one logical agent run.
+* :class:`AgentStepRetryScheduled` / :class:`AgentStepInterrupted` — describe
+  attempt-local transport recovery without exposing prompt contents.
 * :class:`ToolCallStarted` — emitted before dispatching a tool call.
 * :class:`ToolCallComplete` — emitted after a tool call finishes.
 * :class:`ToolPendingApproval` — emitted when HITL confirmation is required.
@@ -34,6 +38,10 @@ __all__ = [
     # Signal types
     "ModelCallStarted",
     "ModelCallComplete",
+    "AgentStepStarted",
+    "AgentStepRetryScheduled",
+    "AgentStepInterrupted",
+    "AgentStepCommitted",
     "ToolCallStarted",
     "ToolCallComplete",
     "ToolExchangeStarted",
@@ -143,6 +151,56 @@ class ModelCallComplete(LifecycleEvent):  # type: ignore[misc]
     turns: int = 1
 
 
+@dataclass
+class AgentStepStarted(LifecycleEvent):  # type: ignore[misc]
+    """Emitted before a provider request inside one logical agent run."""
+
+    run_id: str = ""
+    step_id: str = ""
+    attempt_id: str = ""
+    agent_id: str | None = None
+    step_index: int = 0
+
+
+@dataclass
+class AgentStepRetryScheduled(LifecycleEvent):  # type: ignore[misc]
+    """Emitted before retrying one failed provider step."""
+
+    run_id: str = ""
+    step_id: str = ""
+    attempt_id: str = ""
+    agent_id: str | None = None
+    retry_number: int = 0
+    max_retries: int = 0
+    delay_s: float = 0.0
+    error_kind: str = ""
+
+
+@dataclass
+class AgentStepInterrupted(LifecycleEvent):  # type: ignore[misc]
+    """Emitted when a provider step ends without a valid completion."""
+
+    run_id: str = ""
+    step_id: str = ""
+    attempt_id: str = ""
+    agent_id: str | None = None
+    error_kind: str = ""
+    partial_chars: int = 0
+    partial_text: str = ""
+    retryable: bool = False
+
+
+@dataclass
+class AgentStepCommitted(LifecycleEvent):  # type: ignore[misc]
+    """Emitted after one provider step and its tool exchange are committed."""
+
+    run_id: str = ""
+    step_id: str = ""
+    agent_id: str | None = None
+    step_index: int = 0
+    message_count: int = 0
+
+
 # ---------------------------------------------------------------------------
 # Tool call signals
 # ---------------------------------------------------------------------------
@@ -240,6 +298,7 @@ class ToolExchangeAborted(LifecycleEvent):  # type: ignore[misc]
     """Emitted when an interrupted exchange is closed with recovery results."""
 
     exchange_id: str = ""
+    event_id: str = ""
     run_id: str | None = None
     agent_id: str | None = None
     call_count: int = 0
@@ -251,6 +310,7 @@ class ToolExchangeRepaired(LifecycleEvent):  # type: ignore[misc]
     """Emitted after deterministic recovery changes canonical memory."""
 
     exchange_id: str = ""
+    event_id: str = ""
     run_id: str | None = None
     agent_id: str | None = None
     call_count: int = 0

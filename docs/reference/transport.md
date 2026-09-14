@@ -72,6 +72,7 @@ A finished (non-streaming) model completion.
 | `stop_reason` | `Literal["end_turn", "tool_use", "max_tokens", "stop_sequence"]` | Why the model stopped generating. |
 | `usage` | `TokenUsage` | Token usage statistics for this completion. |
 | `thinking_blocks` | `list[ThinkingBlock \| RedactedThinkingBlock]` | Extended-thinking blocks (Anthropic only). Defaults to `[]`. |
+| `reasoning_content` | `str \| None` | Exact provider reasoning returned by an OpenAI-compatible endpoint. Kept separate from visible content and replayed verbatim when present. |
 
 ### `stop_reason` values
 
@@ -86,7 +87,9 @@ A finished (non-streaming) model completion.
 
 ## `CompletionChunk`
 
-A single chunk from a streaming model completion. Only one of `delta`, `thinking_delta`, or `tool_call_delta` is typically populated per chunk.
+A single chunk from a streaming model completion. Only one of `delta`,
+`thinking_delta`, `reasoning_content_delta`, or `tool_call_delta` is typically
+populated per chunk.
 
 ### Fields
 
@@ -94,6 +97,7 @@ A single chunk from a streaming model completion. Only one of `delta`, `thinking
 |-------|------|-------------|
 | `delta` | `str` | Text content delta for this chunk. |
 | `thinking_delta` | `str \| None` | Reasoning / thinking text delta (extended thinking). |
+| `reasoning_content_delta` | `str \| None` | OpenAI-compatible reasoning-content delta. `None` means absent; an empty string is an explicitly empty provider field. |
 | `tool_call_delta` | `ToolCallDelta \| None` | Partial tool call update for this chunk. |
 | `stop_reason` | `str \| None` | Stop reason; populated only in the final chunk. |
 | `usage` | `TokenUsage \| None` | Token usage; populated only in the final chunk. |

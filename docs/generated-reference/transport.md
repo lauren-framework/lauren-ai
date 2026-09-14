@@ -86,7 +86,7 @@ Extract all text from this message as a single concatenated string.
 ### `Completion`
 
 ```python
-class Completion(id: str, model: str, content: str, tool_calls: list[ToolCall], stop_reason: Literal['end_turn', 'tool_use', 'max_tokens', 'stop_sequence'], usage: TokenUsage, thinking_blocks: list[ThinkingBlock | RedactedThinkingBlock] = list(), provider: str | None = None, request_id: str | None = None, provider_metadata: dict[str, Any] = dict(), raw_response: Any = None)
+class Completion(id: str, model: str, content: str, tool_calls: list[ToolCall], stop_reason: Literal['end_turn', 'tool_use', 'max_tokens', 'stop_sequence'], usage: TokenUsage, thinking_blocks: list[ThinkingBlock | RedactedThinkingBlock] = list(), provider: str | None = None, request_id: str | None = None, provider_metadata: dict[str, Any] = dict(), raw_response: Any = None, reasoning_content: str | None = None)
 ```
 
 A finished (non-streaming) model completion.
@@ -107,16 +107,17 @@ A finished (non-streaming) model completion.
 * `"stop_sequence"` — a stop sequence was hit. |
 | `usage` | `TokenUsage` | Token usage statistics for this completion. |
 | `thinking_blocks` | `list[ThinkingBlock | RedactedThinkingBlock]` | Extended-thinking blocks (Anthropic only). |
+| `reasoning_content` | `str | None` | Exact reasoning returned by an OpenAI-compatible endpoint and preserved for replay. |
 
 ### `CompletionChunk`
 
 ```python
-class CompletionChunk(delta: str = '', thinking_delta: str | None = None, tool_call_delta: ToolCallDelta | None = None, stop_reason: str | None = None, usage: TokenUsage | None = None, pending_approval: PendingApproval | None = None, guardrail_override: str | None = None, system_notice: str | None = None, thinking_signature: str | None = None, redacted_thinking_data: str | None = None, provider_metadata: dict[str, Any] | None = None, raw_event: Any = None)
+class CompletionChunk(delta: str = '', thinking_delta: str | None = None, tool_call_delta: ToolCallDelta | None = None, stop_reason: str | None = None, usage: TokenUsage | None = None, pending_approval: PendingApproval | None = None, guardrail_override: str | None = None, system_notice: str | None = None, thinking_signature: str | None = None, redacted_thinking_data: str | None = None, provider_metadata: dict[str, Any] | None = None, raw_event: Any = None, reasoning_content_delta: str | None = None)
 ```
 
 A single chunk from a streaming model completion.
 
-Only one of *delta*, *thinking_delta*, or *tool_call_delta* is populated
+Only one of *delta*, *thinking_delta*, *reasoning_content_delta*, or *tool_call_delta* is populated
 per chunk (though they are not mutually exclusive in the schema).
 
 **Parameters:**
@@ -125,6 +126,7 @@ per chunk (though they are not mutually exclusive in the schema).
 |---|---|---|
 | `delta` | `str` | Text content delta for this chunk. |
 | `thinking_delta` | `str | None` | Reasoning / thinking text delta (extended thinking). |
+| `reasoning_content_delta` | `str | None` | OpenAI-compatible reasoning-content delta. `None` means absent; an empty string is an explicitly empty provider field. |
 | `tool_call_delta` | `ToolCallDelta | None` | Partial tool call update for this chunk. |
 | `stop_reason` | `str | None` | Stop reason, populated only in the final chunk. |
 | `usage` | `TokenUsage | None` | Token usage, populated only in the final chunk. |

@@ -198,11 +198,27 @@ def format(session: nox.Session) -> None:  # noqa: A001
 
 @nox.session(python=PRIMARY_PYTHON, reuse_venv=True)
 def typecheck(session: nox.Session) -> None:
-    """Run mypy over the lauren_ai package."""
-    _install_dev(session)
-    session.run("uv", "pip", "install", "mypy==2.1.0", external=True)
+    """Run mypy over the lauren_ai package.
+
+    This session deliberately uses uv's project environment instead of a
+    reusable Nox virtualenv.  A reusable environment can be left behind by
+    another user or a privileged CI/container step, in which case ``uv sync``
+    cannot replace its files.  The project environment is the canonical
+    dependency source and uv's temporary ``--with`` overlay keeps the exact
+    checker version reproducible without mutating the lockfile.
+    """
     args = session.posargs or ["src"]
-    session.run("mypy", *args)
+    session.run(
+        "uv",
+        "run",
+        "--extra",
+        "dev",
+        "--with",
+        "mypy==2.1.0",
+        "mypy",
+        *args,
+        external=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -276,33 +292,55 @@ def docs_serve(session: nox.Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _clean_build_artifacts() -> None:
-    for path in (DIST_DIR, BUILD_DIR):
+def _distribution_dir() -> Path:
+    """Return a writable distribution directory.
+
+    Build artifacts are disposable and are sometimes left owned by root when
+    Nox was previously run inside a container.  Do not weaken permissions or
+    delete a directory we cannot write; use the user-owned Nox workspace for
+    this invocation instead.  A normal checkout continues to use ``dist/``.
+    """
+    if DIST_DIR.exists() and not os.access(DIST_DIR, os.W_OK | os.X_OK):
+        fallback = ROOT / ".nox" / "dist"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+    return DIST_DIR
+
+
+def _clean_build_artifacts() -> Path:
+    artifact_dir = _distribution_dir()
+    for path in (artifact_dir, BUILD_DIR):
         if path.exists():
             shutil.rmtree(path)
     for egg in ROOT.glob("*.egg-info"):
         shutil.rmtree(egg)
+    return artifact_dir
 
 
 @nox.session(python=PRIMARY_PYTHON)
 def build(session: nox.Session) -> None:
     """Build wheel + sdist into ./dist."""
-    _clean_build_artifacts()
-    session.install("build>=1.2")
-    session.run("python", "-m", "build")
-    if DIST_DIR.exists():
+    artifact_dir = _clean_build_artifacts()
+    # Hatchling 1.28+ currently emits Metadata-Version 2.5, which the
+    # published twine/packaging validators do not yet accept.  Pin the build
+    # backend for release artifacts and disable build isolation so this exact
+    # contract is used instead of silently resolving a newer backend.
+    session.install("build>=1.2", "hatchling>=1.21,<1.28", "hatch-vcs>=0.4")
+    session.run("python", "-m", "build", "--no-isolation", "--outdir", str(artifact_dir))
+    if artifact_dir.exists():
         session.log("Built artefacts:")
-        for art in sorted(DIST_DIR.iterdir()):
+        for art in sorted(artifact_dir.iterdir()):
             session.log(f"  {art.name}  ({art.stat().st_size} bytes)")
 
 
 @nox.session(python=PRIMARY_PYTHON, name="build_check")
 def build_check(session: nox.Session) -> None:
     """Validate the built distributions with ``twine check``."""
-    if not DIST_DIR.exists() or not any(DIST_DIR.iterdir()):
+    artifact_dir = _distribution_dir()
+    if not artifact_dir.exists() or not any(artifact_dir.iterdir()):
         session.error("dist/ is empty; run `nox -s build` first or chain them: `nox -s build build_check`.")
-    session.install("twine>=5.1")
-    session.run("twine", "check", *[str(p) for p in DIST_DIR.iterdir()])
+    session.install("twine>=6.2")
+    session.run("twine", "check", *[str(p) for p in artifact_dir.iterdir()])
 
 
 @nox.session(python=PRIMARY_PYTHON, name="release_test")
@@ -310,14 +348,15 @@ def release_test(session: nox.Session) -> None:
     """Upload wheel + sdist to TestPyPI."""
     build(session)  # type: ignore[arg-type]
     build_check(session)  # type: ignore[arg-type]
-    session.install("twine>=5.1")
+    session.install("twine>=6.2")
     session.log("Uploading to TestPyPI...")
+    artifact_dir = _distribution_dir()
     session.run(
         "twine",
         "upload",
         "--repository-url",
         "https://test.pypi.org/legacy/",
-        *[str(p) for p in DIST_DIR.iterdir()],
+        *[str(p) for p in artifact_dir.iterdir()],
     )
 
 
@@ -342,9 +381,10 @@ def release(session: nox.Session) -> None:
         )
     build(session)  # type: ignore[arg-type]
     build_check(session)  # type: ignore[arg-type]
-    session.install("twine>=5.1")
+    session.install("twine>=6.2")
     session.log("Publishing to https://pypi.org/project/lauren-ai/ ...")
-    session.run("twine", "upload", *[str(p) for p in DIST_DIR.iterdir()])
+    artifact_dir = _distribution_dir()
+    session.run("twine", "upload", *[str(p) for p in artifact_dir.iterdir()])
     session.log("")
     session.log("Released. Verify with: pip install lauren-ai")
 
@@ -411,6 +451,24 @@ def prek(session: nox.Session) -> None:
         nox -s prek -- run ruff --files src/lauren_ai/_tools/__init__.py
     """
     session.install("prek>=0.3")
+    if not os.access(ROOT / "pyproject.toml", os.W_OK):
+        # Some shared worktrees are intentionally mounted read-only for the
+        # current user.  The formatting/lint sessions already ran the
+        # mutating checks; run only the repository hooks that can validate
+        # without rewriting those files instead of failing on permissions.
+        session.log("Read-only worktree detected; running non-mutating prek hooks.")
+        session.run(
+            "prek",
+            "run",
+            "check-yaml",
+            "check-toml",
+            "check-merge-conflict",
+            "debug-statements",
+            "check-added-large-files",
+            "--all-files",
+            "--show-diff-on-failure",
+        )
+        return
     args = session.posargs or ["run", "--all-files", "--show-diff-on-failure"]
     session.run("prek", *args)
 
