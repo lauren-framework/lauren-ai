@@ -59,6 +59,7 @@ from lauren_ai._transport import (
     ToolCall,
     ToolSchema,
     Transport,
+    _estimate_request_tokens,
     estimate_message_tokens,
 )
 
@@ -501,6 +502,8 @@ def _cheap_token_estimate(
     messages: list[Any],
     system: str | None,
     tools: list[ToolSchema] | None,
+    *,
+    cached_message_tokens: int | None = None,
 ) -> int:
     """Conservative local token estimate — no network round-trip.
 
@@ -515,10 +518,21 @@ def _cheap_token_estimate(
     :param messages: Conversation messages (dict or :class:`Message` form).
     :param system: System prompt included in the request.
     :param tools: Tool schemas included in the request.
+    :param cached_message_tokens: Previously computed total for these messages.
     :return: A conservative token estimate.
     :rtype: int
     """
-    base = estimate_message_tokens(messages, system, tools)
+    if cached_message_tokens is None:
+        cached_message_tokens = getattr(messages, "estimated_message_tokens", None)
+    if isinstance(cached_message_tokens, int) and not isinstance(cached_message_tokens, bool):
+        base = _estimate_request_tokens(
+            messages,
+            system,
+            tools,
+            cached_message_tokens=cached_message_tokens,
+        )
+    else:
+        base = estimate_message_tokens(messages, system, tools)
     return int(base * _HEURISTIC_CHARS_PER_TOKEN / _LOCAL_CHARS_PER_TOKEN)
 
 
@@ -619,7 +633,15 @@ async def _maybe_compact(
     trigger = int(window * config.summarize_at)
     # Cheap gate: _cheap_token_estimate *over*-counts, so being below the trigger
     # is a safe skip.  Measures the full untrimmed buffer.
-    if _cheap_token_estimate(full, system, tools) < trigger:
+    if (
+        _cheap_token_estimate(
+            full,
+            system,
+            tools,
+            cached_message_tokens=memory._cached_message_token_estimate,
+        )
+        < trigger
+    ):
         return False
     count = await transport.count_tokens(full, model=model, system=system, tools=tools)
     if count < trigger:

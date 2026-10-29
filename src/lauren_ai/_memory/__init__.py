@@ -48,7 +48,7 @@ import copy
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 from lauren_ai._exceptions import ToolConversationIntegrityError
 from lauren_ai._memory._tool_integrity import (
@@ -334,7 +334,7 @@ def _is_conversational_user(message: Any) -> bool:
     return any(not (isinstance(b, dict) and b.get("type") == "tool_result") for b in content)
 
 
-def _drop_oldest_turn(msgs: list) -> tuple[list, int]:
+def _drop_oldest_turn(msgs: list[Any]) -> tuple[list[Any], int, list[Any]]:
     """Drop the oldest complete turn from *msgs*, preserving system messages.
 
     A "complete turn" is an atomic unit that must be removed together:
@@ -346,7 +346,7 @@ def _drop_oldest_turn(msgs: list) -> tuple[list, int]:
     an orphaned ``tool`` message that causes a 400 from the API.
 
     :param msgs: Current message list (not mutated).
-    :return: ``(new_list, chars_removed)`` tuple.
+    :return: ``(new_list, chars_removed, removed_messages)`` tuple.
     """
     for start, msg in enumerate(msgs):
         if _get_role(msg) == "system":
@@ -359,8 +359,8 @@ def _drop_oldest_turn(msgs: list) -> tuple[list, int]:
                 end += 1
         removed = msgs[start:end]
         chars_removed = sum(_message_char_length(m) for m in removed)
-        return msgs[:start] + msgs[end:], chars_removed
-    return msgs, 0
+        return msgs[:start] + msgs[end:], chars_removed, removed
+    return msgs, 0, []
 
 
 def _get_tool_call_ids(message: Any) -> set[str]:
@@ -680,7 +680,12 @@ def _shrink_message(message: Any, target_chars: int) -> Any:
     return message
 
 
-def _enforce_char_budget(messages: list[Any], budget_chars: int) -> list[Any]:
+def _enforce_char_budget(
+    messages: list[Any],
+    budget_chars: int,
+    *,
+    total_chars: int | None = None,
+) -> list[Any]:
     """Hard-cap *messages* to *budget_chars* by truncating block contents.
 
     The sliding-window trim in :meth:`ShortTermMemory.messages` can leave the
@@ -692,7 +697,7 @@ def _enforce_char_budget(messages: list[Any], budget_chars: int) -> list[Any]:
     """
     if budget_chars <= 0:
         return messages
-    total = sum(_message_char_length(m) for m in messages)
+    total = total_chars if total_chars is not None else sum(_message_char_length(m) for m in messages)
     if total <= budget_chars:
         return messages
     result = list(messages)
@@ -926,6 +931,14 @@ def _repair_tool_history(messages: list[Any]) -> tuple[list[Any], ToolHistoryRep
     return repaired, final
 
 
+class _MessageSnapshot(list[Any]):
+    """A message list carrying the cached estimate for its contents."""
+
+    def __init__(self, messages: list[Any], estimated_message_tokens: int) -> None:
+        super().__init__(messages)
+        self.estimated_message_tokens = estimated_message_tokens
+
+
 class ShortTermMemory:
     """Sliding-window conversation buffer for a single agent run.
 
@@ -949,11 +962,151 @@ class ShortTermMemory:
 
     _CHARS_PER_TOKEN: int = 4
 
+    @property
+    def _messages(self) -> list[Any]:
+        return self.__messages
+
+    @_messages.setter
+    def _messages(self, messages: list[Any]) -> None:
+        self.__messages = messages
+        if hasattr(self, "_message_estimates_dirty"):
+            self._message_estimates_dirty = True
+            self._tool_history_index_dirty = True
+            self._indexed_message_count = -1
+            self._tool_history_report = cast(ToolHistoryReport | None, None)
+            self._pending_tool_call_ids.clear()
+            self._pending_tool_result_ids.clear()
+            self._pending_tool_call_index = cast(int | None, None)
+
     def __init__(self, max_tokens: int = 40_000) -> None:
+        self._message_estimates_dirty = True
+        self._tool_history_index_dirty = True
+        self._indexed_message_count = -1
+        self._message_estimate_cache: dict[int, tuple[Any, int, int]] = {}
+        self._message_char_total = 0
+        self._provider_message_token_total = 0
+        self._tool_history_report = None
+        self._pending_tool_call_ids: set[str] = set()
+        self._pending_tool_result_ids: set[str] = set()
+        self._pending_tool_call_index = None
         self._max_tokens = max_tokens
-        self._messages: list[Any] = []
+        self._messages = []
         self._summary: str | None = None
         self._active_exchange: ToolExchange | None = None
+        self._rebuild_message_estimates()
+        self._rebuild_tool_history_index()
+
+    def _message_metrics(self, message: Any, *, cache: bool) -> tuple[int, int]:
+        cached = self._message_estimate_cache.get(id(message))
+        if cached is not None and cached[0] is message:
+            return cached[1], cached[2]
+        from lauren_ai._transport import _estimate_single_message_tokens  # noqa: PLC0415
+
+        metrics = (_message_char_length(message), _estimate_single_message_tokens(message))
+        if cache:
+            self._message_estimate_cache[id(message)] = (message, metrics[0], metrics[1])
+        return metrics
+
+    def _rebuild_message_estimates(self) -> None:
+        cache: dict[int, tuple[Any, int, int]] = {}
+        char_total = 0
+        token_total = 0
+        for message in self._messages:
+            cached = self._message_estimate_cache.get(id(message))
+            if cached is not None and cached[0] is message:
+                char_count, token_count = cached[1], cached[2]
+            else:
+                from lauren_ai._transport import _estimate_single_message_tokens  # noqa: PLC0415
+
+                char_count = _message_char_length(message)
+                token_count = _estimate_single_message_tokens(message)
+            cache[id(message)] = (message, char_count, token_count)
+            char_total += char_count
+            token_total += token_count
+        self._message_estimate_cache = cache
+        self._message_char_total = char_total
+        self._provider_message_token_total = token_total
+        self._message_estimates_dirty = False
+        self._indexed_message_count = len(self._messages)
+
+    def _rebuild_tool_history_index(self) -> ToolHistoryReport:
+        report = _validate_tool_history(self._messages)
+        self._pending_tool_call_ids.clear()
+        self._pending_tool_result_ids.clear()
+        self._pending_tool_call_index = None
+        self._tool_history_report = report
+        self._tool_history_index_dirty = not report.ok
+        self._indexed_message_count = len(self._messages)
+        return report
+
+    def _synchronize_indexes(self) -> None:
+        if self._indexed_message_count != len(self._messages):
+            self._message_estimates_dirty = True
+            self._tool_history_index_dirty = True
+            self._tool_history_report = None
+            self._pending_tool_call_ids.clear()
+            self._pending_tool_result_ids.clear()
+            self._pending_tool_call_index = None
+        if self._message_estimates_dirty:
+            self._rebuild_message_estimates()
+        if self._tool_history_index_dirty and self._tool_history_report is None:
+            self._rebuild_tool_history_index()
+
+    def _append_to_tool_history_index(self, message: Any, index: int) -> None:
+        if self._tool_history_index_dirty:
+            self._tool_history_report = None
+            return
+        if self._pending_tool_call_ids:
+            if not is_tool_result_message(message):
+                self._tool_history_index_dirty = True
+                self._tool_history_report = None
+                return
+            result_ids = extract_tool_result_ids(message)
+            if (
+                not result_ids
+                or any(not call_id for call_id in result_ids)
+                or len(set(result_ids)) != len(result_ids)
+                or set(result_ids) - self._pending_tool_call_ids
+                or set(result_ids) & self._pending_tool_result_ids
+            ):
+                self._tool_history_index_dirty = True
+                self._tool_history_report = None
+                return
+            self._pending_tool_result_ids.update(result_ids)
+            self._tool_history_report = None
+            if self._pending_tool_result_ids == self._pending_tool_call_ids:
+                self._pending_tool_call_ids.clear()
+                self._pending_tool_result_ids.clear()
+                self._pending_tool_call_index = None
+                self._tool_history_report = ToolHistoryReport()
+            return
+        if is_tool_call_message(message):
+            call_ids = extract_tool_call_ids(message)
+            if not call_ids or any(not call_id for call_id in call_ids) or len(set(call_ids)) != len(call_ids):
+                self._tool_history_index_dirty = True
+                self._tool_history_report = None
+                return
+            self._pending_tool_call_ids.update(call_ids)
+            self._pending_tool_call_index = index
+            self._tool_history_report = None
+        elif is_tool_result_message(message):
+            self._tool_history_index_dirty = True
+            self._tool_history_report = None
+
+    def _append_message(self, message: Any) -> None:
+        self._synchronize_indexes()
+        index = len(self._messages)
+        self._messages.append(message)
+        char_count, token_count = self._message_metrics(message, cache=True)
+        self._message_char_total += char_count
+        self._provider_message_token_total += token_count
+        self._append_to_tool_history_index(message, index)
+        self._indexed_message_count = len(self._messages)
+
+    @property
+    def _cached_message_token_estimate(self) -> int:
+        self._synchronize_indexes()
+        return self._provider_message_token_total
 
     def validate_tool_history(self) -> ToolHistoryReport:
         """Validate every assistant tool exchange in the current history.
@@ -962,7 +1115,17 @@ class ShortTermMemory:
         it never includes prompts, tool arguments, or tool output.  Callers
         that are about to contact a provider must reject a non-``ok`` report.
         """
-        return _validate_tool_history(self._messages)
+        self._synchronize_indexes()
+        if self._tool_history_index_dirty:
+            if self._tool_history_report is None:
+                return self._rebuild_tool_history_index()
+            return self._tool_history_report
+        if self._pending_tool_call_ids:
+            if self._tool_history_report is None:
+                self._tool_history_report = _validate_tool_history(self._messages)
+            return self._tool_history_report
+        self._tool_history_report = ToolHistoryReport()
+        return self._tool_history_report
 
     @property
     def active_tool_exchange(self) -> ToolExchange | None:
@@ -977,8 +1140,11 @@ class ShortTermMemory:
         :class:`ToolConversationIntegrityError` instead.
         """
         before = self.validate_tool_history()
+        if before.ok:
+            return before
         repaired, report = _repair_tool_history(self._messages)
         self._messages = repaired
+        self._synchronize_indexes()
         exchange = self._active_exchange
         if exchange is not None and exchange.state == "started" and not before.ok:
             self._abort_repaired_exchange(exchange)
@@ -1186,7 +1352,7 @@ class ShortTermMemory:
         :type content: str | list[Any]
         """
         # Build a simple dict-based Message compatible with the transport layer
-        self._messages.append({"role": "user", "content": content})
+        self._append_message({"role": "user", "content": content})
 
     def add_assistant(self, completion: Any) -> None:
         """Append an assistant completion to the buffer.
@@ -1217,7 +1383,7 @@ class ShortTermMemory:
             reasoning_content = completion.get("reasoning_content")
             if reasoning_content is not None and not isinstance(reasoning_content, str):
                 raise ValueError("reasoning_content must be a string when present")
-            self._messages.append(completion)
+            self._append_message(completion)
             return
 
         # Dataclass / object form
@@ -1254,9 +1420,9 @@ class ShortTermMemory:
                         "input": tc_input,
                     }
                 )
-            self._messages.append(_assistant_message(blocks))
+            self._append_message(_assistant_message(blocks))
         else:
-            self._messages.append(_assistant_message(content))
+            self._append_message(_assistant_message(content))
 
     def add_tool_result(self, result: Any) -> None:
         """Append a tool result message to the buffer.
@@ -1280,14 +1446,14 @@ class ShortTermMemory:
                 observed_count=1 if result_id else 0,
             )
         if isinstance(result, dict):
-            self._messages.append(result)
+            self._append_message(result)
             return
 
         tool_use_id = getattr(result, "tool_use_id", "")
         content = getattr(result, "content", "")
         is_error = getattr(result, "is_error", False)
 
-        self._messages.append(
+        self._append_message(
             {
                 "role": "user",
                 "content": [
@@ -1372,7 +1538,7 @@ class ShortTermMemory:
                 "is_error": is_error,
             }
             blocks.append(block)
-        self._messages.append({"role": "user", "content": blocks})
+        self._append_message({"role": "user", "content": blocks})
 
     # ------------------------------------------------------------------
     # Summary / compression helpers
@@ -1474,10 +1640,11 @@ class ShortTermMemory:
         :return: Ordered list of messages within the token budget.
         :rtype: list[Message]
         """
-        # Return a shallow-copy snapshot (does not mutate internal state)
+        self._synchronize_indexes()
         snapshot = list(self._messages)
         budget_chars = self._max_tokens * self._CHARS_PER_TOKEN
-        total_chars = sum(_message_char_length(m) for m in snapshot)
+        total_chars = self._message_char_total
+        total_message_tokens = self._provider_message_token_total
 
         while snapshot and total_chars > budget_chars:
             # Simulate dropping the oldest turn to see if anything non-system
@@ -1489,7 +1656,7 @@ class ShortTermMemory:
             #    role:"user" — all providers require user-first conversations.
             #    This occurs when large tool results force the original user
             #    intent to be trimmed away, leaving an assistant turn first.
-            candidate, removed_chars = _drop_oldest_turn(snapshot)
+            candidate, removed_chars, removed_messages = _drop_oldest_turn(snapshot)
             if not removed_chars:
                 break  # only system messages remain — nothing more to drop
             # Guard: never trim past the last *conversational* user message.
@@ -1503,16 +1670,29 @@ class ShortTermMemory:
                 break
             snapshot = candidate
             total_chars -= removed_chars
+            total_message_tokens -= sum(self._message_metrics(m, cache=False)[1] for m in removed_messages)
 
         # Heal any incomplete tool-call sequence at the tail (e.g. an agent
         # turn interrupted before all parallel tool results arrived).
+        before_heal = snapshot
         snapshot = _heal_dangling_tail(snapshot)
+        if len(snapshot) != len(before_heal):
+            existing_ids = {id(message) for message in before_heal}
+            added_messages = [message for message in snapshot if id(message) not in existing_ids]
+            total_chars += sum(_message_char_length(message) for message in added_messages)
+            total_message_tokens += sum(self._message_metrics(message, cache=False)[1] for message in added_messages)
+
         # PRD-133 Layer C: hard budget guarantee.  The sliding-window trim above
         # never drops past the last conversational user message, so a single
         # oversized turn (huge tool result) can still exceed the window.  Truncate
         # block contents so the returned list is *always* within budget — the
         # request can never overflow the model context window.
-        return _enforce_char_budget(snapshot, budget_chars)
+        bounded = _enforce_char_budget(snapshot, budget_chars, total_chars=total_chars)
+        if len(bounded) != len(snapshot) or any(
+            left is not right for left, right in zip(bounded, snapshot, strict=True)
+        ):
+            total_message_tokens = sum(self._message_metrics(message, cache=False)[1] for message in bounded)
+        return _MessageSnapshot(bounded, total_message_tokens)
 
     def trim_to_fit(self, max_tokens: int) -> None:
         """Drop oldest non-system messages until the token estimate fits.
@@ -1522,19 +1702,21 @@ class ShortTermMemory:
         :param max_tokens: Target token budget.
         :type max_tokens: int
         """
+        self._synchronize_indexes()
         budget_chars = max_tokens * self._CHARS_PER_TOKEN
-        while self._messages:
-            total_chars = sum(_message_char_length(m) for m in self._messages)
-            if total_chars <= budget_chars:
-                break
-            candidate, removed_chars = _drop_oldest_turn(self._messages)
+        messages = list(self._messages)
+        total_chars = self._message_char_total
+        while messages and total_chars > budget_chars:
+            candidate, removed_chars, _removed_messages = _drop_oldest_turn(messages)
             if not removed_chars:
                 break  # only system messages remain
             if not any(_is_conversational_user(m) for m in candidate):
                 break
-            self._messages = candidate
+            messages = candidate
+            total_chars -= removed_chars
         # Heal dangling tail after mutating the buffer.
-        self._messages = _heal_dangling_tail(self._messages)
+        self._messages = _heal_dangling_tail(messages)
+        self._synchronize_indexes()
 
     def ensure_valid(self) -> None:
         """Heal dangling tool_calls in-place before making an API request.
@@ -1550,7 +1732,10 @@ class ShortTermMemory:
         The method is idempotent — calling it multiple times is safe.
         """
         before = self.validate_tool_history()
+        if before.ok:
+            return
         self._messages, _ = _repair_tool_history(self._messages)
+        self._synchronize_indexes()
         if self._active_exchange is not None and self._active_exchange.state == "started" and not before.ok:
             self._abort_repaired_exchange(self._active_exchange)
 
@@ -1561,8 +1746,8 @@ class ShortTermMemory:
         :return: Estimated token count.
         :rtype: int
         """
-        total_chars = sum(_message_char_length(m) for m in self._messages)
-        return max(0, total_chars // self._CHARS_PER_TOKEN)
+        self._synchronize_indexes()
+        return max(0, self._message_char_total // self._CHARS_PER_TOKEN)
 
     # ------------------------------------------------------------------
     # State management
@@ -1574,7 +1759,8 @@ class ShortTermMemory:
         :return: None
         :rtype: None
         """
-        self._messages.clear()
+        self._messages = []
+        self._synchronize_indexes()
         self._active_exchange = None
 
     def snapshot(self) -> Any:

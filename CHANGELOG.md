@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Improved — Incremental conversation history accounting
+
+- `ShortTermMemory` now caches per-message character and token estimates and
+  incrementally tracks tool-call/result history as messages are appended.
+- Replaced or repaired histories invalidate and rebuild the indexes, preserving
+  full-validation fallback behavior for rewritten or malformed exchanges.
+- Context-fitting and compaction gates reuse the cached message-token total
+  rather than re-estimating the complete conversation each time.
+
 ### Fixed — OpenAI-compatible `reasoning_content` round-trip
 
 - OpenAI-compatible non-streaming and streaming responses now preserve the
