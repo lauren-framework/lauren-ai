@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from random import Random
+from unittest.mock import patch
+
 import pytest
 
+import lauren_ai._memory as memory_module
 from lauren_ai._exceptions import ToolConversationIntegrityError
 from lauren_ai._memory import ShortTermMemory, ToolExchange
 from lauren_ai._tools import ToolResult
@@ -33,6 +37,115 @@ def test_parallel_exchange_requires_exactly_one_result_per_call() -> None:
     report = memory.validate_tool_history()
 
     assert report.ok
+
+
+def test_valid_appends_use_the_incremental_tool_history_index() -> None:
+    memory = ShortTermMemory()
+    memory.add_user("read both")
+    calls = [
+        ToolCall(tool_use_id="a", name="read_file", input={}),
+        ToolCall(tool_use_id="b", name="read_file", input={}),
+    ]
+    memory.add_assistant(type("Completion", (), {"content": "", "tool_calls": calls})())
+    with patch("lauren_ai._memory._validate_tool_history", wraps=memory_module._validate_tool_history) as full_scan:
+        memory.add_tool_results(
+            [
+                ToolResult.ok("A", tool_use_id="a"),
+                ToolResult.ok("B", tool_use_id="b"),
+            ]
+        )
+        assert memory.validate_tool_history().ok
+        memory.add_user("continue")
+        assert memory.validate_tool_history().ok
+
+    assert full_scan.call_count == 0
+
+
+def test_incremental_index_matches_full_validation_for_seeded_histories() -> None:
+    random = Random(138)
+    for _ in range(10_000):
+        memory = ShortTermMemory()
+        history: list[dict[str, object]] = []
+        for _ in range(random.randint(0, 8)):
+            message_type = random.choice(("user", "assistant", "calls", "results"))
+            if message_type == "user":
+                message = {"role": "user", "content": "text"}
+            elif message_type == "assistant":
+                message = {"role": "assistant", "content": "done"}
+            elif message_type == "calls":
+                message = _assistant(*(random.choice(("a", "b", "")) for _ in range(random.randint(1, 2))))
+            else:
+                message = _results(*(random.choice(("a", "b", "unknown", "")) for _ in range(random.randint(1, 2))))
+
+            history.append(message)
+            memory._append_message(message)
+            assert memory.validate_tool_history() == memory_module._validate_tool_history(history)
+
+
+def test_open_tool_exchange_report_is_reused_until_an_append() -> None:
+    memory = ShortTermMemory()
+    memory.add_user("read")
+    call = ToolCall(tool_use_id="a", name="read_file", input={})
+    memory.add_assistant(type("Completion", (), {"content": "", "tool_calls": [call]})())
+    with patch("lauren_ai._memory._validate_tool_history", wraps=memory_module._validate_tool_history) as full_scan:
+        first = memory.validate_tool_history()
+        second = memory.validate_tool_history()
+        assert first == second
+        assert first.first_issue is not None
+        assert first.first_issue.code == "missing_results"
+        assert full_scan.call_count == 1
+
+        memory.add_tool_result(ToolResult.ok("A", tool_use_id="a"))
+        assert memory.validate_tool_history().ok
+
+    assert full_scan.call_count == 1
+
+
+def test_replacing_history_invalidates_the_incremental_index() -> None:
+    memory = ShortTermMemory()
+    memory.add_user("valid")
+    memory.add_assistant({"role": "assistant", "content": "done"})
+    assert memory.validate_tool_history().ok
+
+    memory._messages = [
+        {"role": "user", "content": "task"},
+        _assistant("a"),
+        {"role": "user", "content": "intervening"},
+        _results("a"),
+    ]
+
+    report = memory.validate_tool_history()
+    assert not report.ok
+    assert report.first_issue is not None
+    assert report.first_issue.code == "non_adjacent_results"
+
+
+def test_direct_append_invalidates_a_cached_tool_history_report() -> None:
+    memory = ShortTermMemory()
+    memory.add_user("valid")
+    memory.add_assistant({"role": "assistant", "content": "done"})
+    assert memory.validate_tool_history().ok
+    memory._messages.append(_results("orphan"))
+
+    with patch("lauren_ai._memory._validate_tool_history", wraps=memory_module._validate_tool_history) as full_scan:
+        report = memory.validate_tool_history()
+
+    assert not report.ok
+    assert report.first_issue is not None
+    assert report.first_issue.code == "orphan_result"
+    assert full_scan.call_count == 1
+
+
+def test_repair_and_ensure_skip_valid_history_rewrites() -> None:
+    memory = ShortTermMemory()
+    memory.add_user("valid")
+    memory.add_assistant({"role": "assistant", "content": "done"})
+
+    with patch("lauren_ai._memory._repair_tool_history", wraps=memory_module._repair_tool_history) as repair:
+        assert memory.repair_tool_history().ok
+        memory.ensure_valid()
+
+    assert repair.call_count == 0
 
 
 def test_missing_parallel_result_is_repaired_in_one_canonical_message() -> None:

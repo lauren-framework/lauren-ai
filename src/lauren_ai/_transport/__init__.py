@@ -890,6 +890,49 @@ def _tool_chars(tool: object) -> int:
     return len(name) + len(desc) + len(json.dumps(schema, default=str))
 
 
+def _estimate_single_message_tokens(message: Any) -> int:
+    """Estimate one message using the shared 4-chars-per-token heuristic."""
+    cpt = _HEURISTIC_CHARS_PER_TOKEN
+    content = message.get("content", "") if isinstance(message, dict) else getattr(message, "content", "")
+    total = 0
+    if isinstance(content, str):
+        total += max(1, len(content) // cpt)
+    elif isinstance(content, list):
+        for block in content:
+            text = _block_field(block, "text")
+            inp = _block_field(block, "input")
+            bcontent = _block_field(block, "content")
+            if text:
+                total += max(1, len(text) // cpt)
+            if inp:
+                total += max(1, len(json.dumps(inp, default=str)) // cpt)
+            if isinstance(bcontent, str):
+                total += max(1, len(bcontent) // cpt)
+            elif isinstance(bcontent, list):
+                total += max(1, len(json.dumps(bcontent, default=str)) // cpt)
+    return total
+
+
+def _estimate_request_tokens(
+    messages: list[Any],
+    system: str | None = None,
+    tools: list[ToolSchema] | None = None,
+    *,
+    cached_message_tokens: int | None = None,
+) -> int:
+    """Estimate a request, optionally using a cached sum for its messages."""
+    cpt = _HEURISTIC_CHARS_PER_TOKEN
+    total = 0
+    if system:
+        total += max(1, len(system) // cpt)
+    if tools:
+        for tool_schema in tools:
+            total += max(1, _tool_chars(tool_schema) // cpt)
+    if cached_message_tokens is not None:
+        return total + cached_message_tokens
+    return total + sum(_estimate_single_message_tokens(message) for message in messages)
+
+
 def estimate_message_tokens(
     messages: list[Any],
     system: str | None = None,
@@ -915,28 +958,4 @@ def estimate_message_tokens(
     :return: Estimated token count.
     :rtype: int
     """
-    cpt = _HEURISTIC_CHARS_PER_TOKEN
-    total = 0
-    if system:
-        total += max(1, len(system) // cpt)
-    if tools:
-        for t in tools:
-            total += max(1, _tool_chars(t) // cpt)
-    for msg in messages:
-        content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
-        if isinstance(content, str):
-            total += max(1, len(content) // cpt)
-        elif isinstance(content, list):
-            for block in content:
-                text = _block_field(block, "text")
-                inp = _block_field(block, "input")
-                bcontent = _block_field(block, "content")
-                if text:
-                    total += max(1, len(text) // cpt)
-                if inp:
-                    total += max(1, len(json.dumps(inp, default=str)) // cpt)
-                if isinstance(bcontent, str):
-                    total += max(1, len(bcontent) // cpt)
-                elif isinstance(bcontent, list):
-                    total += max(1, len(json.dumps(bcontent, default=str)) // cpt)
-    return total
+    return _estimate_request_tokens(messages, system, tools)

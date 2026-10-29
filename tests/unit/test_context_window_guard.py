@@ -9,8 +9,11 @@ Covers:
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
+import lauren_ai._agents._runner as runner_module
 from lauren_ai._agents._runner import _cheap_token_estimate, _fit_to_context
 from lauren_ai._config import (
     DEFAULT_CONTEXT_WINDOW,
@@ -19,6 +22,7 @@ from lauren_ai._config import (
     context_window_for,
 )
 from lauren_ai._exceptions import AgentContextOverflowError
+from lauren_ai._memory import ShortTermMemory
 from lauren_ai._transport import estimate_message_tokens
 from lauren_ai._transport._mock import MockTransport
 
@@ -149,6 +153,19 @@ class TestCheapEstimate:
         msgs = [{"role": "user", "content": "x" * 3500}]
         # 3.5 chars/token over-counts relative to the 4-char base.
         assert _cheap_token_estimate(msgs, None, None) >= estimate_message_tokens(msgs)
+
+    def test_cached_snapshot_estimate_includes_tool_inputs(self) -> None:
+        memory = ShortTermMemory()
+        memory._messages = [
+            {"role": "user", "content": "task"},
+            _tool_use_msg("t", "read_file", {"contents": "x" * 8000}),
+        ]
+        snapshot = memory.messages()
+        assert snapshot.estimated_message_tokens == estimate_message_tokens(snapshot)
+        expected = _cheap_token_estimate(list(snapshot), None, None)
+
+        with patch.object(runner_module, "estimate_message_tokens", side_effect=AssertionError):
+            assert _cheap_token_estimate(snapshot, None, None) == expected
 
 
 # ── D + E: the pre-send guard ────────────────────────────────────────────────

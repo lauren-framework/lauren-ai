@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
+import lauren_ai._memory as memory_module
+import lauren_ai._transport as transport_module
 from lauren_ai._memory import ShortTermMemory
 from lauren_ai._memory._stores import InMemoryConversationStore
 from lauren_ai._memory._vector import InMemoryVectorStore
@@ -37,6 +41,35 @@ class TestShortTermMemory:
         msgs = mem.messages()
         assert len(msgs) == 2
         assert msgs[1]["role"] == "assistant"
+
+    def test_message_estimates_are_cached_and_snapshots_keep_their_total(self):
+        mem = ShortTermMemory()
+        with (
+            patch.object(memory_module, "_message_char_length", wraps=memory_module._message_char_length) as char_count,
+            patch.object(
+                transport_module,
+                "_estimate_single_message_tokens",
+                wraps=transport_module._estimate_single_message_tokens,
+            ) as token_count,
+        ):
+            mem.add_user("hello")
+            assert mem.token_estimate == 1
+            assert mem.token_estimate == 1
+            assert mem._cached_message_token_estimate == 1
+            snapshot = mem.messages()
+            assert snapshot.estimated_message_tokens == 1
+            assert char_count.call_count == 1
+            assert token_count.call_count == 1
+
+            mem.add_user("another message")
+            assert mem.token_estimate == 5
+            assert mem._cached_message_token_estimate == 4
+            assert char_count.call_count == 2
+            assert token_count.call_count == 2
+
+        mem._messages = [{"role": "user", "content": "x" * 12}]
+        assert mem.token_estimate == 3
+        assert mem._cached_message_token_estimate == 3
 
     def test_token_window_trimming(self):
         # With a very small window, old messages should be dropped
