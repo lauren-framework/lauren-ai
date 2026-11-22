@@ -125,6 +125,32 @@ def tests_integration(session: nox.Session) -> None:
     session.run("pytest", str(TESTS_DIR / "integration"), *args)
 
 
+# Each major line of the ``anthropic`` SDK, newest release of the line.  The
+# lockfile pins one version, so without this matrix an incompatible change in
+# another line would go unnoticed until a user hit it (1.0 and 2.0 each broke
+# the transport that way).
+ANTHROPIC_SDK_LINES = {
+    "0.x": ">=0.35,<1",
+    "1.x": ">=1,<2",
+    "2.x": ">=2,<3",
+}
+
+
+@nox.session(python=PRIMARY_PYTHON, name="tests_anthropic_sdk")
+@nox.parametrize("anthropic_spec", list(ANTHROPIC_SDK_LINES.values()), ids=list(ANTHROPIC_SDK_LINES))
+def tests_anthropic_sdk(session: nox.Session, anthropic_spec: str) -> None:
+    """Run the unit tests against one major line of the ``anthropic`` SDK.
+
+    ``nox -s tests_anthropic_sdk`` runs all three lines;
+    ``nox -s "tests_anthropic_sdk(anthropic_spec='>=2,<3')"`` runs one.
+    """
+    _install_dev(session)
+    session.run("uv", "pip", "install", f"anthropic{anthropic_spec}", external=True)
+    session.run("python", "-c", "import anthropic; print('anthropic', anthropic.__version__)")
+    args = session.posargs or ["-q"]
+    session.run("pytest", str(TESTS_DIR / "unit"), *args)
+
+
 @nox.session(python=PRIMARY_PYTHON, name="tests_verbose")
 def tests_verbose(session: nox.Session) -> None:
     """Run the full test suite with verbose output."""

@@ -60,6 +60,30 @@ jobs:
       - run: pip install nox
       - run: nox -s tests_integration -- -q
 
+  # The lockfile pins one ``anthropic`` release.  Each major line of the SDK has
+  # broken the transport in a different way (1.0 removed sampling parameters
+  # and moved to httpx2; 2.0 sends an API version that rejects them), so the
+  # unit suite also runs on the newest release of every line.  The nightly
+  # schedule above picks up new SDK releases.
+  anthropic-sdk:
+    name: anthropic SDK ${{ matrix.line }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        line: ["0.x", "1.x", "2.x"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install nox
+      - run: nox -s "tests_anthropic_sdk(${{ matrix.line }})" -- -q
+
   coverage:
     name: coverage
     runs-on: ubuntu-latest

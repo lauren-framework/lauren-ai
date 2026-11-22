@@ -17,10 +17,11 @@ Install with::
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from lauren_ai._config import LLMConfig
@@ -308,6 +309,124 @@ def _tool_choice_to_anthropic(tool_choice: ToolChoice) -> dict[str, Any]:
     if tool_choice.type == "tool":
         return {"type": "tool", "name": tool_choice.name}
     return {"type": tool_choice.type}
+
+
+# ---------------------------------------------------------------------------
+# Sampling parameters across Anthropic SDK / API versions
+# ---------------------------------------------------------------------------
+#
+# Anthropic deprecated ``temperature``, ``top_p`` and ``top_k``:
+#
+# * ``anthropic`` 0.x declares them on ``messages.create`` / ``stream``.
+# * ``anthropic`` 1.x removed them from the method signatures (passing one is a
+#   ``TypeError``) but still sends API version ``2023-06-01``, which accepts
+#   them for models that honour them, through ``extra_body``.
+# * ``anthropic`` 2.x sends API version ``2026-10-21``, which rejects all three
+#   with HTTP 400 even at their default value.
+#
+# See https://platform.claude.com/docs/en/api/migration-2026-10-21 and the
+# SDK's MIGRATION.md.
+
+#: The sampling parameters Anthropic deprecated.
+_SAMPLING_PARAMS: tuple[str, ...] = ("temperature", "top_p", "top_k")
+
+#: The value the API applies when a sampling parameter is omitted.  Sending it
+#: explicitly is equivalent to leaving it out.  The API documents no default
+#: for ``top_p`` or ``top_k``, so an explicit value is always honoured.
+_SAMPLING_DEFAULTS: Mapping[str, float] = {"temperature": 1.0}
+
+#: First ``anthropic-version`` that rejects sampling parameters.  ISO dates
+#: compare correctly as strings.
+_SAMPLING_REJECTED_FROM_API_VERSION = "2026-10-21"
+
+#: Sampling parameters already reported as dropped, so each is logged once.
+_dropped_sampling_warned: set[str] = set()
+
+
+def _undeclared_sampling_params(method: object) -> frozenset[str]:
+    """Return the sampling parameters *method* cannot take as keyword arguments.
+
+    A callable that accepts ``**kwargs`` or whose signature cannot be inspected
+    (a test double, for example) is treated as accepting everything.
+
+    :param method: An SDK ``messages.create`` or ``messages.stream`` callable.
+    :return: The subset of :data:`_SAMPLING_PARAMS` the callable does not declare.
+    """
+    try:
+        parameters = inspect.signature(method).parameters  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return frozenset()
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        return frozenset()
+    return frozenset(name for name in _SAMPLING_PARAMS if name not in parameters)
+
+
+def _api_rejects_sampling(client: object) -> bool:
+    """Return whether *client* sends an API version that rejects sampling parameters.
+
+    Read from the client's effective ``anthropic-version`` header, so a version
+    pinned through ``LLMConfig.default_headers`` is honoured.
+
+    :param client: An ``anthropic.AsyncAnthropic`` client.
+    """
+    headers = getattr(client, "default_headers", None)
+    if not isinstance(headers, Mapping):
+        return False
+    for key, value in headers.items():
+        if isinstance(key, str) and key.lower() == "anthropic-version":
+            return isinstance(value, str) and value >= _SAMPLING_REJECTED_FROM_API_VERSION
+    return False
+
+
+def _warn_sampling_dropped(name: str, value: object) -> None:
+    """Log, once per parameter, that a sampling parameter is not being sent."""
+    if name in _dropped_sampling_warned:
+        return
+    _dropped_sampling_warned.add(name)
+    logger.warning(
+        "lauren_ai: Anthropic API version %s and later rejects sampling parameters, so "
+        "%s=%r is not sent and the model's default sampling applies. To keep sending it "
+        "to a model that still honours it, set default_headers={'anthropic-version': "
+        "'2023-06-01'} on the LLMConfig.",
+        _SAMPLING_REJECTED_FROM_API_VERSION,
+        name,
+        value,
+    )
+
+
+def _adapt_sampling_params(client: object, method: object, call_kwargs: dict[str, Any]) -> None:
+    """Make *call_kwargs* acceptable to SDKs that removed the sampling parameters.
+
+    ``call_kwargs`` is edited in place.  A sampling parameter the SDK method
+    still declares is left alone.  For one it no longer declares:
+
+    * ``temperature=1.0`` is the API default, so it is omitted;
+    * any other value goes through ``extra_body`` when the API version accepts
+      it (SDK 1.x), so a model that honours it keeps receiving it;
+    * any other value is dropped, with a one-time warning, when the API version
+      rejects it (SDK 2.x), because sending it would fail every request.
+
+    :param client: The ``anthropic.AsyncAnthropic`` client the call is made on.
+    :param method: The ``messages.create`` or ``messages.stream`` callable.
+    :param call_kwargs: The keyword arguments about to be passed to *method*.
+    """
+    undeclared = _undeclared_sampling_params(method)
+    if not undeclared:
+        return
+    rejected = _api_rejects_sampling(client)
+    forwarded: dict[str, Any] = {}
+    for name in _SAMPLING_PARAMS:
+        if name not in undeclared or name not in call_kwargs:
+            continue
+        value = call_kwargs.pop(name)
+        if name in _SAMPLING_DEFAULTS and value == _SAMPLING_DEFAULTS[name]:
+            continue
+        if rejected:
+            _warn_sampling_dropped(name, value)
+        else:
+            forwarded[name] = value
+    if forwarded:
+        call_kwargs["extra_body"] = {**call_kwargs.get("extra_body", {}), **forwarded}
 
 
 def _parse_stop_reason(
@@ -766,6 +885,11 @@ class AnthropicTransport:
             call_kwargs["extra_body"] = dict(effective_options.extra_body)
         if effective_options.timeout is not None:
             call_kwargs["timeout"] = effective_options.timeout
+
+        messages_api = getattr(client, "messages", None)
+        sdk_method = getattr(messages_api, "stream" if stream else "create", None)
+        if sdk_method is not None:
+            _adapt_sampling_params(client, sdk_method, call_kwargs)
 
         if stream:
             return self._stream(client, call_kwargs, include_raw_response=effective_options.include_raw_response)
