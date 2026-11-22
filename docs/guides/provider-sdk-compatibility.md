@@ -171,6 +171,47 @@ thinking. New code can use provider options for adaptive or disabled thinking.
 Thinking and redacted-thinking blocks are preserved with their signatures when
 the agent conversation is stored and sent back.
 
+### Anthropic SDK 0.x, 1.x and 2.x
+
+The transport works with any `anthropic` release from 0.35 on, including the
+1.x and 2.x lines. The lines differ in how they treat the deprecated sampling
+parameters `temperature`, `top_p` and `top_k`:
+
+| `anthropic` SDK | API version sent | Sampling parameters |
+| --------------- | ---------------- | ------------------- |
+| 0.x             | `2023-06-01`     | Sent as ordinary request fields. |
+| 1.x             | `2023-06-01`     | Removed from the SDK method signatures. Lauren sends a non-default value through `extra_body`, which models that still honour it receive. |
+| 2.x             | `2026-10-21`     | Rejected by the API with HTTP 400, even at the default value. Lauren does not send them. |
+
+On 1.x and 2.x Lauren omits `temperature=1.0`, because that is what the API
+applies when the field is absent. Any other `temperature`, `top_p` or `top_k`
+is forwarded or dropped as the table says. When Lauren drops a value it logs
+one warning per parameter, and the model's default sampling applies. Models
+that accept only the default sampling, such as Claude 4.7 and later, behave the
+same either way.
+
+Lauren's own `temperature=0.0` summarisation calls follow the same rule, so
+they keep working on 2.x.
+
+To keep sending a non-default value to a model that still honours it while
+using the 2.x SDK, pin the older API version on the client:
+
+~~~python
+config = LLMConfig.for_anthropic(
+    model="claude-sonnet-4-6",
+    temperature=0.2,
+    default_headers={"anthropic-version": "2023-06-01"},
+)
+~~~
+
+Lauren reads the effective `anthropic-version` header, so the pinned value is
+honoured and the parameter is forwarded as on 1.x.
+
+SDK 1.0 also moved its HTTP layer from `httpx` to `httpx2`. If you pass your
+own client through `client_options={"http_client": ...}`, build it from
+`httpx2` on SDK 1.x and later; the SDK rejects a plain `httpx` client. Lauren
+does not construct an `httpx` client for Anthropic itself.
+
 ## Native Anthropic services
 
 LLMModule.for_root registers these services for an Anthropic configuration:

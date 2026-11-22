@@ -50,6 +50,9 @@ uv run nox -s tests_unit
 # All tests
 uv run nox -s tests
 
+# Unit tests on each major line of the anthropic SDK (0.x, 1.x, 2.x)
+uv run nox -s tests_anthropic_sdk
+
 # With coverage report
 uv run nox -s coverage
 

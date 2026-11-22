@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Anthropic SDK 1.x and 2.x support
+
+- `AnthropicTransport` failed on every ordinary request with `anthropic` 1.x
+  and 2.x: it always passed `temperature` to `messages.create` / `messages.stream`,
+  and SDK 1.0 removed `temperature`, `top_p` and `top_k` from those methods
+  (`TypeError: ... got an unexpected keyword argument 'temperature'`). Only
+  thinking requests and `count_tokens` worked.
+- The transport now adapts to what the installed SDK and API version accept.
+  `temperature=1.0`, the API default, is omitted. A non-default value goes
+  through `extra_body` on SDK 1.x (API version `2023-06-01`). SDK 2.x sends API
+  version `2026-10-21`, which rejects these parameters with HTTP 400 even at
+  their default, so Lauren does not send them there and logs one warning per
+  parameter. Pinning `default_headers={"anthropic-version": "2023-06-01"}`
+  restores forwarding. SDK 0.x behaviour is unchanged.
+- This also keeps Lauren's own `temperature=0.0` summarisation calls working on
+  SDK 2.x, where the HTTP 400 would otherwise only have been logged and the
+  summary skipped.
+- Added `tests/unit/test_anthropic_sdk_contract.py`, which drives the real SDK
+  against a mock HTTP server, and a `tests_anthropic_sdk` nox session and CI job
+  that run the unit suite on the newest 0.x, 1.x and 2.x releases. The lockfile
+  pins one SDK version, which is how this went unnoticed.
+- Documented the differences, including that SDK 1.x requires an `httpx2` client
+  for `client_options={"http_client": ...}`, in the provider SDK compatibility
+  guide.
+
 ### Improved — Incremental conversation history accounting
 
 - `ShortTermMemory` now caches per-message character and token estimates and
